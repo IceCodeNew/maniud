@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "python_baseline": {
+    "repository": "https://github.com/IceCodeNew/deprecate-maniud",
+    "commit": "49b80d9afea20a8b247d2d617478beef3de9d97d"
+  },
+  "cases": [
+    {
+      "id": "gen-image",
+      "argv": ["gen", "docker://ghcr.io/example/service:1.0", "--name", "service"],
+      "accepted": true
+    },
+    {
+      "id": "apply-single-service",
+      "argv": ["apply", "compose.yaml"],
+      "accepted": true
+    },
+    {
+      "id": "gitops-init",
+      "argv": ["gitops", "init", "deployment", "--branch", "main"],
+      "accepted": true
+    },
+    {
+      "id": "daemon-once",
+      "argv": ["daemon", "--once"],
+      "accepted": true
+    },
+    {
+      "id": "remove-apply-dry-run",
+      "argv": ["apply", "compose.yaml", "--dry-run"],
+      "accepted": false,
+      "difference_id": "remove-apply-dry-run"
+    },
+    {
+      "id": "remove-runtime-argv",
+      "argv": ["gen", "--", "docker", "run", "ghcr.io/example/service:1.0"],
+      "accepted": false,
+      "difference_id": "remove-runtime-argv"
+    },
+    {
+      "id": "reject-prepare-command",
+      "argv": ["prepare", "compose.yaml"],
+      "accepted": false
+    },
+    {
+      "id": "reject-manual-recovery-command",
+      "argv": ["recovery", "compose.yaml"],
+      "accepted": false
+    }
+  ]
+}

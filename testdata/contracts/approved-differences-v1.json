@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "python_baseline_commit": "49b80d9afea20a8b247d2d617478beef3de9d97d",
+  "differences": [
+    {
+      "id": "remove-apply-dry-run",
+      "python_observation": "accepted",
+      "go_observation": "rejected with invalid_input",
+      "reason": "Planning, evidence, and mutation gates belong to apply; dry-run is not a public command option.",
+      "approved_by": "user",
+      "approved_on": "2026-08-14"
+    },
+    {
+      "id": "remove-runtime-argv",
+      "python_observation": "accepted after --",
+      "go_observation": "rejected with invalid_input",
+      "reason": "The Go product accepts structured sources and calls runtime APIs directly; opaque runtime argv is not desired state.",
+      "approved_by": "user",
+      "approved_on": "2026-08-14"
+    }
+  ]
+}
