@@ -1,0 +1,142 @@
+minimum_prek_version: 0.4.13
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        language: system
+        entry: gofmt -w
+        types: [go]
+        stages: [pre-commit]
+      - id: gofmt-check
+        name: gofmt check
+        language: system
+        entry: bash -c
+        args:
+          - |
+            set -euo pipefail
+            unformatted="$(gofmt -l "$@")"
+            if [[ -n "$unformatted" ]]; then
+              printf 'gofmt is required for:\n%s\n' "$unformatted" >&2
+              exit 1
+            fi
+          - gofmt-check
+        types: [go]
+        stages: [pre-push, manual]
+      - id: gitleaks-staged
+        name: gitleaks staged changes
+        language: system
+        entry: gitleaks git --staged --redact
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: gitleaks-push
+        name: gitleaks pushed commits
+        language: system
+        entry: bash -c
+        args:
+          - |
+            set -euo pipefail
+            zero=0000000000000000000000000000000000000000
+            if [[ -n "${PRE_COMMIT_FROM_REF:-}" && "$PRE_COMMIT_FROM_REF" != "$zero" && -n "${PRE_COMMIT_TO_REF:-}" && "$PRE_COMMIT_TO_REF" != "$zero" ]]; then
+              gitleaks git --redact --log-opts="$PRE_COMMIT_FROM_REF..$PRE_COMMIT_TO_REF"
+            else
+              gitleaks git --redact
+            fi
+        pass_filenames: false
+        stages: [pre-push]
+      - id: gitleaks-history
+        name: gitleaks history
+        language: system
+        entry: gitleaks git --redact
+        pass_filenames: false
+        stages: [manual]
+      - id: go-mod-tidy
+        name: go mod tidy
+        language: system
+        entry: go mod tidy -diff
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: go-mod-verify
+        name: go mod verify
+        language: system
+        entry: go mod verify
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: go-test
+        name: go test
+        language: system
+        entry: env CGO_ENABLED=0 go test -count=1 ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: go-coverage
+        name: Go statement coverage
+        language: system
+        entry: bash -c
+        args:
+          - |
+            set -euo pipefail
+            profile="$(mktemp)"
+            trap 'rm -f "$profile"' EXIT
+            CGO_ENABLED=0 go test -count=1 -covermode=atomic -coverpkg=./internal/... -coverprofile="$profile" ./internal/...
+            report="$(go tool cover -func="$profile")"
+            printf '%s\n' "$report"
+            total="$(awk '$1 == "total:" { print $3 }' <<<"$report")"
+            if [[ "$total" != 100.0% ]]; then
+              printf 'statement coverage is %s, want 100.0%%\n' "$total" >&2
+              exit 1
+            fi
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: golangci-lint
+        name: golangci-lint
+        language: system
+        entry: env CGO_ENABLED=0 golangci-lint run --timeout 2m ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: nilaway
+        name: nilaway
+        language: system
+        entry: env CGO_ENABLED=0 nilaway -include-pkgs=github.com/IceCodeNew/maniud ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: prealloc
+        name: prealloc
+        language: system
+        entry: env CGO_ENABLED=0 prealloc ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: govulncheck
+        name: govulncheck
+        language: system
+        entry: env CGO_ENABLED=0 govulncheck ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: capslock
+        name: capslock capability baseline
+        language: system
+        entry: capslock -force_local_module -packages ./cmd/maniud -omit_paths -output compare cmd/maniud/capslock.json
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: depaware
+        name: depaware dependency baseline
+        language: system
+        entry: depaware -check -file depaware.txt -goos linux,darwin -cgo false ./cmd/maniud
+        pass_filenames: false
+        stages: [pre-push, manual]
+      - id: cgo-free-builds
+        name: cgo-free platform builds
+        language: system
+        entry: bash -c
+        args:
+          - |
+            set -euo pipefail
+            output="$(mktemp -d)"
+            trap 'rm -rf "$output"' EXIT
+            for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+              GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
+                go build -trimpath -o "$output/maniud-${target%/*}-${target#*/}" ./cmd/maniud
+            done
+        pass_filenames: false
+        stages: [pre-push, manual]
