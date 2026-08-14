@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
+readonly GIT_USER_NAME='IceCodeNew'
+readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
+readonly GIT_SIGNING_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/commit-signing-key"
+readonly GIT_ALLOWED_SIGNERS="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/allowed-signers"
+readonly DOCKER_VERSION='29.7.2'
+readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
+readonly CONTAINERD_VERSION='2.3.3'
+readonly PODMAN_APT_VERSION='4.3.1+ds1-8+deb12u1+b3'
+readonly NERDCTL_BUILDKIT_VERSION='0.31.2'
+readonly NERDCTL_RUNC_VERSION='1.5.1'
+readonly CONTAINERD_ADDRESS='/run/maniud-containerd/containerd.sock'
+readonly DOCKER_GROUP='docker'
+readonly NERDCTL_RUNTIME_PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+require_equal() {
+  local label="$1"
+  local actual="$2"
+  local expected="$3"
+
+  if [[ "$actual" != "$expected" ]]; then
+    printf '%s version mismatch: expected %s, found %s; rerun .agents/setup.\n' \
+      "$label" "$expected" "$actual" >&2
+    exit 1
+  fi
+}
+
+run_nerdctl() {
+  sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$HOME/.local/bin/nerdctl" "$@"
+}
+
+probe_nerdctl() {
+  timeout 1s sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$HOME/.local/bin/nerdctl" info
+}
+
+if ! command -v mise >/dev/null 2>&1; then
+  printf '%s\n' 'mise is missing; rerun .agents/setup.' >&2
+  exit 1
+fi
+eval "$(mise hook-env -s bash)"
+
+if [[ ! -f "$GIT_SIGNING_KEY" ]] || ! ssh-keygen -y -f "$GIT_SIGNING_KEY" >/dev/null 2>&1; then
+  printf '%s\n' 'Git signing key is missing or invalid; rerun .agents/setup.' >&2
+  exit 1
+fi
+if [[ ! -f "$GIT_ALLOWED_SIGNERS" ]] \
+  || ! grep -Fqx "$GIT_USER_EMAIL $(ssh-keygen -y -f "$GIT_SIGNING_KEY")" "$GIT_ALLOWED_SIGNERS"; then
+  printf '%s\n' 'Git allowed signers are missing or invalid; rerun .agents/setup.' >&2
+  exit 1
+fi
+
+git config --global user.name "$GIT_USER_NAME"
+git config --global user.email "$GIT_USER_EMAIL"
+git config --global user.signingkey "$GIT_SIGNING_KEY"
+git config --global commit.gpgsign true
+git config --global gpg.format ssh
+git config --global gpg.ssh.program ssh-keygen
+git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS"
+
+for command_name in \
+  ast-grep \
+  buildctl \
+  bun \
+  containerd \
+  docker \
+  go \
+  mise \
+  nerdctl \
+  newgidmap \
+  newuidmap \
+  nmem \
+  openskills \
+  podman \
+  prek \
+  runc \
+  shellcheck \
+  shfmt \
+  uv \
+  capslock \
+  nilaway \
+  gopatch \
+  govulncheck \
+  prealloc \
+; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf '%s is missing; rerun .agents/setup.\n' "$command_name" >&2
+    exit 1
+  fi
+done
+if ! docker compose version >/dev/null 2>&1; then
+  printf '%s\n' 'Docker Compose is missing; rerun .agents/setup.' >&2
+  exit 1
+fi
+require_equal \
+  'Docker package' \
+  "$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null)" \
+  "$DOCKER_APT_VERSION"
+require_equal \
+  'Podman package' \
+  "$(dpkg-query -W -f='${Version}' podman 2>/dev/null)" \
+  "$PODMAN_APT_VERSION"
+require_equal \
+  'nerdctl containerd' \
+  "$(containerd --version | awk '{print $3}')" \
+  "v$CONTAINERD_VERSION"
+require_equal \
+  'nerdctl BuildKit' \
+  "$(buildctl --version | awk '{print $3}')" \
+  "v$NERDCTL_BUILDKIT_VERSION"
+require_equal \
+  'nerdctl runc' \
+  "$(runc --version | sed -n '1s/^runc version //p')" \
+  "$NERDCTL_RUNC_VERSION"
+
+if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
+  printf 'The current shell is missing the %s group; start a new shell after running .agents/setup.\n' \
+    "$DOCKER_GROUP" >&2
+  exit 1
+fi
+
+amp orb services ensure >/dev/null
+
+docker_ready=false
+nerdctl_ready=false
+readonly readiness_deadline=$((SECONDS + 6))
+while ((SECONDS < readiness_deadline)); do
+  if [[ "$docker_ready" == false ]] && timeout 1s docker info >/dev/null 2>&1; then
+    docker_ready=true
+  fi
+  if [[ "$nerdctl_ready" == false ]] && probe_nerdctl >/dev/null 2>&1; then
+    nerdctl_ready=true
+  fi
+  if [[ "$docker_ready" == true && "$nerdctl_ready" == true ]]; then
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$docker_ready" != true ]]; then
+  printf '%s\n' 'The supervised Docker daemon is unavailable.' >&2
+  timeout 1s docker info >&2 || true
+  exit 1
+fi
+if [[ "$nerdctl_ready" != true ]]; then
+  printf '%s\n' 'The supervised containerd daemon is unavailable.' >&2
+  probe_nerdctl >&2 || true
+  exit 1
+fi
+
+require_equal 'Docker client' "$(docker version --format '{{.Client.Version}}')" "$DOCKER_VERSION"
+require_equal 'Docker server' "$(docker version --format '{{.Server.Version}}')" "$DOCKER_VERSION"
+if docker info --format '{{json .SecurityOptions}}' | grep -Fq 'name=rootless'; then
+  printf '%s\n' 'Docker unexpectedly connected to a rootless daemon.' >&2
+  exit 1
+fi
+require_equal 'Podman rootful mode' "$(sudo podman info --format '{{.Host.Security.Rootless}}')" 'false'
+
+nerdctl_version_json="$(run_nerdctl version --format '{{json .}}')"
+nerdctl_runtime_versions="$({
+  printf '%s' "$nerdctl_version_json" | python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+client = data["Client"]
+client_components = {item["Name"]: item["Version"] for item in client["Components"]}
+server_components = {item["Name"]: item["Version"] for item in data["Server"]["Components"]}
+print("\t".join((
+    client_components["buildctl"],
+    server_components["containerd"],
+    server_components["runc"],
+)))
+'
+})"
+IFS=$'\t' read -r \
+  nerdctl_buildkit_version \
+  nerdctl_containerd_version \
+  nerdctl_runc_version <<<"$nerdctl_runtime_versions"
+require_equal 'active nerdctl BuildKit' "$nerdctl_buildkit_version" "v$NERDCTL_BUILDKIT_VERSION"
+require_equal 'active nerdctl containerd' "$nerdctl_containerd_version" "v$CONTAINERD_VERSION"
+require_equal 'active nerdctl runc' "$nerdctl_runc_version" "$NERDCTL_RUNC_VERSION"
+
+if [[ ! -S /var/run/docker.sock ]] \
+  || [[ "$(stat -c '%a:%U:%G' /var/run/docker.sock)" != "660:root:$DOCKER_GROUP" ]]; then
+  printf '%s\n' 'The Docker socket is not restricted to root and the docker group.' >&2
+  exit 1
+fi
+if [[ ! -S "$CONTAINERD_ADDRESS" ]] \
+  || [[ "$(stat -c '%a:%U:%G' "$CONTAINERD_ADDRESS")" != "660:root:$DOCKER_GROUP" ]]; then
+  printf '%s\n' 'The containerd socket is not restricted to root and the docker group.' >&2
+  exit 1
+fi
+
+if [[ -z "${NMEM_API_URL:-}" || -z "${NMEM_API_KEY:-}" ]]; then
+  printf '%s\n' 'NMEM_API_URL and NMEM_API_KEY must be set for Nowledge Mem.' >&2
+  exit 1
+fi
+nmem config client set --url "$NMEM_API_URL" --api-key "$NMEM_API_KEY" >/dev/null
+nmem --json status >/dev/null
+
+printf '%s\n' 'Orb resume checks complete.'

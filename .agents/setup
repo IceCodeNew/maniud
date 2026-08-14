@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+cd "$repo_root"
+
+readonly GIT_USER_NAME='IceCodeNew'
+readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
+readonly DOCKER_VERSION='29.7.2'
+readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
+readonly CONTAINERD_VERSION='2.3.3'
+readonly CONTAINERD_APT_VERSION='2.3.3-1~debian.12~bookworm'
+readonly DOCKER_COMPOSE_APT_VERSION='5.4.0-1~debian.12~bookworm'
+readonly PODMAN_APT_VERSION='4.3.1+ds1-8+deb12u1+b3'
+readonly NERDCTL_VERSION='2.3.5'
+readonly NERDCTL_BUILDKIT_VERSION='0.31.2'
+readonly NERDCTL_RUNC_VERSION='1.5.1'
+readonly NERDCTL_ARCHIVE_SHA256='b697295c623639734aaab737523c808fd3cc8d3046039fd94fff1744e4c317aa'
+readonly NERDCTL_URL='https://github.com/containerd/nerdctl/releases/download/v2.3.5/nerdctl-full-2.3.5-linux-amd64.tar.gz'
+readonly CONTAINERD_CONFIG_PATH='/etc/maniud/containerd.toml'
+readonly CONTAINERD_ADDRESS='/run/maniud-containerd/containerd.sock'
+readonly DOCKER_GROUP='docker'
+readonly NERDCTL_CONFIG_PATH='/etc/nerdctl/nerdctl.toml'
+
+run_step() {
+  local label="$1"
+  shift
+  printf '==> %s\n' "$label"
+  time "$@"
+}
+
+package_has_version() {
+  [[ "$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null)" == "$2" ]]
+}
+
+disable_system_runtime_services() {
+  local unit
+  local unit_state
+
+  sudo systemctl mask --now docker.service docker.socket containerd.service >/dev/null
+  for unit in docker.service docker.socket containerd.service; do
+    unit_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+    if [[ "$unit_state" != 'masked' ]]; then
+      printf '%s is not masked.\n' "$unit" >&2
+      return 1
+    fi
+    if systemctl is-active --quiet "$unit"; then
+      printf '%s is still active.\n' "$unit" >&2
+      return 1
+    fi
+  done
+}
+
+stop_supervised_runtimes() {
+  local service
+  local running_services
+
+  running_services="$(amp orb service list)"
+  for service in docker nerdctl-containerd; do
+    if grep -Fq "amp-svc-$service.service" <<<"$running_services"; then
+      amp orb service stop "$service"
+    fi
+  done
+}
+
+configure_git() (
+  local signing_dir="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git"
+  local signing_key="$signing_dir/commit-signing-key"
+  local allowed_signers="$signing_dir/allowed-signers"
+  local temporary_key
+  local temporary_allowed_signers
+
+  install -m 0700 -d "$signing_dir"
+  if [[ -z "${GIT_SSH_KEY:-}" ]]; then
+    printf '%s\n' 'GIT_SSH_KEY must contain the base64-encoded Git signing key.' >&2
+    return 1
+  fi
+
+  umask 077
+  temporary_key="$(mktemp "$signing_dir/.commit-signing-key.XXXXXX")"
+  temporary_allowed_signers="$(mktemp "$signing_dir/.allowed-signers.XXXXXX")"
+  trap 'rm -f "$temporary_key" "$temporary_allowed_signers"' EXIT
+  printf '%s' "$GIT_SSH_KEY" | base64 --decode >"$temporary_key" 2>/dev/null
+  ssh-keygen -y -f "$temporary_key" >/dev/null 2>&1
+  printf '%s %s\n' "$GIT_USER_EMAIL" "$(ssh-keygen -y -f "$temporary_key")" >"$temporary_allowed_signers"
+  install -m 0600 "$temporary_key" "$signing_key"
+  install -m 0600 "$temporary_allowed_signers" "$allowed_signers"
+  git config --global user.name "$GIT_USER_NAME"
+  git config --global user.email "$GIT_USER_EMAIL"
+  git config --global user.signingkey "$signing_key"
+  git config --global commit.gpgsign true
+  git config --global gpg.format ssh
+  git config --global gpg.ssh.program ssh-keygen
+  git config --global gpg.ssh.allowedSignersFile "$allowed_signers"
+)
+
+configure_amp_commit_privacy() {
+  local settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amp"
+  local settings_path="$settings_dir/settings.json"
+
+  mkdir -p "$settings_dir"
+  SETTINGS_PATH="$settings_path" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["SETTINGS_PATH"])
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings["amp.git.commit.ampThread.enabled"] = False
+settings["amp.git.commit.coauthor.enabled"] = False
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+temporary.chmod(0o600)
+temporary.replace(path)
+PY
+}
+
+install_system_packages() {
+  if command -v curl >/dev/null 2>&1 \
+    && command -v newgidmap >/dev/null 2>&1 \
+    && command -v newuidmap >/dev/null 2>&1 \
+    && command -v podman >/dev/null 2>&1 \
+    && command -v ssh-keygen >/dev/null 2>&1 \
+    && command -v unzip >/dev/null 2>&1 \
+    && package_has_version podman "$PODMAN_APT_VERSION"; then
+    return
+  fi
+
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends \
+    curl \
+    openssh-client \
+    "podman=$PODMAN_APT_VERSION" \
+    python3-minimal \
+    uidmap \
+    unzip
+}
+
+install_docker_tools() {
+  disable_system_runtime_services
+  if package_has_version docker-ce "$DOCKER_APT_VERSION" \
+    && package_has_version docker-ce-cli "$DOCKER_APT_VERSION" \
+    && package_has_version containerd.io "$CONTAINERD_APT_VERSION" \
+    && package_has_version docker-compose-plugin "$DOCKER_COMPOSE_APT_VERSION" \
+    && docker compose version >/dev/null 2>&1; then
+    return
+  fi
+
+  sudo install -m 0755 -d /etc/apt/keyrings
+  if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
+    sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/docker.list ]]; then
+    local architecture codename
+    architecture="$(dpkg --print-architecture)"
+    codename="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"')"
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian %s stable\n' \
+      "$architecture" "$codename" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+  fi
+
+  sudo apt-get update
+  sudo apt-get install -y --allow-downgrades --no-install-recommends \
+    "containerd.io=$CONTAINERD_APT_VERSION" \
+    "docker-ce=$DOCKER_APT_VERSION" \
+    "docker-ce-cli=$DOCKER_APT_VERSION" \
+    "docker-compose-plugin=$DOCKER_COMPOSE_APT_VERSION"
+  disable_system_runtime_services
+}
+
+install_nerdctl_tools() (
+  local temporary_dir
+  local archive
+  local completion_marker
+  local required_path
+
+  completion_marker="$HOME/.cache/maniud/nerdctl-full-$NERDCTL_VERSION.complete"
+  if [[ -f "$completion_marker" ]] \
+    && grep -Fqx "$NERDCTL_ARCHIVE_SHA256" "$completion_marker" \
+    && [[ -x "$HOME/.local/bin/buildkitd" ]] \
+    && [[ -x "$HOME/.local/bin/containerd-shim-runc-v2" ]] \
+    && [[ -x "$HOME/.local/libexec/cni/bridge" ]] \
+    && [[ "$(containerd --version 2>/dev/null | awk '{print $3}')" == "v$CONTAINERD_VERSION" ]] \
+    && [[ "$(buildctl --version 2>/dev/null | awk '{print $3}')" == "v$NERDCTL_BUILDKIT_VERSION" ]] \
+    && [[ "$(runc --version 2>/dev/null | sed -n '1s/^runc version //p')" == "$NERDCTL_RUNC_VERSION" ]]; then
+    return
+  fi
+
+  rm -f "$completion_marker"
+  temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-nerdctl.XXXXXX")"
+  trap 'rm -rf "$temporary_dir"' EXIT
+  archive="$temporary_dir/nerdctl-full.tar.gz"
+  curl --fail --location --retry 3 --output "$archive" "$NERDCTL_URL"
+  printf '%s  %s\n' "$NERDCTL_ARCHIVE_SHA256" "$archive" | sha256sum --check --strict
+  install -m 0755 -d "$HOME/.local"
+  tar --extract --gzip --no-same-owner --file "$archive" --directory "$HOME/.local"
+  for required_path in \
+    "$HOME/.local/bin/buildctl" \
+    "$HOME/.local/bin/buildkitd" \
+    "$HOME/.local/bin/containerd" \
+    "$HOME/.local/bin/containerd-shim-runc-v2" \
+    "$HOME/.local/bin/nerdctl" \
+    "$HOME/.local/bin/runc" \
+    "$HOME/.local/libexec/cni/bridge"; do
+    if [[ ! -x "$required_path" ]]; then
+      printf 'The nerdctl full bundle is missing %s.\n' "$required_path" >&2
+      return 1
+    fi
+  done
+  install -m 0755 -d "$(dirname "$completion_marker")"
+  printf '%s\n' "$NERDCTL_ARCHIVE_SHA256" >"$completion_marker"
+)
+
+configure_runtime_access() {
+  sudo groupadd --force "$DOCKER_GROUP"
+  sudo usermod --append --groups "$DOCKER_GROUP" "$(id -un)"
+}
+
+configure_containerd() (
+  local temporary_config
+  local temporary_nerdctl_config
+  local docker_group_id
+
+  docker_group_id="$(getent group "$DOCKER_GROUP" | cut -d: -f3)"
+  temporary_config="$(mktemp "${TMPDIR:-/tmp}/maniud-containerd.XXXXXX")"
+  temporary_nerdctl_config="$(mktemp "${TMPDIR:-/tmp}/maniud-nerdctl.XXXXXX")"
+  trap 'rm -f "$temporary_config" "$temporary_nerdctl_config"' EXIT
+  cat >"$temporary_config" <<EOF
+version = 4
+root = '/var/lib/maniud-containerd'
+state = '/run/maniud-containerd'
+
+[plugins.'io.containerd.server.v1.grpc']
+  address = '$CONTAINERD_ADDRESS'
+  uid = 0
+  gid = $docker_group_id
+
+[plugins.'io.containerd.server.v1.ttrpc']
+  address = '$CONTAINERD_ADDRESS.ttrpc'
+  uid = 0
+  gid = $docker_group_id
+EOF
+  cat >"$temporary_nerdctl_config" <<EOF
+address = 'unix://$CONTAINERD_ADDRESS'
+cni_path = '$HOME/.local/libexec/cni'
+cni_netconfpath = '$HOME/.local/etc/cni/net.d'
+EOF
+  sudo install -m 0755 -d /etc/maniud /etc/nerdctl /var/lib/maniud-containerd
+  sudo install -m 0644 "$temporary_config" "$CONTAINERD_CONFIG_PATH"
+  sudo install -m 0644 "$temporary_nerdctl_config" "$NERDCTL_CONFIG_PATH"
+)
+
+install_mise() {
+  if ! command -v mise >/dev/null 2>&1; then
+    curl https://mise.run/bash | sh
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+}
+
+configure_mise_login_shell() {
+  local profile="$HOME/.bash_profile"
+
+  touch "$profile"
+  PROFILE="$profile" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["PROFILE"])
+marker = "# maniud mise activation"
+old_block = """# maniud mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+fi
+"""
+correct_block = """# maniud mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+  eval "$("$HOME/.local/bin/mise" hook-env -s bash)"
+fi
+"""
+content = path.read_text()
+marker_count = sum(line == marker for line in content.splitlines())
+
+if marker_count == 0:
+    separator = "" if not content else "\n" if content.endswith("\n") else "\n\n"
+    path.write_text(content + separator + correct_block)
+elif marker_count == 1 and correct_block in content:
+    pass
+elif marker_count == 1 and old_block in content:
+    content = content.replace(old_block, "", 1)
+    separator = "" if not content else "\n" if content.endswith("\n") else "\n\n"
+    path.write_text(content + separator + correct_block)
+else:
+    raise SystemExit(f"Refusing to replace unrecognized or duplicate {marker!r} blocks")
+PY
+}
+
+install_golang() {
+  mise use --global go
+  eval "$(mise hook-env -s bash)"
+  go env -w GOPROXY='https://golang.flatt.tech'
+}
+
+install_mise_tools() {
+  mise use --global uv
+  mise use --global \
+      ast-grep bun node@lts shellcheck shfmt \
+      "go:github.com/google/capslock/cmd/capslock" \
+      "go:go.uber.org/nilaway/cmd/nilaway" \
+      "go:github.com/uber-go/gopatch" \
+      "go:golang.org/x/vuln/cmd/govulncheck" \
+      "go:github.com/alexkohler/prealloc" \
+      "npm:openskills" \
+      "pipx:nmem-cli" "pipx:prek"
+  mise reshim
+}
+
+install_agent_skills() (
+  eval "$(mise hook-env -s bash)"
+  local skills_dir="$HOME/.agents/skills"
+  local compatibility_dir="$HOME/.agent/skills"
+  local temporary_dir
+
+  mkdir -p "$skills_dir" "$compatibility_dir"
+
+  install_skill() {
+    local name="$1"
+    local source="$2"
+    local destination="$skills_dir/$name"
+
+    if [[ -f "$destination/SKILL.md" ]]; then
+      return
+    fi
+    [[ ! -e "$destination" ]] || {
+      printf 'Refusing to replace incomplete skill directory: %s\n' "$destination" >&2
+      return 1
+    }
+    cp -a "$source" "$destination"
+  }
+
+  if [[ ! -f "$skills_dir/autofix/SKILL.md" \
+    || ! -f "$skills_dir/code-review/SKILL.md" \
+    || ! -f "$skills_dir/gh-stack/SKILL.md" \
+    || ! -f "$skills_dir/modular-go/SKILL.md" ]] \
+; then
+    temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-skills.XXXXXX")"
+    trap 'rm -rf "$temporary_dir"' EXIT
+
+    git clone --quiet --depth 1 https://github.com/coderabbitai/skills.git "$temporary_dir/coderabbit"
+    git clone --quiet --depth 1 https://github.com/github/gh-stack.git "$temporary_dir/gh-stack"
+    git clone --quiet --depth 1 https://github.com/PsiACE/skills.git "$temporary_dir/psiace"
+
+    install_skill autofix "$temporary_dir/coderabbit/skills/autofix"
+    install_skill code-review "$temporary_dir/coderabbit/skills/code-review"
+    install_skill gh-stack "$temporary_dir/gh-stack/skills/gh-stack"
+    install_skill modular-go "$temporary_dir/psiace/skills/modular-go"
+  fi
+
+  for skill in autofix code-review gh-stack modular-go; do
+    [[ -e "$compatibility_dir/$skill" ]] || ln -s "$skills_dir/$skill" "$compatibility_dir/$skill"
+  done
+
+  openskills read autofix,code-review,gh-stack,modular-go >/dev/null
+)
+
+install_ninehills_skills() (
+  eval "$(mise hook-env -s bash)"
+  local source_dir="$HOME/.cache/maniud/ninehills-skills"
+
+  if [[ -e "$source_dir" && ! -d "$source_dir/.git" ]]; then
+    printf 'Refusing to replace unmanaged ninehills source directory: %s\n' "$source_dir" >&2
+    return 1
+  fi
+  if [[ ! -d "$source_dir/.git" ]]; then
+    git clone --quiet --depth 1 https://github.com/ninehills/skills.git "$source_dir"
+  fi
+  amp skill add --global --overwrite "$source_dir"
+)
+
+install_gstack() (
+  eval "$(mise hook-env -s bash)"
+  local destination="$HOME/.agents/skills/gstack"
+  local compatibility_dir="$HOME/.agent/skills"
+  local compatibility_path="$compatibility_dir/gstack"
+  local state_dir="$HOME/.cache/maniud"
+  local setup_marker="$state_dir/gstack-setup-revision"
+  local setup_log="$HOME/.cache/amp/logs/maniud-gstack-setup.log"
+  local revision
+  local setup_required=false
+
+  if [[ -e "$destination" && ! -d "$destination/.git" ]]; then
+    printf 'Refusing to replace unmanaged gstack directory: %s\n' "$destination" >&2
+    return 1
+  fi
+  if [[ ! -d "$destination/.git" ]]; then
+    git clone --quiet --depth 1 https://github.com/garrytan/gstack.git "$destination"
+    setup_required=true
+  fi
+
+  if [[ ! -d "$destination/node_modules" ]]; then
+    bun install --cwd "$destination"
+    setup_required=true
+  fi
+
+  mkdir -p "$compatibility_dir" "$state_dir" "$(dirname "$setup_log")"
+  if [[ -L "$compatibility_path" ]]; then
+    if [[ "$(readlink -f "$compatibility_path")" != "$destination" ]]; then
+      printf 'Refusing to replace unrelated gstack skill link: %s\n' "$compatibility_path" >&2
+      return 1
+    fi
+  elif [[ -e "$compatibility_path" ]]; then
+    printf 'Refusing to replace unmanaged gstack skill path: %s\n' "$compatibility_path" >&2
+    return 1
+  else
+    ln -s "$destination" "$compatibility_path"
+  fi
+
+  revision="$(git -C "$destination" rev-parse HEAD)"
+  if [[ ! -f "$setup_marker" ]] || ! grep -Fqx "$revision" "$setup_marker"; then
+    setup_required=true
+  fi
+  if [[ "$setup_required" == true ]]; then
+    if ! "$destination/setup" --host claude --no-team --no-prefix -q >"$setup_log" 2>&1; then
+      cat "$setup_log" >&2
+      return 1
+    fi
+    printf '%s\n' "$revision" >"$setup_marker"
+  fi
+
+  openskills read gstack >/dev/null
+)
+
+verify_nmem_environment() {
+  command -v nmem >/dev/null 2>&1 || {
+    printf '%s\n' 'nmem is missing; rerun .agents/setup.' >&2
+    return 1
+  }
+  if [[ -z "${NMEM_API_URL:-}" || -z "${NMEM_API_KEY:-}" ]]; then
+    printf '%s\n' 'NMEM_API_URL and NMEM_API_KEY must be set for Nowledge Mem.' >&2
+    return 1
+  fi
+}
+
+configure_nmem() {
+  eval "$(mise hook-env -s bash)"
+  nmem config client set --url "$NMEM_API_URL" --api-key "$NMEM_API_KEY" >/dev/null
+  nmem --json status >/dev/null
+}
+
+run_step 'Install required system packages and Podman' install_system_packages
+run_step 'Install mise' install_mise
+run_step 'Configure mise for login shells' configure_mise_login_shell
+run_step 'Install golang' install_golang
+run_step 'Install mise-managed tools' install_mise_tools
+run_step 'Configure signed Git commits' configure_git
+run_step 'Disable commit identity trailers' configure_amp_commit_privacy
+run_step 'Stop supervised container runtimes before updating them' stop_supervised_runtimes
+run_step "Install Docker $DOCKER_VERSION tools" install_docker_tools
+run_step "Install nerdctl $NERDCTL_VERSION full bundle" install_nerdctl_tools
+run_step 'Grant the orb user access to container runtime sockets' configure_runtime_access
+run_step 'Configure the supervised containerd daemon' configure_containerd
+run_step 'Install and load agent skills' install_agent_skills
+run_step 'Install latest ninehills skills' install_ninehills_skills
+run_step 'Install and load gstack' install_gstack
+run_step 'Verify Nowledge Mem environment' verify_nmem_environment
+run_step 'Configure and verify Nowledge Mem' configure_nmem
+run_step 'Start and verify supervised container runtimes' \
+  sudo --preserve-env=NMEM_API_URL,NMEM_API_KEY \
+  --user "$(id -un)" --set-home "$repo_root/.agents/resume"
+
+printf '%s\n' 'Orb setup complete.'
