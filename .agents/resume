@@ -7,6 +7,15 @@ readonly GIT_USER_NAME='IceCodeNew'
 readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
 readonly GIT_SIGNING_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/commit-signing-key"
 readonly GIT_ALLOWED_SIGNERS="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/allowed-signers"
+readonly GO_VERSION='1.26.6'
+readonly PREK_VERSION='0.4.13'
+readonly GOLANGCI_LINT_VERSION='2.12.2'
+readonly GITLEAKS_VERSION='8.30.1'
+readonly CAPSLOCK_VERSION='v0.3.2'
+readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'
+readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
+readonly GOVULNCHECK_VERSION='v1.7.0'
+readonly PREALLOC_VERSION='v1.1.0'
 readonly DOCKER_VERSION='29.7.2'
 readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
 readonly CONTAINERD_VERSION='2.3.3'
@@ -82,7 +91,10 @@ for command_name in \
   bun \
   containerd \
   docker \
+  depaware \
+  gitleaks \
   go \
+  golangci-lint \
   mise \
   nerdctl \
   newgidmap \
@@ -99,13 +111,26 @@ for command_name in \
   nilaway \
   gopatch \
   govulncheck \
-  prealloc \
-; do
+  prealloc; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf '%s is missing; rerun .agents/setup.\n' "$command_name" >&2
     exit 1
   fi
 done
+require_equal 'Go' "$(go env GOVERSION)" "go$GO_VERSION"
+require_equal 'prek' "$(mise current prek)" "$PREK_VERSION"
+require_equal 'golangci-lint' "$(mise current golangci-lint)" "$GOLANGCI_LINT_VERSION"
+require_equal 'Gitleaks' "$(mise current gitleaks)" "$GITLEAKS_VERSION"
+require_equal 'Capslock' \
+  "$(mise current go:github.com/google/capslock/cmd/capslock)" "${CAPSLOCK_VERSION#v}"
+require_equal 'NilAway' \
+  "$(mise current go:go.uber.org/nilaway/cmd/nilaway)" "${NILAWAY_VERSION#v}"
+require_equal 'depaware' \
+  "$(mise current go:github.com/tailscale/depaware)" "${DEPAWARE_VERSION#v}"
+require_equal 'govulncheck' \
+  "$(mise current go:golang.org/x/vuln/cmd/govulncheck)" "${GOVULNCHECK_VERSION#v}"
+require_equal 'prealloc' \
+  "$(mise current go:github.com/alexkohler/prealloc)" "${PREALLOC_VERSION#v}"
 if ! docker compose version >/dev/null 2>&1; then
   printf '%s\n' 'Docker Compose development conformance oracle is missing; rerun .agents/setup.' >&2
   exit 1
