@@ -106,6 +106,10 @@ for command_name in \
     exit 1
   fi
 done
+if ! docker compose version >/dev/null 2>&1; then
+  printf '%s\n' 'Docker Compose development conformance oracle is missing; rerun .agents/setup.' >&2
+  exit 1
+fi
 require_equal \
   'Docker package' \
   "$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null)" \

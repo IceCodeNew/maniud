@@ -11,6 +11,7 @@ readonly DOCKER_VERSION='29.7.2'
 readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
 readonly CONTAINERD_VERSION='2.3.3'
 readonly CONTAINERD_APT_VERSION='2.3.3-1~debian.12~bookworm'
+readonly DOCKER_COMPOSE_APT_VERSION='5.4.0-1~debian.12~bookworm'
 readonly PODMAN_APT_VERSION='4.3.1+ds1-8+deb12u1+b3'
 readonly NERDCTL_VERSION='2.3.5'
 readonly NERDCTL_BUILDKIT_VERSION='0.31.2'
@@ -140,7 +141,9 @@ install_docker_tools() {
   disable_system_runtime_services
   if package_has_version docker-ce "$DOCKER_APT_VERSION" \
     && package_has_version docker-ce-cli "$DOCKER_APT_VERSION" \
-    && package_has_version containerd.io "$CONTAINERD_APT_VERSION"; then
+    && package_has_version containerd.io "$CONTAINERD_APT_VERSION" \
+    && package_has_version docker-compose-plugin "$DOCKER_COMPOSE_APT_VERSION" \
+    && docker compose version >/dev/null 2>&1; then
     return
   fi
 
@@ -161,7 +164,8 @@ install_docker_tools() {
   sudo apt-get install -y --allow-downgrades --no-install-recommends \
     "containerd.io=$CONTAINERD_APT_VERSION" \
     "docker-ce=$DOCKER_APT_VERSION" \
-    "docker-ce-cli=$DOCKER_APT_VERSION"
+    "docker-ce-cli=$DOCKER_APT_VERSION" \
+    "docker-compose-plugin=$DOCKER_COMPOSE_APT_VERSION"
   disable_system_runtime_services
 }
 
