@@ -1,0 +1,67 @@
+{
+	"capabilityInfo": [
+		{
+			"packageName": "main",
+			"capabilityName": "FILES",
+			"capability": "CAPABILITY_FILES",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "UNANALYZED",
+			"capability": "CAPABILITY_UNANALYZED",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "UNSAFE_POINTER",
+			"capability": "CAPABILITY_UNSAFE_POINTER",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "REFLECT",
+			"capability": "CAPABILITY_REFLECT",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		}
+	],
+	"packageInfo": [
+		{
+			"path": "github.com/IceCodeNew/maniud/cmd/maniud"
+		},
+		{
+			"path": "github.com/IceCodeNew/maniud/internal/cli"
+		},
+		{
+			"path": "github.com/IceCodeNew/maniud/internal/domain"
+		}
+	]
+}

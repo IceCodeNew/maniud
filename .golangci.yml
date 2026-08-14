@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # No dependency policy exists until the first production dependency is selected.
+    - depguard
+    # Replaced by gomodguard_v2 in golangci-lint v2.12.
+    - gomodguard
+    # White-box parser tests avoid exporting a test-only public API.
+    - testpackage
+    # Replaced by wsl_v5 in golangci-lint v2.2.
+    - wsl
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
