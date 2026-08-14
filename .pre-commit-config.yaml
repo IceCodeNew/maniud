@@ -31,6 +31,21 @@ repos:
         entry: gitleaks git --staged --redact
         pass_filenames: false
         stages: [pre-commit]
+      - id: reject-internal-plans
+        name: reject internal rewrite plans
+        language: system
+        entry: bash -c
+        args:
+          - |
+            set -euo pipefail
+            for path in "$@"; do
+              if [[ "$path" == docs/rewrite-plan.md ]]; then
+                printf '%s is an internal planning artifact and must remain untracked.\n' "$path" >&2
+                exit 1
+              fi
+            done
+          - reject-internal-plans
+        stages: [pre-commit, pre-push, manual]
       - id: gitleaks-push
         name: gitleaks pushed commits
         language: system
@@ -82,9 +97,23 @@ repos:
             CGO_ENABLED=0 go test -count=1 -covermode=atomic -coverpkg=./internal/... -coverprofile="$profile" ./internal/...
             report="$(go tool cover -func="$profile")"
             printf '%s\n' "$report"
-            total="$(awk '$1 == "total:" { print $3 }' <<<"$report")"
-            if [[ "$total" != 100.0% ]]; then
-              printf 'statement coverage is %s, want 100.0%%\n' "$total" >&2
+            read -r covered total < <(
+              awk '
+                NR > 1 {
+                  statements[$1] = $2
+                  if ($3 > 0) hit[$1] = 1
+                }
+                END {
+                  for (block in statements) {
+                    total += statements[block]
+                    if (hit[block]) covered += statements[block]
+                  }
+                  print covered, total
+                }
+              ' "$profile"
+            )
+            if (( covered != total )); then
+              printf 'covered statements are %d/%d, want %d/%d\n' "$covered" "$total" "$total" "$total" >&2
               exit 1
             fi
         pass_filenames: false
