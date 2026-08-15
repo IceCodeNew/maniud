@@ -43,6 +43,7 @@ linters:
           files:
             - $all
             - "!**/internal/compose/*.go"
+            - "!**/internal/imageref/*.go"
             - "!**/internal/runtime/docker/*.go"
           allow:
             - $gostd
@@ -56,6 +57,13 @@ linters:
             - github.com/IceCodeNew/maniud
             - github.com/compose-spec/compose-go/v2
             - go.yaml.in/yaml/v4
+        imageref:
+          list-mode: strict
+          files:
+            - "**/internal/imageref/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
             - oras.land/oras-go/v2
         docker-adapter:
           list-mode: strict
