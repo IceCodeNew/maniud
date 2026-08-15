@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+const backupFixtureLast = 1024
+
 func TestBackupSQLiteCreatesConsistentSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -414,7 +416,7 @@ func (err sqliteCodeError) Code() int {
 }
 
 func writeBackupFixture(ctx context.Context, database *sql.DB, first int, payload string, done chan<- error) {
-	for sequence := first; ; sequence++ {
+	for sequence := first; sequence <= backupFixtureLast; sequence++ {
 		_, err := database.ExecContext(
 			ctx,
 			"INSERT INTO backup_fixture (sequence, payload) VALUES (?, ?)",
@@ -427,6 +429,8 @@ func writeBackupFixture(ctx context.Context, database *sql.DB, first int, payloa
 			return
 		}
 	}
+
+	done <- nil
 }
 
 func (backup *fakeBackup) Step(_ int32) (bool, error) {
