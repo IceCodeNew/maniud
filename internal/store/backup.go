@@ -22,6 +22,10 @@ type onlineBackuper interface {
 	NewBackup(destination string) (*modernsqlite.Backup, error)
 }
 
+type onlineRestorer interface {
+	NewRestore(source string) (*modernsqlite.Backup, error)
+}
+
 type backupHandle interface {
 	Step(pages int32) (bool, error)
 	Finish() error
@@ -55,6 +59,42 @@ func runOnlineBackup(ctx context.Context, raw any, destination string) error {
 	}
 
 	return performOnlineBackup(ctx, backup)
+}
+
+func restoreSQLite(ctx context.Context, database *sql.DB, source string) error {
+	database.SetMaxIdleConns(0)
+	database.SetMaxOpenConns(1)
+
+	defer func() {
+		database.SetMaxOpenConns(maximumConnections)
+		database.SetMaxIdleConns(maximumConnections)
+	}()
+
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return classifyContext(ctx)
+	}
+
+	err = connection.Raw(func(raw any) error {
+		return runOnlineRestore(ctx, raw, source)
+	})
+	closeErr := connection.Close()
+
+	return classifyBackupResult(ctx, err, closeErr)
+}
+
+func runOnlineRestore(ctx context.Context, raw any, source string) error {
+	maker, valid := raw.(onlineRestorer)
+	if !valid {
+		return ErrInvalidState
+	}
+
+	restore, err := maker.NewRestore(source)
+	if err != nil {
+		return ErrUnavailable
+	}
+
+	return performOnlineBackup(ctx, restore)
 }
 
 func performOnlineBackup(ctx context.Context, backup backupHandle) error {

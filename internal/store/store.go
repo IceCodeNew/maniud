@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	busyTimeout        = 250 * time.Millisecond
-	maximumConnections = 8
+	busyTimeout         = 250 * time.Millisecond
+	maximumConnections  = 8
+	sqliteModeParameter = "mode"
 )
 
 var (
@@ -153,7 +154,7 @@ func validSettings(ctx context.Context, connection *sql.Conn) bool {
 }
 
 func sqliteURI(path string) string {
-	query := url.Values{"mode": []string{"rw"}}
+	query := url.Values{sqliteModeParameter: []string{"rw"}}
 	for _, pragma := range []string{
 		"foreign_keys(ON)",
 		"journal_mode(WAL)",
@@ -164,6 +165,13 @@ func sqliteURI(path string) string {
 	}
 
 	return sqliteFileURI(path, query)
+}
+
+func sqliteReadOnlyURI(path string) string {
+	return sqliteFileURI(path, url.Values{
+		"immutable":         []string{"1"},
+		sqliteModeParameter: []string{"ro"},
+	})
 }
 
 func sqliteFileURI(path string, query url.Values) string {

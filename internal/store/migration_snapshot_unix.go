@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 
 	modernsqlite "modernc.org/sqlite"
@@ -170,10 +169,7 @@ func finishMigrationSnapshot(
 }
 
 func validMigrationSnapshot(ctx context.Context, path string, sourceSchema int) bool {
-	connector, _ := modernsqlite.NewConnector(sqliteFileURI(path, url.Values{
-		"immutable": []string{"1"},
-		"mode":      []string{"ro"},
-	}))
+	connector, _ := modernsqlite.NewConnector(sqliteReadOnlyURI(path))
 	database := sql.OpenDB(connector)
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
