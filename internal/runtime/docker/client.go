@@ -16,6 +16,7 @@ const (
 	jsonContentType   = "application/json"
 	apiVersionHeader  = "Api-Version"
 	httpScheme        = "http"
+	dummyDockerHost   = "docker.invalid"
 )
 
 var (
