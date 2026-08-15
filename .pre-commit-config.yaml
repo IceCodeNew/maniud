@@ -85,6 +85,12 @@ repos:
         entry: env CGO_ENABLED=0 go test -count=1 ./...
         pass_filenames: false
         stages: [pre-push, manual]
+      - id: go-vet
+        name: go vet
+        language: system
+        entry: env CGO_ENABLED=0 go vet ./...
+        pass_filenames: false
+        stages: [pre-push, manual]
       - id: go-coverage
         name: Go statement coverage
         language: system

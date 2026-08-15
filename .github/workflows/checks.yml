@@ -46,11 +46,15 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout 2m ./...
+      - name: Run go vet
+        env:
+          CGO_ENABLED: 0
+        run: go vet ./...
       - name: Run prek policy hooks
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         with:
           prek-version: 0.4.13
-          extra-args: --all-files --stage manual --skip golangci-lint
+          extra-args: --all-files --stage manual --skip golangci-lint --skip go-vet
 
   native:
     name: Native ${{ matrix.goos }}/${{ matrix.goarch }}
