@@ -15,6 +15,97 @@
 		},
 		{
 			"packageName": "main",
+			"capabilityName": "NETWORK",
+			"capability": "CAPABILITY_NETWORK",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "RUNTIME",
+			"capability": "CAPABILITY_RUNTIME",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "READ_SYSTEM_STATE",
+			"capability": "CAPABILITY_READ_SYSTEM_STATE",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "MODIFY_SYSTEM_STATE/SIGNALS",
+			"capability": "CAPABILITY_MODIFY_SYSTEM_STATE",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "SYSTEM_CALLS",
+			"capability": "CAPABILITY_SYSTEM_CALLS",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "ARBITRARY_EXECUTION",
+			"capability": "CAPABILITY_ARBITRARY_EXECUTION",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
+			"capabilityName": "EXEC",
+			"capability": "CAPABILITY_EXEC",
+			"path": [
+				{
+					"name": "github.com/IceCodeNew/maniud/cmd/maniud.main",
+					"package": "github.com/IceCodeNew/maniud/cmd/maniud"
+				}
+			],
+			"packageDir": "github.com/IceCodeNew/maniud/cmd/maniud",
+			"capabilityType": "CAPABILITY_TYPE_TRANSITIVE"
+		},
+		{
+			"packageName": "main",
 			"capabilityName": "UNANALYZED",
 			"capability": "CAPABILITY_UNANALYZED",
 			"path": [

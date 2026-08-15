@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	applyServiceValue  = "api"
 	composeFileValue   = "compose.yaml"
 	generatedFileValue = "service.yaml"
 	imageValue         = "image"
@@ -53,9 +54,9 @@ func TestParseAcceptedCommands(t *testing.T) {
 		},
 		{
 			name: "apply one service",
-			args: []string{string(commandApply), composeFileValue, "api", dryRunOption},
+			args: []string{string(commandApply), composeFileValue, applyServiceValue, dryRunOption},
 			want: invocation{
-				arguments: applyInvocation{compose: composeFileValue, service: "api", dryRun: true},
+				arguments: applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: true},
 				debug:     false,
 			},
 		},
