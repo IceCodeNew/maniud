@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "python_baseline_commit": "49b80d9afea20a8b247d2d617478beef3de9d97d",
+  "differences": [
+    {
+      "id": "restore-doctor",
+      "python_observation": "removed by the Compose-first baseline",
+      "go_observation": "accepted as a backup-index inspection and rebuild command",
+      "reason": "The user restored the historical doctor command and its read-only-by-default backup reindex contract.",
+      "approved_by": "user",
+      "approved_on": "2026-08-15"
+    },
+    {
+      "id": "add-debug-mode",
+      "python_observation": "rejected as an unknown global option",
+      "go_observation": "accepted before an operational command",
+      "reason": "The user requires an explicit switch that can include internal diagnostic context beyond the default stable failure output.",
+      "approved_by": "user",
+      "approved_on": "2026-08-15"
+    }
+  ]
+}
