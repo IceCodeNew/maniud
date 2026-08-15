@@ -163,6 +163,10 @@ func sqliteURI(path string) string {
 		query.Add("_pragma", pragma)
 	}
 
+	return sqliteFileURI(path, query)
+}
+
+func sqliteFileURI(path string, query url.Values) string {
 	uri := &url.URL{
 		Scheme:      "file",
 		Opaque:      "",

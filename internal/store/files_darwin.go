@@ -9,7 +9,11 @@ import (
 )
 
 func platformDatabasePath(anchor *stateAnchor) string {
-	return filepath.Join(anchor.directoryPath, anchor.databaseName)
+	return platformEntryPath(anchor, anchor.databaseName)
+}
+
+func platformEntryPath(anchor *stateAnchor, name string) string {
+	return filepath.Join(anchor.directoryPath, name)
 }
 
 func statIdentity(metadata unix.Stat_t) fileIdentity {

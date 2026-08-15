@@ -22,6 +22,7 @@ const (
 type stateAnchor struct {
 	directory     int
 	lock          int
+	locked        bool
 	directoryPath string
 	databaseName  string
 	directoryID   fileIdentity
@@ -58,6 +59,7 @@ func openStateAnchor(ctx context.Context, path string) (*stateAnchor, error) {
 	anchor := &stateAnchor{
 		directory:     directory,
 		lock:          -1,
+		locked:        false,
 		directoryPath: directoryPath,
 		databaseName:  filepath.Base(path),
 		directoryID:   fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
@@ -161,7 +163,12 @@ func (anchor *stateAnchor) openLock(ctx context.Context) error {
 
 	anchor.lockID = identity
 
-	return waitForLock(ctx, descriptor)
+	err = waitForLock(ctx, descriptor)
+	if err == nil {
+		anchor.locked = true
+	}
+
+	return err
 }
 
 func waitForLock(ctx context.Context, descriptor int) error {
@@ -308,6 +315,8 @@ func (anchor *stateAnchor) databasePath() string {
 }
 
 func (anchor *stateAnchor) unlock() error {
+	anchor.locked = false
+
 	if unix.Flock(anchor.lock, unix.LOCK_UN) != nil {
 		return ErrUnavailable
 	}
@@ -316,6 +325,8 @@ func (anchor *stateAnchor) unlock() error {
 }
 
 func (anchor *stateAnchor) close() error {
+	anchor.locked = false
+
 	lockErr := error(nil)
 	if anchor.lock >= 0 {
 		lockErr = unix.Close(anchor.lock)
