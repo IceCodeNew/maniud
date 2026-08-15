@@ -12,13 +12,14 @@ import (
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry"
 
+	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
 func TestResolveSingleManifestSources(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, platform)
 	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
 
@@ -63,7 +64,7 @@ func assertSingleManifestSource(
 	t *testing.T,
 	sourceValue string,
 	wantFetchedReference string,
-	platform Platform,
+	platform domain.Platform,
 	configRaw []byte,
 	configDescriptor descriptor,
 	manifestRaw []byte,
@@ -90,7 +91,7 @@ func assertSingleManifestSource(
 
 	wantReference := sourceForTest(t, sourceValue)
 
-	pinned, err := wantReference.Pin(result.Reference.Digest())
+	pinned, err := wantReference.Pin(result.ReferenceDigest)
 	if err != nil {
 		t.Fatalf("Pin() error = %v", err)
 	}
@@ -101,15 +102,16 @@ func assertSingleManifestSource(
 
 func assertResolvedImage(
 	t *testing.T,
-	result ResolvedImage,
+	result domain.ImageIdentity,
 	wantReference imageref.Reference,
-	wantPlatform Platform,
+	wantPlatform domain.Platform,
 	wantManifest ocispec.Descriptor,
 	wantConfig descriptor,
 ) {
 	t.Helper()
 
-	if result.Reference != wantReference || result.Platform != wantPlatform ||
+	if result.Reference != wantReference.String() || result.ReferenceDigest != wantReference.Digest() ||
+		result.Platform != wantPlatform ||
 		result.PlatformManifest.String() != wantManifest.Digest.String() ||
 		result.ImageConfig.String() != wantConfig.Digest.String() {
 		t.Fatalf("Resolve() = %#v", result)
@@ -136,7 +138,7 @@ func assertSingleManifestFetches(
 func TestResolveSelectsExactPlatformWithoutFetchingLayers(t *testing.T) {
 	t.Parallel()
 
-	target := Platform{OS: testOSLinux, Architecture: testArchitectureARM64, Variant: "v8"}
+	target := domain.Platform{OS: testOSLinux, Architecture: testArchitectureARM64, Variant: "v8"}
 	configRaw, configDescriptor := configForTest(t, target)
 	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
 	selected := internalDescriptorForTest(manifestRaw, ocispec.MediaTypeImageManifest)
@@ -167,7 +169,7 @@ func TestResolveSelectsExactPlatformWithoutFetchingLayers(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	if result.Reference.String() != "example.com/team/api:2@"+indexDescriptor.Digest.String() ||
+	if result.Reference != "example.com/team/api:2@"+indexDescriptor.Digest.String() ||
 		result.PlatformManifest.String() != manifestDescriptor.Digest.String() ||
 		result.ImageConfig.String() != configDescriptor.Digest.String() {
 		t.Fatalf("Resolve() = %#v", result)
@@ -182,7 +184,7 @@ func TestResolveSelectsExactPlatformWithoutFetchingLayers(t *testing.T) {
 func TestResolveRejectsUnavailableOrAmbiguousPlatform(t *testing.T) {
 	t.Parallel()
 
-	target := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	target := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, target)
 	manifestRaw, _ := manifestForTest(t, configDescriptor)
 	selected := internalDescriptorForTest(manifestRaw, ocispec.MediaTypeImageManifest)
@@ -238,10 +240,10 @@ func TestResolveRejectsUnavailableOrAmbiguousPlatform(t *testing.T) {
 func TestResolveChecksSelectedConfigPlatform(t *testing.T) {
 	t.Parallel()
 
-	target := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	target := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	wrongConfigRaw, wrongConfig := configForTest(
 		t,
-		Platform{OS: testOSLinux, Architecture: testArchitectureARM64},
+		domain.Platform{OS: testOSLinux, Architecture: testArchitectureARM64},
 	)
 	manifestRaw, manifestDescriptor := manifestForTest(t, wrongConfig)
 
@@ -293,14 +295,14 @@ func TestResolveChecksSelectedConfigPlatform(t *testing.T) {
 func TestResolveInputAndDependencyFailures(t *testing.T) {
 	t.Parallel()
 
-	validPlatform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	validPlatform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	validSource := sourceForTest(t, testImageName)
 
 	tests := []struct {
 		name     string
 		resolver *Resolver
 		source   imageref.Source
-		platform Platform
+		platform domain.Platform
 		want     error
 	}{
 		{name: "nil resolver", resolver: nil, source: validSource, platform: validPlatform, want: ErrUnavailable},
@@ -310,7 +312,7 @@ func TestResolveInputAndDependencyFailures(t *testing.T) {
 			name:     "invalid platform",
 			resolver: resolverForTest(&fakeRepository{}),
 			source:   validSource,
-			platform: Platform{OS: "Linux", Architecture: "amd64"},
+			platform: domain.Platform{OS: "Linux", Architecture: "amd64"},
 			want:     ErrInvalidSource,
 		},
 		{
@@ -340,13 +342,13 @@ func TestResolveInputAndDependencyFailures(t *testing.T) {
 func TestResolveCredentialProvider(t *testing.T) {
 	t.Parallel()
 
-	validPlatform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	validPlatform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	validSource := sourceForTest(t, "example.com/team/api")
 	wantCredential := Credentials{
 		Username:     testUsername,
-		Password:     "secret",
-		RefreshToken: "refresh",
-		AccessToken:  "access",
+		Password:     testRegistrySecret,
+		RefreshToken: testRefreshToken,
+		AccessToken:  testAccessToken,
 	}
 
 	var gotRegistry string
@@ -381,7 +383,7 @@ func TestResolveCredentialProvider(t *testing.T) {
 func TestResolveCredentialProviderFailure(t *testing.T) {
 	t.Parallel()
 
-	validPlatform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	validPlatform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	validSource := sourceForTest(t, "example.com/team/api")
 	failed := newResolver(
 		func(context.Context, registry.Reference, credential) (remoteRepository, error) {
@@ -406,7 +408,7 @@ func TestResolveCredentialProviderCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	validPlatform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	validPlatform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	validSource := sourceForTest(t, "example.com/team/api")
 	cancelled := newResolver(
 		func(context.Context, registry.Reference, credential) (remoteRepository, error) {
@@ -425,7 +427,7 @@ func TestResolveCredentialProviderCancellation(t *testing.T) {
 	}
 }
 
-func withPlatform(value descriptor, platform Platform) descriptor {
+func withPlatform(value descriptor, platform domain.Platform) descriptor {
 	value.Platform = &imagePlatform{
 		OS:           platform.OS,
 		Architecture: platform.Architecture,

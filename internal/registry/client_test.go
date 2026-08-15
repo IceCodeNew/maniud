@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -19,6 +20,8 @@ import (
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/retry"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestNewRepositoryUsesExplicitCredentialsAndTLS(t *testing.T) {
@@ -31,9 +34,9 @@ func TestNewRepositoryUsesExplicitCredentialsAndTLS(t *testing.T) {
 
 	wantCredential := credential{
 		username:     testUsername,
-		password:     "password",
-		refreshToken: "refresh",
-		accessToken:  "access",
+		password:     testPassword,
+		refreshToken: testRefreshToken,
+		accessToken:  testAccessToken,
 	}
 
 	value, err := newRepository(reference, wantCredential)
@@ -48,7 +51,7 @@ func TestNewRepositoryUsesExplicitCredentialsAndTLS(t *testing.T) {
 func assertRepositoryConfiguration(t *testing.T, repository *remote.Repository) {
 	t.Helper()
 
-	if repository.PlainHTTP || repository.Reference.Registry != "docker.io" ||
+	if repository.PlainHTTP || repository.Reference.Registry != dockerRegistryName ||
 		repository.Reference.Repository != "library/api" || repository.MaxMetadataBytes != maximumManifestBytes ||
 		!slices.Equal(repository.ManifestMediaTypes, acceptedManifestMediaTypes()) {
 		t.Fatalf("newRepository() = %#v", repository)
@@ -156,13 +159,13 @@ func TestSafeRedirect(t *testing.T) {
 func TestResolverRegistryBasicAuthentication(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, platform)
 	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
 	server, requests := newAuthenticatedRegistryServer(
 		t,
 		testUsername,
-		"password",
+		testPassword,
 		manifestRaw,
 		manifestDescriptor,
 		configRaw,
@@ -172,7 +175,7 @@ func TestResolverRegistryBasicAuthentication(t *testing.T) {
 	host := strings.TrimPrefix(server.URL, "https://")
 	options := Options{
 		Credentials: func(context.Context, string) (Credentials, error) {
-			return Credentials{Username: testUsername, Password: "password"}, nil
+			return Credentials{Username: testUsername, Password: testPassword}, nil
 		},
 	}
 	resolver := newResolver(testRepositoryFactory(t, server.Client()), options.Credentials)
@@ -186,7 +189,7 @@ func TestResolverRegistryBasicAuthentication(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	if result.Reference.Digest().String() != manifestDescriptor.Digest.String() ||
+	if result.ReferenceDigest.String() != manifestDescriptor.Digest.String() ||
 		result.ImageConfig.String() != configDescriptor.Digest.String() {
 		t.Fatalf("Resolve() = %#v", result)
 	}
@@ -201,13 +204,13 @@ func TestResolverRegistryBasicAuthentication(t *testing.T) {
 func TestResolverRegistryAuthenticationFailure(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, platform)
 	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
 	server, _ := newAuthenticatedRegistryServer(
 		t,
 		testUsername,
-		"password",
+		testPassword,
 		manifestRaw,
 		manifestDescriptor,
 		configRaw,
@@ -225,6 +228,95 @@ func TestResolverRegistryAuthenticationFailure(t *testing.T) {
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
+}
+
+func TestResolverRegistryBearerAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const accessToken = "test-access-token"
+
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	configRaw, configDescriptor := configForTest(t, platform)
+	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
+	server, tokenRequests := newBearerRegistryServer(
+		t,
+		accessToken,
+		manifestRaw,
+		manifestDescriptor,
+		configRaw,
+		toOCIDescriptor(configDescriptor),
+	)
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	resolver := newResolver(
+		testRepositoryFactory(t, server.Client()),
+		func(context.Context, string) (Credentials, error) {
+			return Credentials{Username: testUsername, Password: testPassword}, nil
+		},
+	)
+
+	result, err := resolver.Resolve(context.Background(), sourceForTest(t, host+"/team/api"), platform)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if result.ReferenceDigest.String() != manifestDescriptor.Digest.String() || tokenRequests.Load() != 1 {
+		t.Fatalf("Resolve() = %#v, token requests = %d", result, tokenRequests.Load())
+	}
+}
+
+func newBearerRegistryServer(
+	t *testing.T,
+	accessToken string,
+	manifestRaw []byte,
+	manifestDescriptor ocispec.Descriptor,
+	configRaw []byte,
+	configDescriptor ocispec.Descriptor,
+) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	tokenRequests := new(atomic.Int64)
+
+	var server *httptest.Server
+
+	server = httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/token" {
+			username, password, basic := request.BasicAuth()
+			if !basic || username != testUsername || password != testPassword {
+				response.WriteHeader(http.StatusUnauthorized)
+
+				return
+			}
+
+			tokenRequests.Add(1)
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"access_token":"` + accessToken + `"}`))
+
+			return
+		}
+
+		if request.Header.Get("Authorization") != "Bearer "+accessToken {
+			response.Header().Set(
+				"WWW-Authenticate",
+				`Bearer realm="`+server.URL+`/token",service="registry.test",scope="repository:team/api:pull"`,
+			)
+			response.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		switch request.URL.Path {
+		case "/v2/team/api/manifests/latest":
+			writeRegistryContent(response, manifestRaw, manifestDescriptor)
+		case "/v2/team/api/blobs/" + configDescriptor.Digest.String():
+			writeRegistryContent(response, configRaw, configDescriptor)
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	return server, tokenRequests
 }
 
 func testRepositoryFactory(t *testing.T, httpClient *http.Client) repositoryFactory {

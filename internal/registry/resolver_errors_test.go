@@ -9,6 +9,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/errdef"
 	orasregistry "oras.land/oras-go/v2/registry"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestNewResolver(t *testing.T) {
@@ -37,7 +39,7 @@ func TestNewResolver(t *testing.T) {
 func TestResolveRejectsInvalidTopLevelContent(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, platform)
 	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
 
@@ -96,7 +98,7 @@ func TestResolveRejectsInvalidTopLevelContent(t *testing.T) {
 func TestResolveRejectsInvalidSelectedManifest(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	configRaw, configDescriptor := configForTest(t, platform)
 	validManifestRaw, _ := manifestForTest(t, configDescriptor)
 
@@ -157,7 +159,7 @@ func TestResolveRejectsInvalidSelectedManifest(t *testing.T) {
 func TestResolveRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
-	platform := Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
 	validConfigRaw, validConfig := configForTest(t, platform)
 
 	tests := []struct {

@@ -18,21 +18,6 @@ type remoteRepository interface {
 	FetchReference(ctx context.Context, reference string) (ocispec.Descriptor, io.ReadCloser, error)
 }
 
-// Platform identifies the requested image operating system and architecture.
-type Platform struct {
-	OS           string
-	Architecture string
-	Variant      string
-}
-
-// ResolvedImage contains the top-level reference and selected image identities.
-type ResolvedImage struct {
-	Reference        imageref.Reference
-	Platform         Platform
-	PlatformManifest domain.Digest
-	ImageConfig      domain.Digest
-}
-
 // Credentials contains credentials for one registry.
 type Credentials struct {
 	Username     string
@@ -85,9 +70,9 @@ func newResolver(factory repositoryFactory, credentials CredentialProvider) *Res
 func (resolver *Resolver) Resolve(
 	ctx context.Context,
 	source imageref.Source,
-	platform Platform,
-) (ResolvedImage, error) {
-	var empty ResolvedImage
+	platform domain.Platform,
+) (domain.ImageIdentity, error) {
+	var empty domain.ImageIdentity
 
 	if resolver == nil || resolver.repositories == nil {
 		return empty, ErrUnavailable
@@ -121,7 +106,7 @@ func (resolver *Resolver) Resolve(
 	return resolver.resolveImageConfig(ctx, repository, top, selected, target, reference)
 }
 
-func resolveInput(source imageref.Source, platform Platform) (registry.Reference, imagePlatform, error) {
+func resolveInput(source imageref.Source, platform domain.Platform) (registry.Reference, imagePlatform, error) {
 	parsed, err := registry.ParseReference(source.String())
 	if err != nil {
 		return registry.Reference{}, imagePlatform{}, ErrInvalidSource
@@ -142,23 +127,24 @@ func (resolver *Resolver) resolveImageConfig(
 	selected manifestDocument,
 	target imagePlatform,
 	reference imageref.Reference,
-) (ResolvedImage, error) {
+) (domain.ImageIdentity, error) {
 	configPlatform, configDigest, err := resolver.readConfig(ctx, repository, *selected.config)
 	if err != nil {
-		return ResolvedImage{}, err
+		return domain.ImageIdentity{}, err
 	}
 
 	if !exactPlatform(&configPlatform, target) {
 		if top.config != nil {
-			return ResolvedImage{}, ErrPlatformUnavailable
+			return domain.ImageIdentity{}, ErrPlatformUnavailable
 		}
 
-		return ResolvedImage{}, ErrProtocol
+		return domain.ImageIdentity{}, ErrProtocol
 	}
 
-	return ResolvedImage{
-		Reference: reference,
-		Platform: Platform{
+	return domain.ImageIdentity{
+		Reference:       reference.String(),
+		ReferenceDigest: reference.Digest(),
+		Platform: domain.Platform{
 			OS:           target.OS,
 			Architecture: target.Architecture,
 			Variant:      target.Variant,
@@ -298,7 +284,7 @@ func (resolver *Resolver) credential(ctx context.Context, registry string) (cred
 	}, nil
 }
 
-func normalizePlatform(value Platform) (imagePlatform, error) {
+func normalizePlatform(value domain.Platform) (imagePlatform, error) {
 	if value.OS == "" || value.Architecture == "" ||
 		strings.ContainsAny(value.OS+value.Architecture+value.Variant, ", ") ||
 		strings.ToLower(value.OS) != value.OS || strings.ToLower(value.Architecture) != value.Architecture ||

@@ -101,7 +101,7 @@ func internalDescriptorForTest(raw []byte, mediaType string) descriptor {
 	}
 }
 
-func configForTest(t *testing.T, platform Platform) ([]byte, descriptor) {
+func configForTest(t *testing.T, platform domain.Platform) ([]byte, descriptor) {
 	t.Helper()
 
 	raw, err := json.Marshal(imageConfig{

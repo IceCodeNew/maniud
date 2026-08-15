@@ -4,8 +4,7 @@ package domain
 type DesiredWorkload struct {
 	ServiceName     string
 	ContainerName   string
-	Image           string
-	ReferenceDigest Digest
+	Image           ImageIdentity
 	Entrypoint      []string
 	Command         []string
 	SourceDigest    Digest
