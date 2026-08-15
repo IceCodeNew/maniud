@@ -4,11 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	modernsqlite "modernc.org/sqlite"
 )
 
-const backupStepPages = 128
+const (
+	backupStepPages    = 128
+	backupRetryLimit   = 25
+	backupRetryDelay   = 10 * time.Millisecond
+	sqliteResultMask   = 0xff
+	sqliteResultBusy   = 5
+	sqliteResultLocked = 6
+)
 
 type onlineBackuper interface {
 	NewBackup(destination string) (*modernsqlite.Backup, error)
@@ -18,6 +26,8 @@ type backupHandle interface {
 	Step(pages int32) (bool, error)
 	Finish() error
 }
+
+type backupWaiter func(context.Context) bool
 
 func backupSQLite(ctx context.Context, database *sql.DB, destination string) error {
 	connection, err := database.Conn(ctx)
@@ -48,12 +58,18 @@ func runOnlineBackup(ctx context.Context, raw any, destination string) error {
 }
 
 func performOnlineBackup(ctx context.Context, backup backupHandle) error {
+	return performOnlineBackupWithWait(ctx, backup, waitForBackupRetry)
+}
+
+func performOnlineBackupWithWait(ctx context.Context, backup backupHandle, wait backupWaiter) error {
 	finished := false
 	defer func() {
 		if !finished {
 			_ = backup.Finish()
 		}
 	}()
+
+	retries := 0
 
 	for {
 		if ctx.Err() != nil {
@@ -62,6 +78,16 @@ func performOnlineBackup(ctx context.Context, backup backupHandle) error {
 
 		more, stepErr := backup.Step(backupStepPages)
 		if stepErr != nil {
+			if retryableBackupError(stepErr) && retries < backupRetryLimit {
+				retries++
+
+				if wait(ctx) {
+					continue
+				}
+
+				return classifyContext(ctx)
+			}
+
 			return ErrUnavailable
 		}
 
@@ -78,6 +104,29 @@ func performOnlineBackup(ctx context.Context, backup backupHandle) error {
 	}
 
 	return nil
+}
+
+func retryableBackupError(err error) bool {
+	var result interface{ Code() int }
+	if !errors.As(err, &result) {
+		return false
+	}
+
+	code := result.Code() & sqliteResultMask
+
+	return code == sqliteResultBusy || code == sqliteResultLocked
+}
+
+func waitForBackupRetry(ctx context.Context) bool {
+	timer := time.NewTimer(backupRetryDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func classifyBackupResult(ctx context.Context, operationErr, closeErr error) error {

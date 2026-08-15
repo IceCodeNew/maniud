@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -276,6 +277,86 @@ func TestPerformOnlineBackupContainsStepAndFinishFailures(t *testing.T) {
 	}
 }
 
+func TestPerformOnlineBackupRetriesContention(t *testing.T) {
+	t.Parallel()
+
+	backup := &fakeBackup{
+		steps: []fakeBackupStep{
+			{more: false, err: sqliteCodeError(sqliteResultBusy)},
+			{more: false, err: sqliteCodeError(sqliteResultLocked | 1<<8)},
+			{more: false, err: nil},
+		},
+		finishErr: nil,
+		finished:  0,
+	}
+	waits := 0
+
+	err := performOnlineBackupWithWait(context.Background(), backup, func(context.Context) bool {
+		waits++
+
+		return true
+	})
+	if err != nil || waits != 2 || backup.finished != 1 {
+		t.Fatalf("performOnlineBackupWithWait() = %v, waits %d, finishes %d", err, waits, backup.finished)
+	}
+}
+
+func TestPerformOnlineBackupBoundsContentionAndCancellation(t *testing.T) {
+	t.Parallel()
+
+	steps := make([]fakeBackupStep, backupRetryLimit+1)
+	for index := range steps {
+		steps[index] = fakeBackupStep{more: false, err: sqliteCodeError(sqliteResultBusy)}
+	}
+
+	backup := &fakeBackup{steps: steps, finishErr: nil, finished: 0}
+	waits := 0
+
+	err := performOnlineBackupWithWait(context.Background(), backup, func(context.Context) bool {
+		waits++
+
+		return true
+	})
+	if !errors.Is(err, ErrUnavailable) || waits != backupRetryLimit || backup.finished != 1 {
+		t.Fatalf("bounded backup = %v, waits %d, finishes %d", err, waits, backup.finished)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelled := &fakeBackup{
+		steps:     []fakeBackupStep{{more: false, err: sqliteCodeError(sqliteResultLocked)}},
+		finishErr: nil,
+		finished:  0,
+	}
+
+	err = performOnlineBackupWithWait(ctx, cancelled, func(context.Context) bool {
+		cancel()
+
+		return false
+	})
+	if !errors.Is(err, context.Canceled) || cancelled.finished != 1 {
+		t.Fatalf("cancelled backup = %v, finishes %d", err, cancelled.finished)
+	}
+}
+
+func TestRetryableBackupErrorAndWait(t *testing.T) {
+	t.Parallel()
+
+	if retryableBackupError(sqliteCodeError(1)) || !retryableBackupError(sqliteCodeError(sqliteResultBusy)) {
+		t.Fatal("retryableBackupError() misclassified a SQLite result")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if waitForBackupRetry(ctx) {
+		t.Fatal("waitForBackupRetry(cancelled) succeeded")
+	}
+
+	if !waitForBackupRetry(context.Background()) {
+		t.Fatal("waitForBackupRetry(background) failed")
+	}
+}
+
 func TestClassifyBackupResult(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +401,16 @@ type fakeBackup struct {
 	steps     []fakeBackupStep
 	finishErr error
 	finished  int
+}
+
+type sqliteCodeError int
+
+func (err sqliteCodeError) Error() string {
+	return "sqlite result " + strconv.Itoa(int(err))
+}
+
+func (err sqliteCodeError) Code() int {
+	return int(err)
 }
 
 func writeBackupFixture(ctx context.Context, database *sql.DB, first int, payload string, done chan<- error) {
