@@ -42,9 +42,19 @@ linters:
           list-mode: strict
           files:
             - $all
+            - "!**/internal/compose/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+        compose-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/compose/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/compose-spec/compose-go/v2
+            - go.yaml.in/yaml/v4
     nolintlint:
       require-explanation: true
       require-specific: true
