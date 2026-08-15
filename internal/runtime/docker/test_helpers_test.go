@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+const (
+	testArchitecture = "amd64"
+	testOS           = "linux"
+	testProduct      = "29.7.2"
+)
+
+type nestedJSONValue struct {
+	Value int `json:"value"`
+}
+
+type nestedJSONDocument struct {
+	Nested []nestedJSONValue `json:"nested"`
+}
+
 type errorReader struct{}
 
 func (errorReader) Read([]byte) (int, error) {
@@ -56,7 +70,7 @@ func validEngineFixture(maximum string) engineFixture {
 		pingBody:      "OK",
 		versionStatus: 0,
 		contentType:   jsonContentType,
-		version:       versionDocument(maximum, "1.40", "29.7.2", "linux", "amd64"),
+		version:       versionDocument(maximum, "1.40", testProduct, testOS, testArchitecture),
 		onRequest:     nil,
 	}
 }
@@ -123,4 +137,19 @@ func testVPNEndpoint(t *testing.T, serverURL string, warningSink WarningSink) En
 	}
 
 	return endpoint
+}
+
+func mustParseURL(t *testing.T, value string) *url.URL {
+	t.Helper()
+
+	parsed, err := url.Parse(value)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", value, err)
+	}
+
+	return parsed
+}
+
+func quoteJSON(value string) string {
+	return strconv.Quote(value)
 }

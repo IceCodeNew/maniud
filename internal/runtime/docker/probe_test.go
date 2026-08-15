@@ -223,8 +223,10 @@ func TestProtocolHelpersContainMalformedInput(t *testing.T) {
 		t.Fatal("decodeStrictJSON(error reader) = true")
 	}
 
-	if decodeStrictJSON(strings.NewReader("{"), &struct{}{}) {
-		t.Fatal("decodeStrictJSON(malformed) = true")
+	for _, value := range []string{"{", `{"value":1,`} {
+		if decodeStrictJSON(strings.NewReader(value), &struct{}{}) {
+			t.Fatalf("decodeStrictJSON(%q) = true", value)
+		}
 	}
 
 	if isJSON("not a content type") || isJSON("text/plain") || !isJSON("application/json; charset=utf-8") {
@@ -241,5 +243,19 @@ func TestProtocolHelpersContainMalformedInput(t *testing.T) {
 
 	if !errors.Is(err, ErrProtocol) {
 		t.Fatalf("request(malformed URL) error = %v, want ErrProtocol", err)
+	}
+}
+
+func TestStrictJSONRejectsNestedDuplicateKeys(t *testing.T) {
+	t.Parallel()
+
+	target := nestedJSONDocument{Nested: nil}
+	if decodeStrictJSON(strings.NewReader(`{"nested":[{"value":1,"value":1}]}`), &target) {
+		t.Fatal("decodeStrictJSON(duplicate nested key) = true")
+	}
+
+	if !decodeStrictJSON(strings.NewReader(`{"nested":[{"value":1}]}`), &target) ||
+		len(target.Nested) != 1 || target.Nested[0].Value != 1 {
+		t.Fatalf("decodeStrictJSON(valid nested value) = %#v", target)
 	}
 }
