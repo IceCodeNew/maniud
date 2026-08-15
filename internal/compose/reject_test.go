@@ -78,6 +78,14 @@ services:
 		{name: "services sequence", content: "services: [api]\n"},
 		{name: "scalar service", content: "services:\n  api: busybox\n"},
 		{
+			name: "missing image",
+			content: `
+services:
+  api:
+    container_name: example-api
+`,
+		},
+		{
 			name: "scalar config source",
 			content: `
 services:
