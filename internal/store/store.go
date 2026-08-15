@@ -196,6 +196,25 @@ func sqliteReadOnlyURI(path string) string {
 	})
 }
 
+func sqliteJournalReadOnlyURI(path string, immutable bool) string {
+	query := url.Values{
+		sqliteModeParameter: []string{"ro"},
+	}
+	if immutable {
+		query.Set("immutable", "1")
+	}
+
+	for _, pragma := range []string{
+		"foreign_keys(ON)",
+		"query_only(ON)",
+		"busy_timeout(" + strconv.FormatInt(busyTimeout.Milliseconds(), 10) + ")",
+	} {
+		query.Add("_pragma", pragma)
+	}
+
+	return sqliteFileURI(path, query)
+}
+
 func sqliteFileURI(path string, query url.Values) string {
 	uri := &url.URL{
 		Scheme:      "file",

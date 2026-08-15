@@ -16,7 +16,11 @@ func (store *Store) Transaction(ctx context.Context, identifier TransactionID) (
 		return Transaction{}, ErrInvalidState
 	}
 
-	row := store.database.QueryRowContext(
+	return transaction(ctx, store.database, identifier)
+}
+
+func transaction(ctx context.Context, database journalQueryer, identifier TransactionID) (Transaction, error) {
+	row := database.QueryRowContext(
 		ctx,
 		"SELECT transaction_id, state, runtime, source_digest, effective_digest, execution_digest "+
 			"FROM journal_transactions WHERE transaction_id = ?",
@@ -42,12 +46,21 @@ func (store *Store) UnresolvedTransaction(
 		return Transaction{}, false, ErrInvalidState
 	}
 
+	return unresolvedTransaction(ctx, store.database, projectName, serviceName)
+}
+
+func unresolvedTransaction(
+	ctx context.Context,
+	database journalQueryer,
+	projectName string,
+	serviceName string,
+) (Transaction, bool, error) {
 	serviceID, valid := serviceIdentity(projectName, serviceName)
 	if !valid {
 		return Transaction{}, false, ErrInvalidState
 	}
 
-	row := store.database.QueryRowContext(
+	row := database.QueryRowContext(
 		ctx,
 		"SELECT transaction_id, state, runtime, source_digest, effective_digest, execution_digest "+
 			"FROM journal_transactions WHERE service_id = ? AND state IN ('active', 'degraded')",
@@ -70,8 +83,17 @@ func (store *Store) Actions(ctx context.Context, identifier TransactionID) ([]Ac
 		return nil, ErrInvalidState
 	}
 
+	return actions(ctx, store.database, identifier)
+}
+
+type journalQueryer interface {
+	QueryRowContext(ctx context.Context, query string, arguments ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, arguments ...any) (*sql.Rows, error)
+}
+
+func actions(ctx context.Context, database journalQueryer, identifier TransactionID) ([]Action, error) {
 	//nolint:rowserrcheck // readActions checks the iterator before this function closes it.
-	rows, err := store.database.QueryContext(
+	rows, err := database.QueryContext(
 		ctx,
 		"SELECT transaction_id, sequence, kind, state, intent_digest, postcondition_digest "+
 			"FROM journal_actions WHERE transaction_id = ? ORDER BY sequence",
@@ -89,7 +111,7 @@ func (store *Store) Actions(ctx context.Context, identifier TransactionID) ([]Ac
 		return actions, err
 	}
 
-	_, err = store.Transaction(ctx, identifier)
+	_, err = transaction(ctx, database, identifier)
 	if err != nil {
 		return nil, err
 	}

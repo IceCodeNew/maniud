@@ -5,6 +5,10 @@ import (
 	"database/sql"
 )
 
+type schemaQueryer interface {
+	QueryRowContext(ctx context.Context, query string, arguments ...any) *sql.Row
+}
+
 const (
 	writerLeaseSchemaVersion = 2
 	currentSchemaVersion     = 3
@@ -127,7 +131,7 @@ func (facts schemaFacts) valid(version int) bool {
 				facts.actionDefinition == journalActionTableSQL))
 }
 
-func validateSchema(ctx context.Context, database *sql.DB, version int) error {
+func validateSchema(ctx context.Context, database schemaQueryer, version int) error {
 	if version != 1 && version != writerLeaseSchemaVersion && version != currentSchemaVersion {
 		return ErrInvalidState
 	}
@@ -157,7 +161,7 @@ func validateSchema(ctx context.Context, database *sql.DB, version int) error {
 
 func readSchemaFacts(
 	ctx context.Context,
-	database *sql.DB,
+	database schemaQueryer,
 	version int,
 ) (schemaFacts, error) {
 	var facts schemaFacts
@@ -194,7 +198,7 @@ func readSchemaFacts(
 	return facts, nil
 }
 
-func validateWriterLeaseRows(ctx context.Context, database *sql.DB) error {
+func validateWriterLeaseRows(ctx context.Context, database schemaQueryer) error {
 	var invalidRows int
 
 	err := database.QueryRowContext(
@@ -215,7 +219,7 @@ func validateWriterLeaseRows(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
-func validateJournalRows(ctx context.Context, database *sql.DB) error {
+func validateJournalRows(ctx context.Context, database schemaQueryer) error {
 	var invalidRows int
 
 	err := database.QueryRowContext(

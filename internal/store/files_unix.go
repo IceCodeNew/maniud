@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -40,6 +41,21 @@ type fileIdentity struct {
 	links  uint64
 }
 
+func newStateAnchor(directory int, directoryPath, databaseName string) *stateAnchor {
+	return &stateAnchor{
+		directory:     directory,
+		lock:          -1,
+		locked:        false,
+		directoryPath: directoryPath,
+		databaseName:  databaseName,
+		directoryID:   fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
+		lockID:        fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
+		databaseID:    fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
+		walID:         fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
+		sharedID:      fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
+	}
+}
+
 func normalizedLinkCount[T ~uint16 | ~uint32 | ~uint64](value T) uint64 {
 	return uint64(value)
 }
@@ -56,18 +72,7 @@ func openStateAnchor(ctx context.Context, path string) (*stateAnchor, error) {
 		return nil, ErrInvalidState
 	}
 
-	anchor := &stateAnchor{
-		directory:     directory,
-		lock:          -1,
-		locked:        false,
-		directoryPath: directoryPath,
-		databaseName:  filepath.Base(path),
-		directoryID:   fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
-		lockID:        fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
-		databaseID:    fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
-		walID:         fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
-		sharedID:      fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0},
-	}
+	anchor := newStateAnchor(directory, directoryPath, filepath.Base(path))
 
 	if !anchor.captureDirectory() {
 		_ = anchor.close()
@@ -113,7 +118,7 @@ func openDirectory(path string) (int, error) {
 		_ = unix.Close(descriptor)
 
 		if openErr != nil {
-			return -1, ErrInvalidState
+			return -1, fmt.Errorf("open state directory: %w", openErr)
 		}
 
 		descriptor = next
@@ -171,7 +176,42 @@ func (anchor *stateAnchor) openLock(ctx context.Context) error {
 	return err
 }
 
+func (anchor *stateAnchor) openExistingLock(ctx context.Context) error {
+	descriptor, err := unix.Openat(
+		anchor.directory,
+		anchor.databaseName+".lock",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("open state lock: %w", err)
+	}
+
+	anchor.lock = descriptor
+
+	identity, valid := descriptorIdentity(descriptor)
+	if !valid || !privateRegular(identity) {
+		return ErrInvalidState
+	}
+
+	anchor.lockID = identity
+
+	return waitForSharedLock(ctx, descriptor)
+}
+
 func waitForLock(ctx context.Context, descriptor int) error {
+	return waitForFileLock(ctx, descriptor, tryLock)
+}
+
+func waitForSharedLock(ctx context.Context, descriptor int) error {
+	return waitForFileLock(ctx, descriptor, trySharedLock)
+}
+
+func waitForFileLock(
+	ctx context.Context,
+	descriptor int,
+	try func(int) (bool, error),
+) error {
 	deadline := time.Now().Add(lockTimeout)
 
 	for {
@@ -179,7 +219,7 @@ func waitForLock(ctx context.Context, descriptor int) error {
 			return errors.Join(ErrUnavailable, ctx.Err())
 		}
 
-		acquired, err := tryLock(descriptor)
+		acquired, err := try(descriptor)
 		if err != nil {
 			return err
 		}
@@ -204,7 +244,15 @@ func waitForLock(ctx context.Context, descriptor int) error {
 }
 
 func tryLock(descriptor int) (bool, error) {
-	err := unix.Flock(descriptor, unix.LOCK_EX|unix.LOCK_NB)
+	return tryFileLock(descriptor, unix.LOCK_EX|unix.LOCK_NB)
+}
+
+func trySharedLock(descriptor int) (bool, error) {
+	return tryFileLock(descriptor, unix.LOCK_SH|unix.LOCK_NB)
+}
+
+func tryFileLock(descriptor, operation int) (bool, error) {
+	err := unix.Flock(descriptor, operation)
 	if err == nil {
 		return true, nil
 	}
@@ -251,6 +299,28 @@ func (anchor *stateAnchor) openRegular(name string) (fileIdentity, bool) {
 	}
 
 	return identity, true
+}
+
+func (anchor *stateAnchor) openExistingRegular(name string) (fileIdentity, bool, error) {
+	descriptor, err := unix.Openat(
+		anchor.directory,
+		name,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
+	if err != nil {
+		return fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0}, false,
+			fmt.Errorf("open state entry: %w", err)
+	}
+
+	identity, valid := descriptorIdentity(descriptor)
+	closeErr := unix.Close(descriptor)
+
+	if !valid || closeErr != nil || !privateRegular(identity) {
+		return fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0}, true, ErrInvalidState
+	}
+
+	return identity, true, nil
 }
 
 func privateRegular(identity fileIdentity) bool {
