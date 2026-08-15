@@ -134,7 +134,7 @@ func TestExecuteSchemaMigrationContainsBackupPreparationFailures(t *testing.T) {
 			}
 
 			version, versionErr := storedSchemaVersion(context.Background(), database)
-			if versionErr != nil || version != 1 {
+			if versionErr != nil || version != testSchemaMigration().source {
 				t.Fatalf("schema version after preparation failure = %d, %v", version, versionErr)
 			}
 

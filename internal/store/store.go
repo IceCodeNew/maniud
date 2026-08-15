@@ -52,7 +52,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func finishOpen(ctx context.Context, database *sql.DB, anchor *stateAnchor) (*Store, error) {
-	return finishOpenWithMigrations(ctx, database, anchor, nil)
+	return finishOpenWithMigrations(ctx, database, anchor, currentSchemaMigrations())
 }
 
 func finishOpenWithMigrations(
@@ -78,7 +78,7 @@ func finishOpenWithMigrations(
 	}
 
 	if err == nil && !found {
-		err = ensureSchema(ctx, database)
+		err = reconcileSchema(ctx, database, anchor, migrations)
 	}
 
 	if err != nil {
@@ -171,7 +171,10 @@ func validSettings(ctx context.Context, connection *sql.Conn) bool {
 }
 
 func sqliteURI(path string) string {
-	query := url.Values{sqliteModeParameter: []string{"rw"}}
+	query := url.Values{
+		sqliteModeParameter: []string{"rw"},
+		"_txlock":           []string{"immediate"},
+	}
 	for _, pragma := range []string{
 		"foreign_keys(ON)",
 		"journal_mode(WAL)",

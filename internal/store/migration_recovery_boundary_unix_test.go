@@ -110,7 +110,13 @@ func TestRecoverDiscoveredSchemaMigrationRejectsWrongArtifactSchema(t *testing.T
 	anchor, database := testMigrationDatabase(t)
 	snapshot := newMigrationSnapshot(t, database, anchor)
 
-	plan, valid := planMigrationBackup(anchor.databaseName, 2, 3, snapshot.size, snapshot.digest)
+	plan, valid := planMigrationBackup(
+		anchor.databaseName,
+		currentSchemaVersion+1,
+		currentSchemaVersion+2,
+		snapshot.size,
+		snapshot.digest,
+	)
 	if !valid {
 		t.Fatal("planMigrationBackup() rejected recovery fixture")
 	}
@@ -133,8 +139,8 @@ func TestRecoverDiscoveredSchemaMigrationRejectsWrongArtifactSchema(t *testing.T
 	}
 
 	migration := testSchemaMigration()
-	migration.source = 2
-	migration.target = 3
+	migration.source = currentSchemaVersion + 1
+	migration.target = currentSchemaVersion + 2
 
 	err = recoverDiscoveredSchemaMigration(
 		context.Background(),

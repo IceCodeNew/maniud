@@ -16,7 +16,13 @@ func TestPublishMigrationBackupCreatesDurablePair(t *testing.T) {
 	t.Parallel()
 
 	anchor, database := testMigrationDatabase(t)
-	snapshot, err := createMigrationSnapshot(context.Background(), database, anchor, 1, 2)
+	snapshot, err := createMigrationSnapshot(
+		context.Background(),
+		database,
+		anchor,
+		currentSchemaVersion,
+		currentSchemaVersion+1,
+	)
 	requireNoError(t, err)
 
 	if snapshot == nil {
@@ -178,7 +184,13 @@ func TestPublishMigrationBackupContainsCancellationAtEffectBoundary(t *testing.T
 func newMigrationSnapshot(t *testing.T, database *sql.DB, anchor *stateAnchor) *migrationSnapshot {
 	t.Helper()
 
-	snapshot, err := createMigrationSnapshot(context.Background(), database, anchor, 1, 2)
+	snapshot, err := createMigrationSnapshot(
+		context.Background(),
+		database,
+		anchor,
+		currentSchemaVersion,
+		currentSchemaVersion+1,
+	)
 	requireNoError(t, err)
 
 	if snapshot == nil {

@@ -20,7 +20,13 @@ func TestMigrationSnapshotDetectsReplacement(t *testing.T) {
 
 	anchor, database := testMigrationDatabase(t)
 
-	snapshot, err := createMigrationSnapshot(context.Background(), database, anchor, 1, 2)
+	snapshot, err := createMigrationSnapshot(
+		context.Background(),
+		database,
+		anchor,
+		currentSchemaVersion,
+		currentSchemaVersion+1,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

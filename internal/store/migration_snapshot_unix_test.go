@@ -21,11 +21,7 @@ func TestCreateMigrationSnapshotBuildsValidatedDigest(t *testing.T) {
 	anchor, database := testMigrationDatabase(t)
 
 	snapshot, err := createMigrationSnapshot(
-		context.Background(),
-		database,
-		anchor,
-		currentSchemaVersion,
-		currentSchemaVersion+1,
+		context.Background(), database, anchor, currentSchemaVersion, currentSchemaVersion+1,
 	)
 	if err != nil || snapshot == nil {
 		t.Fatalf("createMigrationSnapshot() = %#v, %v", snapshot, err)
@@ -104,7 +100,9 @@ func TestCreateMigrationSnapshotRejectsInvalidContract(t *testing.T) {
 
 	requireNoError(t, anchor.unlock())
 
-	snapshot, err := createMigrationSnapshot(context.Background(), database, anchor, 1, 2)
+	snapshot, err := createMigrationSnapshot(
+		context.Background(), database, anchor, currentSchemaVersion, currentSchemaVersion+1,
+	)
 	if snapshot != nil || !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("createMigrationSnapshot(unlocked) = %#v, %v", snapshot, err)
 	}
@@ -243,7 +241,13 @@ func TestMigrationSnapshotValidationRejectsWrongState(t *testing.T) {
 
 	anchor, database := testMigrationDatabase(t)
 
-	snapshot, err := createMigrationSnapshot(context.Background(), database, anchor, 1, 2)
+	snapshot, err := createMigrationSnapshot(
+		context.Background(),
+		database,
+		anchor,
+		currentSchemaVersion,
+		currentSchemaVersion+1,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,14 +264,18 @@ func TestMigrationSnapshotValidationRejectsWrongState(t *testing.T) {
 		requireNoError(t, os.Remove(entry))
 	})
 
-	if validMigrationSnapshot(context.Background(), platformEntryPath(anchor, snapshot.name), 2) {
+	if validMigrationSnapshot(
+		context.Background(),
+		platformEntryPath(anchor, snapshot.name),
+		currentSchemaVersion+1,
+	) {
 		t.Fatal("snapshot accepted the wrong source schema")
 	}
 
 	closed := testDatabase(t, "file::memory:")
 	requireNoError(t, closed.Close())
 
-	if validMigrationSnapshotDatabase(context.Background(), closed, 1) {
+	if validMigrationSnapshotDatabase(context.Background(), closed, currentSchemaVersion) {
 		t.Fatal("closed database passed snapshot validation")
 	}
 
@@ -305,7 +313,7 @@ func testMigrationDatabase(t *testing.T) (*stateAnchor, *sql.DB) {
 
 	anchor, database := testAnchoredDatabase(t)
 	requireNoError(t, ready(context.Background(), database))
-	requireNoError(t, ensureSchema(context.Background(), database))
+	requireNoError(t, reconcileSchema(context.Background(), database, anchor, currentSchemaMigrations()))
 
 	t.Cleanup(func() {
 		closeErr := database.Close()

@@ -125,7 +125,7 @@ func TestFinishOpenRecoversBeforeUnlockingWrites(t *testing.T) {
 
 	anchor, database := testAnchoredDatabase(t)
 	requireNoError(t, ready(context.Background(), database))
-	requireNoError(t, ensureSchema(context.Background(), database))
+	requireNoError(t, reconcileSchema(context.Background(), database, anchor, currentSchemaMigrations()))
 
 	snapshot := newMigrationSnapshot(t, database, anchor)
 	_, err := publishMigrationBackup(context.Background(), snapshot)
@@ -195,7 +195,7 @@ func validRecoverySourceWithoutCorruption(ctx context.Context, database *sql.DB)
 		return err
 	}
 
-	if version != 1 {
+	if version != currentSchemaVersion {
 		return ErrInvalidState
 	}
 

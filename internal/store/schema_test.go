@@ -25,7 +25,7 @@ func TestOpenInitializesStrictSchemaVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if objectCount != 1 || objectName != schemaTableName {
+	if objectCount != 2 || objectName != schemaTableName {
 		t.Fatalf("schema objects = %d, %q", objectCount, objectName)
 	}
 
@@ -40,6 +40,34 @@ func TestOpenInitializesStrictSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacySchema(t *testing.T) {
+	t.Parallel()
+
+	directory := privateTempDir(t)
+	path := filepath.Join(directory, "state.db")
+	requireNoError(t, os.WriteFile(path, nil, 0o600))
+
+	database := testDatabase(t, sqliteURI(path))
+	_, err := database.ExecContext(
+		context.Background(),
+		schemaTableSQL+"; INSERT INTO schema_version (singleton, version) VALUES (1, 1)",
+	)
+	requireNoError(t, err)
+	requireNoError(t, database.Close())
+
+	state, err := Open(context.Background(), path)
+	if err != nil || state == nil {
+		t.Fatalf("Open(legacy) = %#v, %v", state, err)
+	}
+
+	t.Cleanup(func() {
+		requireNoError(t, state.Close())
+	})
+
+	requireNoError(t, validateSchema(context.Background(), state.database, currentSchemaVersion))
+	assertNoMigrationBackup(t, directory)
+}
+
 func TestOpenRejectsUnknownOrMalformedSchema(t *testing.T) {
 	t.Parallel()
 
@@ -49,6 +77,12 @@ func TestOpenRejectsUnknownOrMalformedSchema(t *testing.T) {
 	}{
 		{name: "unknown table", statement: "CREATE TABLE legacy (value TEXT)"},
 		{name: "malformed version table", statement: "CREATE TABLE schema_version (version INTEGER)"},
+		{
+			name: "malformed lease table",
+			statement: schemaTableSQL + "; " +
+				"INSERT INTO schema_version (singleton, version) VALUES (1, 2); " +
+				"CREATE TABLE writer_leases (service_id BLOB PRIMARY KEY)",
+		},
 	}
 
 	for _, test := range tests {
@@ -70,6 +104,36 @@ func TestOpenRejectsUnknownOrMalformedSchema(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsInvalidWriterLeaseRows(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(privateTempDir(t), "state.db")
+
+	state, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	connection, err := state.database.Conn(context.Background())
+	requireNoError(t, err)
+
+	_, err = connection.ExecContext(context.Background(), "PRAGMA ignore_check_constraints = ON")
+	requireNoError(t, err)
+	_, err = connection.ExecContext(
+		context.Background(),
+		"INSERT INTO writer_leases (service_id, epoch, owner) VALUES (?, 0, NULL)",
+		[]byte("short"),
+	)
+	requireNoError(t, err)
+	requireNoError(t, connection.Close())
+	requireNoError(t, state.Close())
+
+	state, err = Open(context.Background(), path)
+	if state != nil || !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Open(invalid lease) = %#v, %v", state, err)
+	}
+}
+
 func TestOpenRejectsUnsupportedSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +150,14 @@ func TestOpenRejectsUnsupportedSchemaVersion(t *testing.T) {
 		currentSchemaVersion+1,
 	)
 	requireNoError(t, err)
+
+	if !errors.Is(
+		validateSchema(context.Background(), state.database, currentSchemaVersion),
+		ErrInvalidState,
+	) {
+		t.Fatal("validateSchema() accepted a mismatched version row")
+	}
+
 	requireNoError(t, state.Close())
 
 	state, err = Open(context.Background(), path)
@@ -94,7 +166,7 @@ func TestOpenRejectsUnsupportedSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestEnsureSchemaContainsCancellation(t *testing.T) {
+func TestEnsureInitialSchemaContainsCancellation(t *testing.T) {
 	t.Parallel()
 
 	database := testDatabase(t, "file::memory:")
@@ -105,10 +177,22 @@ func TestEnsureSchemaContainsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := ensureSchema(ctx, database)
+	err := ensureInitialSchema(ctx, database)
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("ensureSchema() error = %v", err)
+		t.Fatalf("ensureInitialSchema() error = %v", err)
 	}
+}
+
+func TestEnsureInitialSchemaCreatesVersionOne(t *testing.T) {
+	t.Parallel()
+
+	database := testDatabase(t, "file::memory:")
+	t.Cleanup(func() {
+		requireNoError(t, database.Close())
+	})
+
+	requireNoError(t, ensureInitialSchema(context.Background(), database))
+	requireNoError(t, validateSchema(context.Background(), database, 1))
 }
 
 func TestInitializeSchemaContainsDatabaseFailures(t *testing.T) {
@@ -127,6 +211,7 @@ func TestInitializeSchemaContainsDatabaseFailures(t *testing.T) {
 		requireNoError(t, database.Close())
 	})
 	requireNoError(t, initializeSchema(context.Background(), database))
+	requireNoError(t, ensureInitialSchema(context.Background(), database))
 
 	err = initializeSchema(context.Background(), database)
 	if !errors.Is(err, ErrInvalidState) {
@@ -136,5 +221,26 @@ func TestInitializeSchemaContainsDatabaseFailures(t *testing.T) {
 	err = classifySchemaResult(context.Background(), ErrUnavailable)
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("classifySchemaResult() error = %v", err)
+	}
+}
+
+func TestValidateSchemaRejectsInvalidVersionAndClosedDatabase(t *testing.T) {
+	t.Parallel()
+
+	database := testDatabase(t, "file::memory:")
+	requireNoError(t, initializeSchema(context.Background(), database))
+
+	if !errors.Is(validateSchema(context.Background(), database, 99), ErrInvalidState) {
+		t.Fatal("validateSchema() accepted an unknown schema version")
+	}
+
+	requireNoError(t, database.Close())
+
+	if !errors.Is(validateSchema(context.Background(), database, currentSchemaVersion), ErrInvalidState) {
+		t.Fatal("validateSchema() accepted a closed database")
+	}
+
+	if !errors.Is(validateWriterLeaseRows(context.Background(), database), ErrInvalidState) {
+		t.Fatal("validateWriterLeaseRows() accepted a closed database")
 	}
 }

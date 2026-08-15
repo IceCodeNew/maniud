@@ -113,8 +113,8 @@ func TestApplySchemaMigrationCommitsAtomically(t *testing.T) {
 
 func testSchemaMigration() schemaMigration {
 	return schemaMigration{
-		source: 1,
-		target: 2,
+		source: currentSchemaVersion,
+		target: currentSchemaVersion + 1,
 		apply: func(ctx context.Context, transaction *sql.Tx) error {
 			_, err := transaction.ExecContext(ctx, "CREATE TABLE migration_fixture (value TEXT NOT NULL)")
 			if err != nil {
@@ -129,7 +129,7 @@ func testSchemaMigration() schemaMigration {
 				return err
 			}
 
-			if version != 1 {
+			if version != currentSchemaVersion {
 				return ErrInvalidState
 			}
 
@@ -141,7 +141,7 @@ func testSchemaMigration() schemaMigration {
 				return err
 			}
 
-			if version != 2 {
+			if version != currentSchemaVersion+1 {
 				return ErrInvalidState
 			}
 
