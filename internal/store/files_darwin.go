@@ -4,6 +4,7 @@ package store
 
 import (
 	"path/filepath"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
@@ -14,6 +15,10 @@ func platformDatabasePath(anchor *stateAnchor) string {
 
 func platformEntryPath(anchor *stateAnchor, name string) string {
 	return filepath.Join(anchor.directoryPath, name)
+}
+
+func platformDescriptorPath(descriptor int) string {
+	return "/dev/fd/" + strconv.Itoa(descriptor)
 }
 
 func statIdentity(metadata unix.Stat_t) fileIdentity {

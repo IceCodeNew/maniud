@@ -8,10 +8,11 @@ import (
 )
 
 type schemaMigration struct {
-	source   int
-	target   int
-	apply    func(context.Context, *sql.Tx) error
-	validate func(context.Context, *sql.DB) bool
+	source         int
+	target         int
+	apply          func(context.Context, *sql.Tx) error
+	validateSource func(context.Context, *sql.DB) error
+	validateTarget func(context.Context, *sql.DB) error
 }
 
 type schemaMigrationOps struct {
@@ -47,8 +48,17 @@ func executeSchemaMigrationWithOps(
 	}
 
 	version, err := storedSchemaVersion(ctx, database)
-	if err != nil || version != migration.source {
+	if err != nil {
+		return err
+	}
+
+	if version != migration.source {
 		return classifySchema(ctx)
+	}
+
+	err = migration.validateSource(ctx, database)
+	if err != nil {
+		return err
 	}
 
 	snapshot, err := operations.createSnapshot(ctx, database, anchor, migration.source, migration.target)
@@ -66,8 +76,9 @@ func executeSchemaMigrationWithOps(
 		return err
 	}
 
-	if !migration.validate(ctx, database) {
-		return classifySchema(ctx)
+	err = migration.validateTarget(ctx, database)
+	if err != nil {
+		return err
 	}
 
 	return removeMigrationBackup(ctx, anchor, manifest)
@@ -78,9 +89,14 @@ func validSchemaMigration(
 	anchor *stateAnchor,
 	migration schemaMigration,
 ) bool {
-	return database != nil && anchor != nil && anchor.locked && anchor.valid() && migration.source > 0 &&
-		migration.target > migration.source && migration.target-migration.source == 1 &&
-		migration.apply != nil && migration.validate != nil
+	return database != nil && anchor != nil && anchor.locked && anchor.valid() &&
+		validSchemaMigrationDefinition(migration)
+}
+
+func validSchemaMigrationDefinition(migration schemaMigration) bool {
+	return migration.source > 0 && migration.target > migration.source &&
+		migration.target-migration.source == 1 && migration.apply != nil &&
+		migration.validateSource != nil && migration.validateTarget != nil
 }
 
 func validSchemaMigrationOps(operations schemaMigrationOps) bool {
@@ -95,7 +111,7 @@ func storedSchemaVersion(ctx context.Context, database *sql.DB) (int, error) {
 		"SELECT version FROM schema_version WHERE singleton = 1",
 	).Scan(&version)
 	if err != nil {
-		return 0, classifySchema(ctx)
+		return 0, classifySQLiteProbe(ctx, err)
 	}
 
 	return version, nil
@@ -140,4 +156,16 @@ func applySchemaMigration(
 	err = transaction.Commit()
 
 	return classifySchemaResult(ctx, err)
+}
+
+func classifySQLiteProbe(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return classifyContext(ctx)
+	}
+
+	if retryableSQLiteError(err) {
+		return ErrUnavailable
+	}
+
+	return ErrInvalidState
 }

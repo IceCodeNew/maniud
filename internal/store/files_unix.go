@@ -268,10 +268,32 @@ func descriptorIdentity(descriptor int) (fileIdentity, bool) {
 }
 
 func (anchor *stateAnchor) valid() bool {
-	return anchor.validDirectory() && anchor.validEntry(anchor.databaseName+".lock", anchor.lockID) &&
-		anchor.validEntry(anchor.databaseName, anchor.databaseID) &&
+	return anchor.validPersistentEntries() &&
 		anchor.validEntry(anchor.databaseName+"-wal", anchor.walID) &&
 		anchor.validEntry(anchor.databaseName+"-shm", anchor.sharedID)
+}
+
+func (anchor *stateAnchor) validPersistentEntries() bool {
+	return anchor.validDirectory() && anchor.validEntry(anchor.databaseName+".lock", anchor.lockID) &&
+		anchor.validEntry(anchor.databaseName, anchor.databaseID)
+}
+
+func (anchor *stateAnchor) refreshSQLiteSidecars() bool {
+	if !anchor.validPersistentEntries() {
+		return false
+	}
+
+	walID, walValid := anchor.openRegular(anchor.databaseName + "-wal")
+
+	sharedID, sharedValid := anchor.openRegular(anchor.databaseName + "-shm")
+	if !walValid || !sharedValid {
+		return false
+	}
+
+	anchor.walID = walID
+	anchor.sharedID = sharedID
+
+	return anchor.valid()
 }
 
 func (anchor *stateAnchor) validDirectory() bool {

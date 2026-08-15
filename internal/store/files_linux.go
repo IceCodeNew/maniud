@@ -19,6 +19,10 @@ func platformEntryPath(anchor *stateAnchor, name string) string {
 	return descriptorRoot + strconv.Itoa(anchor.directory) + string(filepath.Separator) + name
 }
 
+func platformDescriptorPath(descriptor int) string {
+	return descriptorRoot + strconv.Itoa(descriptor)
+}
+
 func statIdentity(metadata unix.Stat_t) fileIdentity {
 	return fileIdentity{
 		device: metadata.Dev,

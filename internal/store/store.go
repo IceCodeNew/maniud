@@ -52,7 +52,16 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func finishOpen(ctx context.Context, database *sql.DB, anchor *stateAnchor) (*Store, error) {
-	err := ready(ctx, database)
+	return finishOpenWithMigrations(ctx, database, anchor, nil)
+}
+
+func finishOpenWithMigrations(
+	ctx context.Context,
+	database *sql.DB,
+	anchor *stateAnchor,
+	migrations []schemaMigration,
+) (*Store, error) {
+	pair, found, err := discoverMigrationBackup(anchor)
 	if err != nil {
 		_ = database.Close()
 		_ = anchor.close()
@@ -60,7 +69,18 @@ func finishOpen(ctx context.Context, database *sql.DB, anchor *stateAnchor) (*St
 		return nil, err
 	}
 
-	err = ensureSchema(ctx, database)
+	if found {
+		err = recoverDiscoveredSchemaMigration(ctx, database, pair, migrations)
+	}
+
+	if err == nil {
+		err = ready(ctx, database)
+	}
+
+	if err == nil && !found {
+		err = ensureSchema(ctx, database)
+	}
+
 	if err != nil {
 		_ = database.Close()
 		_ = anchor.close()
@@ -68,19 +88,16 @@ func finishOpen(ctx context.Context, database *sql.DB, anchor *stateAnchor) (*St
 		return nil, err
 	}
 
-	if !anchor.valid() {
-		_ = database.Close()
-		_ = anchor.close()
-
-		return nil, ErrInvalidState
+	startupErr := ErrInvalidState
+	if anchor.valid() {
+		startupErr = anchor.unlock()
 	}
 
-	err = anchor.unlock()
-	if err != nil {
+	if startupErr != nil {
 		_ = database.Close()
 		_ = anchor.close()
 
-		return nil, ErrUnavailable
+		return nil, startupErr
 	}
 
 	return &Store{database: database, anchor: anchor}, nil

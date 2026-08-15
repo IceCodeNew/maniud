@@ -340,11 +340,11 @@ func TestPerformOnlineBackupBoundsContentionAndCancellation(t *testing.T) {
 	}
 }
 
-func TestRetryableBackupErrorAndWait(t *testing.T) {
+func TestRetryableSQLiteErrorAndWait(t *testing.T) {
 	t.Parallel()
 
-	if retryableBackupError(sqliteCodeError(1)) || !retryableBackupError(sqliteCodeError(sqliteResultBusy)) {
-		t.Fatal("retryableBackupError() misclassified a SQLite result")
+	if retryableSQLiteError(sqliteCodeError(1)) || !retryableSQLiteError(sqliteCodeError(sqliteResultBusy)) {
+		t.Fatal("retryableSQLiteError() misclassified a SQLite result")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

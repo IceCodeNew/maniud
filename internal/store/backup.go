@@ -118,7 +118,7 @@ func performOnlineBackupWithWait(ctx context.Context, backup backupHandle, wait 
 
 		more, stepErr := backup.Step(backupStepPages)
 		if stepErr != nil {
-			if retryableBackupError(stepErr) && retries < backupRetryLimit {
+			if retryableSQLiteError(stepErr) && retries < backupRetryLimit {
 				retries++
 
 				if wait(ctx) {
@@ -146,7 +146,7 @@ func performOnlineBackupWithWait(ctx context.Context, backup backupHandle, wait 
 	return nil
 }
 
-func retryableBackupError(err error) bool {
+func retryableSQLiteError(err error) bool {
 	var result interface{ Code() int }
 	if !errors.As(err, &result) {
 		return false

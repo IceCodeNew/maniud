@@ -38,6 +38,14 @@ func TestExecuteSchemaMigrationRejectsInvalidContractAndCancellation(t *testing.
 		t.Fatalf("executeSchemaMigration(wrong source) = %v", err)
 	}
 
+	invalidSource := migration
+	invalidSource.validateSource = func(context.Context, *sql.DB) error { return ErrInvalidState }
+
+	err = executeSchemaMigration(context.Background(), database, anchor, invalidSource)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("executeSchemaMigration(invalid source) = %v", err)
+	}
+
 	err = executeSchemaMigrationWithOps(
 		context.Background(),
 		database,
@@ -61,6 +69,15 @@ func TestExecuteSchemaMigrationRejectsInvalidContractAndCancellation(t *testing.
 	}
 
 	assertNoMigrationBackup(t, anchor.directoryPath)
+}
+
+func TestClassifySQLiteProbePreservesAvailability(t *testing.T) {
+	t.Parallel()
+
+	err := classifySQLiteProbe(context.Background(), sqliteCodeError(sqliteResultBusy))
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("classifySQLiteProbe(busy) = %v", err)
+	}
 }
 
 func TestExecuteSchemaMigrationContainsBackupPreparationFailures(t *testing.T) {

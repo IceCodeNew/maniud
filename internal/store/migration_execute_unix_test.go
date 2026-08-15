@@ -22,15 +22,15 @@ func TestExecuteSchemaMigrationCommitsAndCleansBackup(t *testing.T) {
 	if err != nil {
 		version, versionErr := storedSchemaVersion(context.Background(), database)
 		t.Fatalf(
-			"executeSchemaMigration() = %v; schema version = %d, %v; target valid = %t",
+			"executeSchemaMigration() = %v; schema version = %d, %v; target validation = %v",
 			err,
 			version,
 			versionErr,
-			migration.validate(context.Background(), database),
+			migration.validateTarget(context.Background(), database),
 		)
 	}
 
-	if !migration.validate(context.Background(), database) {
+	if migration.validateTarget(context.Background(), database) != nil {
 		t.Fatal("migration target failed validation")
 	}
 
@@ -62,7 +62,7 @@ func TestExecuteSchemaMigrationPreservesBackupOnValidationFailure(t *testing.T) 
 
 	anchor, database := testMigrationDatabase(t)
 	migration := testSchemaMigration()
-	migration.validate = func(context.Context, *sql.DB) bool { return false }
+	migration.validateTarget = func(context.Context, *sql.DB) error { return ErrInvalidState }
 
 	err := executeSchemaMigration(context.Background(), database, anchor, migration)
 	if !errors.Is(err, ErrInvalidState) {
@@ -106,7 +106,7 @@ func TestApplySchemaMigrationCommitsAtomically(t *testing.T) {
 	err := applySchemaMigration(context.Background(), database, migration)
 	requireNoError(t, err)
 
-	if !migration.validate(context.Background(), database) {
+	if migration.validateTarget(context.Background(), database) != nil {
 		t.Fatal("committed migration target failed validation")
 	}
 }
@@ -123,10 +123,26 @@ func testSchemaMigration() schemaMigration {
 
 			return nil
 		},
-		validate: func(ctx context.Context, database *sql.DB) bool {
+		validateSource: func(ctx context.Context, database *sql.DB) error {
 			version, err := storedSchemaVersion(ctx, database)
-			if err != nil || version != 2 {
-				return false
+			if err != nil {
+				return err
+			}
+
+			if version != 1 {
+				return ErrInvalidState
+			}
+
+			return nil
+		},
+		validateTarget: func(ctx context.Context, database *sql.DB) error {
+			version, err := storedSchemaVersion(ctx, database)
+			if err != nil {
+				return err
+			}
+
+			if version != 2 {
+				return ErrInvalidState
 			}
 
 			var definition string
@@ -135,8 +151,15 @@ func testSchemaMigration() schemaMigration {
 				ctx,
 				"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'migration_fixture'",
 			).Scan(&definition)
+			if err != nil {
+				return classifySQLiteProbe(ctx, err)
+			}
 
-			return err == nil && definition == "CREATE TABLE migration_fixture (value TEXT NOT NULL)"
+			if definition != "CREATE TABLE migration_fixture (value TEXT NOT NULL)" {
+				return ErrInvalidState
+			}
+
+			return nil
 		},
 	}
 }
