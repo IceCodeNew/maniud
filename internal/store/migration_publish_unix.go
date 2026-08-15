@@ -176,23 +176,31 @@ func existingMigrationArtifactMatches(anchor *stateAnchor, plan migrationBackupP
 		return false
 	}
 
+	matches := migrationArtifactFileMatches(anchor, plan, file, identity)
+
+	closeErr := file.Close()
+
+	return matches && closeErr == nil
+}
+
+func migrationArtifactFileMatches(
+	anchor *stateAnchor,
+	plan migrationBackupPlan,
+	file *os.File,
+	identity fileIdentity,
+) bool {
 	metadata, err := file.Stat()
 	if err != nil || metadata.Size() != plan.manifest.Size {
-		_ = file.Close()
-
 		return false
 	}
 
 	digester := sha256.New()
 	reader := io.NewSectionReader(file, 0, metadata.Size())
 	size, err := io.Copy(digester, reader)
-	matches := err == nil && size == metadata.Size() &&
+
+	return err == nil && size == metadata.Size() &&
 		hex.EncodeToString(digester.Sum(nil)) == plan.manifest.SHA256 &&
 		anchoredPrivateFileMatches(anchor, plan.artifactName, file, identity)
-
-	closeErr := file.Close()
-
-	return matches && closeErr == nil
 }
 
 func publishMigrationManifest(
@@ -396,11 +404,23 @@ func existingMigrationManifestMatches(anchor *stateAnchor, plan migrationBackupP
 		return false
 	}
 
-	content, err := io.ReadAll(io.LimitReader(file, migrationManifestMaxBytes+1))
-	matchesIdentity := anchoredPrivateFileMatches(anchor, plan.manifestName, file, identity)
-
+	matches := migrationManifestFileMatches(anchor, plan, file, identity)
 	closeErr := file.Close()
-	if err != nil || closeErr != nil || !matchesIdentity || !bytes.Equal(content, plan.content) {
+
+	return matches && closeErr == nil
+}
+
+func migrationManifestFileMatches(
+	anchor *stateAnchor,
+	plan migrationBackupPlan,
+	file *os.File,
+	identity fileIdentity,
+) bool {
+	reader := io.NewSectionReader(file, 0, migrationManifestMaxBytes+1)
+
+	content, err := io.ReadAll(reader)
+	if err != nil || !bytes.Equal(content, plan.content) ||
+		!anchoredPrivateFileMatches(anchor, plan.manifestName, file, identity) {
 		return false
 	}
 

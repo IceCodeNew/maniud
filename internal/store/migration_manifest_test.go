@@ -36,6 +36,24 @@ func TestPlanMigrationBackupCreatesCanonicalManifest(t *testing.T) {
 	}
 }
 
+func TestPlanExistingMigrationBackupRecreatesCanonicalPlan(t *testing.T) {
+	t.Parallel()
+
+	digest := sha256.Sum256([]byte("snapshot"))
+
+	plan, valid := planMigrationBackup(migrationManifestTestDatabase, 1, 2, 4096, digest)
+	if !valid {
+		t.Fatal("planMigrationBackup() rejected valid state")
+	}
+
+	existing, valid := planExistingMigrationBackup(migrationManifestTestDatabase, plan.manifest)
+	if !valid || existing.manifest != plan.manifest ||
+		existing.artifactName != plan.artifactName || existing.manifestName != plan.manifestName ||
+		string(existing.content) != string(plan.content) {
+		t.Fatalf("planExistingMigrationBackup() = %#v, %t", existing, valid)
+	}
+}
+
 func TestPlanMigrationBackupRejectsInvalidState(t *testing.T) {
 	t.Parallel()
 
@@ -107,6 +125,11 @@ func TestParseMigrationBackupManifestRejectsInvalidInput(t *testing.T) {
 		if accepted || parsed != manifest {
 			t.Fatalf("parseMigrationBackupManifest(mutation) = %#v, %t", parsed, accepted)
 		}
+
+		if existing, valid := planExistingMigrationBackup(migrationManifestTestDatabase, manifest); valid ||
+			!emptyMigrationBackupPlan(existing) {
+			t.Fatalf("planExistingMigrationBackup(mutation) = %#v, %t", existing, valid)
+		}
 	}
 }
 
@@ -120,4 +143,9 @@ func emptyMigrationBackupManifest() migrationBackupManifest {
 		Size:          0,
 		SHA256:        "",
 	}
+}
+
+func emptyMigrationBackupPlan(plan migrationBackupPlan) bool {
+	return plan.manifest == emptyMigrationBackupManifest() && plan.artifactName == "" &&
+		plan.manifestName == "" && plan.content == nil
 }

@@ -94,6 +94,34 @@ func parseMigrationBackupManifest(
 	return manifest, valid
 }
 
+func planExistingMigrationBackup(
+	databaseName string,
+	manifest migrationBackupManifest,
+) (migrationBackupPlan, bool) {
+	var empty migrationBackupPlan
+
+	digestBytes, err := hex.DecodeString(manifest.SHA256)
+	if err != nil || len(digestBytes) != sha256.Size {
+		return empty, false
+	}
+
+	var digest [sha256.Size]byte
+	copy(digest[:], digestBytes)
+
+	plan, valid := planMigrationBackup(
+		databaseName,
+		manifest.SourceSchema,
+		manifest.TargetSchema,
+		manifest.Size,
+		digest,
+	)
+	if !valid || plan.manifest != manifest {
+		return empty, false
+	}
+
+	return plan, true
+}
+
 func (manifest migrationBackupManifest) valid(databaseName string) bool {
 	if !manifest.validHeader(databaseName) {
 		return false
