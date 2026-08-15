@@ -25,6 +25,12 @@ repos:
           - gofmt-check
         types: [go]
         stages: [pre-push, manual]
+      - id: cli-help-generated
+        name: CLI help comments generated
+        language: system
+        entry: env CGO_ENABLED=0 go run ./internal/cli/helpgen.go -source internal/cli/help_text.go -output internal/cli/help_generated.go -check
+        pass_filenames: false
+        stages: [pre-commit, pre-push, manual]
       - id: gitleaks-staged
         name: gitleaks staged changes
         language: system
