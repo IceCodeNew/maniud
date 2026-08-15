@@ -109,3 +109,21 @@ jobs:
           GOARCH: amd64
           GOOS: darwin
         run: go build -trimpath -o "$RUNNER_TEMP/maniud" ./cmd/maniud
+
+  race:
+    name: Data race detector
+    needs: [quality, native, darwin-amd64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Test all packages with the race detector
+        env:
+          CGO_ENABLED: 1
+        run: go test -race -count=1 ./...
