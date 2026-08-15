@@ -13,20 +13,21 @@ import (
 )
 
 const (
-	plainTextContentType  = "text/plain"
-	testContainerID       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testImageConfig       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testPlatformManifest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	testDesiredState      = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	testReferenceDigest   = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	testContainerName     = "example-api"
-	testContainerImage    = "registry.example/api:1@" + testReferenceDigest
-	testContainerService  = "api"
-	testTransaction       = "550e8400-e29b-41d4-a716-446655440000"
-	testNetworkMode       = "bridge"
-	testManifestMediaType = ociManifestMediaType
-	testInvalidValue      = "bad"
-	testOtherValue        = "other"
+	plainTextContentType     = "text/plain"
+	testContainerID          = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testImageConfig          = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testPlatformManifest     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	testDesiredState         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	testReferenceDigest      = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	testContainerName        = "example-api"
+	testInvalidContainerName = "invalid_name"
+	testContainerImage       = "registry.example/api:1@" + testReferenceDigest
+	testContainerService     = "api"
+	testTransaction          = "550e8400-e29b-41d4-a716-446655440000"
+	testNetworkMode          = "bridge"
+	testManifestMediaType    = ociManifestMediaType
+	testInvalidValue         = "bad"
+	testOtherValue           = "other"
 )
 
 func testContainerEntrypoint() []string {

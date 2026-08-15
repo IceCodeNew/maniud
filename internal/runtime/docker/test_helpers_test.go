@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	testArchitecture = "amd64"
-	testOS           = "linux"
-	testProduct      = "29.7.2"
+	testArchitecture          = "amd64"
+	testOS                    = "linux"
+	testProduct               = "29.7.2"
+	testUnsupportedAPIVersion = "1.53"
 )
 
 type nestedJSONValue struct {

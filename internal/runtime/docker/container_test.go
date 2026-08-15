@@ -178,7 +178,7 @@ func TestProbeContainerContainsInputAndTransportFailures(t *testing.T) {
 	}))
 	client.version = testVersion()
 
-	for _, reference := range []string{"invalid_name", strings.Repeat("g", containerIDHexBytes), "example-"} {
+	for _, reference := range []string{testInvalidContainerName, strings.Repeat("g", containerIDHexBytes), "example-"} {
 		probe, err := client.ProbeContainer(context.Background(), reference)
 		if probe.State != ContainerProbeUnknown || !errors.Is(err, ErrInvalidContainerReference) {
 			t.Fatalf("ProbeContainer(%q) = %#v, %v", reference, probe, err)
