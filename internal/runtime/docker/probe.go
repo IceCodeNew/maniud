@@ -117,7 +117,7 @@ func (client *Client) serverVersion(
 
 func decodeStrictJSON(reader io.Reader, target any) bool {
 	value, err := io.ReadAll(io.LimitReader(reader, maximumJSONBytes+1))
-	if err != nil || len(value) > maximumJSONBytes {
+	if err != nil || len(value) > maximumJSONBytes || !uniqueJSONKeys(value) {
 		return false
 	}
 
@@ -129,6 +129,81 @@ func decodeStrictJSON(reader io.Reader, target any) bool {
 	}
 
 	return decoder.Decode(&struct{}{}) == io.EOF
+}
+
+func uniqueJSONKeys(value []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	if !consumeJSONValue(decoder) {
+		return false
+	}
+
+	_, err := decoder.Token()
+
+	return err == io.EOF
+}
+
+func consumeJSONValue(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+
+	delimiter, composite := token.(json.Delim)
+	if !composite {
+		return true
+	}
+
+	if delimiter == '[' {
+		return consumeJSONArray(decoder)
+	}
+
+	return consumeJSONObject(decoder)
+}
+
+func consumeJSONArray(decoder *json.Decoder) bool {
+	for decoder.More() {
+		if !consumeJSONValue(decoder) {
+			return false
+		}
+	}
+
+	return consumeJSONClosing(decoder, ']')
+}
+
+func consumeJSONObject(decoder *json.Decoder) bool {
+	keys := make(map[string]struct{})
+
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+
+		key, _ := keyToken.(string)
+
+		if _, duplicate := keys[key]; duplicate {
+			return false
+		}
+
+		keys[key] = struct{}{}
+
+		if !consumeJSONValue(decoder) {
+			return false
+		}
+	}
+
+	return consumeJSONClosing(decoder, '}')
+}
+
+func consumeJSONClosing(decoder *json.Decoder, expected json.Delim) bool {
+	closing, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+
+	closingDelimiter, valid := closing.(json.Delim)
+
+	return valid && closingDelimiter == expected
 }
 
 func isJSON(contentType string) bool {
