@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -224,6 +225,17 @@ services:
 		Environment: nil,
 		Profiles:    nil,
 	}
+
+	_, err := Load(context.Background(), source)
+	if !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("Load() error = %v, want ErrInvalidSource", err)
+	}
+}
+
+func TestLoadRejectsOversizedSource(t *testing.T) {
+	t.Parallel()
+
+	source := testSource(t, strings.Repeat("#", maxSourceBytes+1))
 
 	_, err := Load(context.Background(), source)
 	if !errors.Is(err, ErrInvalidSource) {

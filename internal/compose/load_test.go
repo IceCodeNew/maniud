@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,23 @@ services:
 
 	if names := project.ServiceNames(); !slices.Equal(names, []string{apiService}) {
 		t.Fatalf("ServiceNames() = %q, want [api]", names)
+	}
+}
+
+func TestLoadAcceptsMaximumSource(t *testing.T) {
+	t.Parallel()
+
+	content := `
+name: example
+services:
+  api:
+    image: busybox:stable
+`
+	content += strings.Repeat("#", maxSourceBytes-len(content))
+
+	_, err := Load(context.Background(), testSource(t, content))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 }
 

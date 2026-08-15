@@ -14,6 +14,8 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+const maxSourceBytes = 1 << 20
+
 var (
 	// ErrInvalidSource reports malformed or semantically invalid Compose input.
 	ErrInvalidSource = errors.New("compose source is invalid")
@@ -51,7 +53,7 @@ func Load(ctx context.Context, source Source) (Project, error) {
 		return Project{value: nil}, fmt.Errorf("load compose: %w", ctxErr)
 	}
 
-	if len(source.Content) == 0 || !filepath.IsAbs(source.WorkingDir) {
+	if len(source.Content) == 0 || len(source.Content) > maxSourceBytes || !filepath.IsAbs(source.WorkingDir) {
 		return Project{value: nil}, ErrInvalidSource
 	}
 
