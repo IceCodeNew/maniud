@@ -39,6 +39,7 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/moby/moby/api
+            - golang.org/x/crypto
     gomodguard_v2:
       allowed:
         - module: github.com/compose-spec/compose-go/v2
@@ -47,6 +48,8 @@ linters:
           version: "= 1.55.0"
         - module: go.yaml.in/yaml/v4
           version: "= 4.0.0-rc.4"
+        - module: golang.org/x/crypto
+          version: "= 0.55.0"
         - module: oras.land/oras-go/v2
           version: "= 2.6.2"
     nolintlint:

@@ -7,6 +7,7 @@ toolchain go1.26.6
 require (
 	github.com/compose-spec/compose-go/v2 v2.14.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
+	golang.org/x/crypto v0.55.0
 )
 
 require (
@@ -26,7 +27,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	oras.land/oras-go/v2 v2.6.2
 )
