@@ -12,6 +12,8 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v4"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const maxSourceBytes = 1 << 20
@@ -33,7 +35,8 @@ type Source struct {
 
 // Project is a validated Compose project whose vendor representation stays private.
 type Project struct {
-	value *composetypes.Project
+	value        *composetypes.Project
+	sourceDigest domain.Digest
 }
 
 // Name returns the normalized project name.
@@ -50,16 +53,16 @@ func (project Project) ServiceNames() []string {
 func Load(ctx context.Context, source Source) (Project, error) {
 	ctxErr := ctx.Err()
 	if ctxErr != nil {
-		return Project{value: nil}, fmt.Errorf("load compose: %w", ctxErr)
+		return Project{value: nil, sourceDigest: domain.Digest{}}, fmt.Errorf("load compose: %w", ctxErr)
 	}
 
 	if len(source.Content) == 0 || len(source.Content) > maxSourceBytes || !filepath.IsAbs(source.WorkingDir) {
-		return Project{value: nil}, ErrInvalidSource
+		return Project{value: nil, sourceDigest: domain.Digest{}}, ErrInvalidSource
 	}
 
 	err := validateSource(source.Content)
 	if err != nil {
-		return Project{value: nil}, err
+		return Project{value: nil, sourceDigest: domain.Digest{}}, err
 	}
 
 	environment := make(composetypes.Mapping, len(source.Environment))
@@ -85,10 +88,10 @@ func Load(ctx context.Context, source Source) (Project, error) {
 		withoutSecondaryReads,
 	)
 	if err != nil {
-		return Project{value: nil}, classifyLoadError(ctx)
+		return Project{value: nil, sourceDigest: domain.Digest{}}, classifyLoadError(ctx)
 	}
 
-	return Project{value: project}, nil
+	return Project{value: project, sourceDigest: domain.Hash(source.Content)}, nil
 }
 
 func withoutSecondaryReads(options *loader.Options) {
