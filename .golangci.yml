@@ -17,6 +17,7 @@ linters:
           files:
             - $all
             - "!**/internal/compose/*.go"
+            - "!**/internal/runtime/docker/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -30,10 +31,20 @@ linters:
             - github.com/compose-spec/compose-go/v2
             - github.com/regclient/regclient
             - go.yaml.in/yaml/v4
+        docker-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/runtime/docker/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/moby/moby/api
     gomodguard_v2:
       allowed:
         - module: github.com/compose-spec/compose-go/v2
           version: "= 2.14.0"
+        - module: github.com/moby/moby/api
+          version: "= 1.55.0"
         - module: github.com/regclient/regclient
           version: "= 0.11.5"
         - module: go.yaml.in/yaml/v4
