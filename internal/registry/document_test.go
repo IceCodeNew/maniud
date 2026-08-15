@@ -8,6 +8,8 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestDecodeManifestAcceptsDockerAndOCIImages(t *testing.T) {
@@ -15,7 +17,7 @@ func TestDecodeManifestAcceptsDockerAndOCIImages(t *testing.T) {
 
 	configRaw, configDescriptor := configForTest(
 		t,
-		Platform{OS: testOSLinux, Architecture: testArchitectureAMD64},
+		domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64},
 	)
 	_ = configRaw
 

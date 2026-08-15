@@ -232,7 +232,7 @@ func decodeImageConfig(raw []byte, descriptorValue ocispec.Descriptor) (imagePla
 		return imagePlatform{}, domain.Digest{}, ErrProtocol
 	}
 
-	platform, err := normalizePlatform(Platform{
+	platform, err := normalizePlatform(domain.Platform{
 		OS:           parsed.OS,
 		Architecture: parsed.Architecture,
 		Variant:      parsed.Variant,
