@@ -170,7 +170,10 @@ func finishMigrationSnapshot(
 }
 
 func validMigrationSnapshot(ctx context.Context, path string, sourceSchema int) bool {
-	connector, _ := modernsqlite.NewConnector(sqliteFileURI(path, url.Values{"mode": []string{"ro"}}))
+	connector, _ := modernsqlite.NewConnector(sqliteFileURI(path, url.Values{
+		"immutable": []string{"1"},
+		"mode":      []string{"ro"},
+	}))
 	database := sql.OpenDB(connector)
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
