@@ -71,7 +71,7 @@ func TestFinishOpenRejectsChangedAnchor(t *testing.T) {
 	t.Parallel()
 
 	anchor, database := testAnchoredDatabase(t)
-	anchor.directoryID = fileIdentity{device: 0, inode: 0, mode: 0, owner: 0}
+	anchor.directoryID = fileIdentity{device: 0, inode: 0, mode: 0, owner: 0, links: 0}
 
 	state, err := finishOpen(context.Background(), database, anchor)
 	if state != nil || !errors.Is(err, ErrInvalidState) {

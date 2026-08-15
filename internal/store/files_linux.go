@@ -21,5 +21,6 @@ func statIdentity(metadata unix.Stat_t) fileIdentity {
 		inode:  metadata.Ino,
 		mode:   metadata.Mode,
 		owner:  metadata.Uid,
+		links:  normalizedLinkCount(metadata.Nlink),
 	}
 }

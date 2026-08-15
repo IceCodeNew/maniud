@@ -57,11 +57,13 @@ func unsafeFilesystemCases() []struct {
 		{name: "broad directory", setup: makeBroadDirectory},
 		{name: "symlink directory", setup: makeSymlinkDirectory},
 		{name: "symlink database", setup: makeSymlinkDatabase},
+		{name: "hard-linked database", setup: makeHardLinkedDatabase},
 		{name: "broad database", setup: makeBroadDatabase},
 		{name: "broad write ahead log", setup: makeBroadWriteAheadLog},
 		{name: "symlink shared memory", setup: makeSymlinkSharedMemory},
 		{name: "database directory", setup: makeDatabaseDirectory},
 		{name: "symlink lock", setup: makeSymlinkLock},
+		{name: "hard-linked lock", setup: makeHardLinkedLock},
 		{name: "broad lock", setup: makeBroadLock},
 		{name: "lock directory", setup: makeLockDirectory},
 	}
@@ -83,6 +85,14 @@ func makeSymlinkDirectory(t *testing.T, directory, _ string) {
 func makeSymlinkDatabase(t *testing.T, _, path string) {
 	t.Helper()
 	requireNoError(t, os.Symlink("target", path))
+}
+
+func makeHardLinkedDatabase(t *testing.T, directory, path string) {
+	t.Helper()
+
+	target := filepath.Join(directory, "database-target")
+	requireNoError(t, os.WriteFile(target, nil, 0o600))
+	requireNoError(t, os.Link(target, path))
 }
 
 func makeBroadDatabase(t *testing.T, _, path string) {
@@ -112,6 +122,14 @@ func makeDatabaseDirectory(t *testing.T, _, path string) {
 func makeSymlinkLock(t *testing.T, _, path string) {
 	t.Helper()
 	requireNoError(t, os.Symlink("target", path+".lock"))
+}
+
+func makeHardLinkedLock(t *testing.T, directory, path string) {
+	t.Helper()
+
+	target := filepath.Join(directory, "lock-target")
+	requireNoError(t, os.WriteFile(target, nil, 0o600))
+	requireNoError(t, os.Link(target, path+".lock"))
 }
 
 func makeBroadLock(t *testing.T, _, path string) {
