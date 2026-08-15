@@ -79,6 +79,18 @@ func TestFinishOpenRejectsChangedAnchor(t *testing.T) {
 	}
 }
 
+func TestFinishOpenRejectsUnreadyDatabase(t *testing.T) {
+	t.Parallel()
+
+	anchor, database := testAnchoredDatabase(t)
+	requireNoError(t, database.Close())
+
+	state, err := finishOpen(context.Background(), database, anchor)
+	if state != nil || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("finishOpen(closed database) = %#v, %v", state, err)
+	}
+}
+
 func TestFinishOpenReportsUnlockFailure(t *testing.T) {
 	t.Parallel()
 

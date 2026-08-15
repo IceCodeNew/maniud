@@ -161,21 +161,24 @@ func (anchor *stateAnchor) openLock(ctx context.Context) error {
 
 	anchor.lockID = identity
 
-	return lock(ctx, descriptor)
+	return waitForLock(ctx, descriptor)
 }
 
-func lock(ctx context.Context, descriptor int) error {
+func waitForLock(ctx context.Context, descriptor int) error {
 	deadline := time.Now().Add(lockTimeout)
 
 	for {
-		err := unix.Flock(descriptor, unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			return nil
+		if ctx.Err() != nil {
+			return errors.Join(ErrUnavailable, ctx.Err())
 		}
 
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) &&
-			!errors.Is(err, syscall.EINTR) {
-			return ErrUnavailable
+		acquired, err := tryLock(descriptor)
+		if err != nil {
+			return err
+		}
+
+		if acquired {
+			return nil
 		}
 
 		if time.Now().After(deadline) {
@@ -191,6 +194,19 @@ func lock(ctx context.Context, descriptor int) error {
 		case <-timer.C:
 		}
 	}
+}
+
+func tryLock(descriptor int) (bool, error) {
+	err := unix.Flock(descriptor, unix.LOCK_EX|unix.LOCK_NB)
+	if err == nil {
+		return true, nil
+	}
+
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return false, nil
+	}
+
+	return false, ErrUnavailable
 }
 
 func (anchor *stateAnchor) openDatabase() bool {

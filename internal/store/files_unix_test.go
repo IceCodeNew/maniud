@@ -247,9 +247,9 @@ func TestFilesystemHelpersRejectInvalidDescriptors(t *testing.T) {
 		t.Fatalf("openDirectory(missing) = %d, %v", descriptor, err)
 	}
 
-	err = lock(context.Background(), -1)
+	err = waitForLock(context.Background(), -1)
 	if err == nil {
-		t.Fatal("lock(-1) succeeded")
+		t.Fatal("waitForLock(-1) succeeded")
 	}
 
 	components := splitAbsolutePath(string(filepath.Separator))
