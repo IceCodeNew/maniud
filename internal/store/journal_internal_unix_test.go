@@ -1,0 +1,246 @@
+//go:build linux || darwin
+
+package store
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"errors"
+	"io"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
+)
+
+const testJournalActionKind = "workload.create"
+
+var errJournalTest = errors.New("journal test failure")
+
+func TestJournalContainsStorageAndOwnershipFailures(t *testing.T) {
+	t.Parallel()
+
+	state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	intent := testTransactionIntent(domain.RuntimeDocker)
+
+	_, err := lock.beginTransaction(context.Background(), intent, failingReader{})
+	assertErrorIs(t, err, ErrUnavailable)
+
+	identifierBytes := bytes.Repeat([]byte{1}, transactionIDBytes)
+	first, err := lock.beginTransaction(context.Background(), intent, bytes.NewReader(identifierBytes))
+	requireNoError(t, err)
+	_, err = lock.SetTransactionState(context.Background(), first.ID, TransactionSucceeded)
+	requireNoError(t, err)
+
+	_, err = lock.beginTransaction(context.Background(), intent, bytes.NewReader(identifierBytes))
+	assertErrorIs(t, err, ErrInvalidState)
+
+	active, err := lock.BeginTransaction(context.Background(), intent)
+	requireNoError(t, err)
+
+	_, err = lock.MarkActionEffectOutcomeUnknown(context.Background(), active.ID, 1)
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = lock.action(context.Background(), TransactionID{2}, 1)
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = (*ServiceLock)(nil).action(context.Background(), active.ID, 1)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	err = lock.updateAction(context.Background(), active.ID, 1, "invalid SQL ", nil)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"CREATE TRIGGER reject_journal_state BEFORE UPDATE ON journal_transactions "+
+			"BEGIN SELECT RAISE(ABORT, 'rejected'); END",
+	)
+	requireNoError(t, err)
+
+	_, err = lock.SetTransactionState(context.Background(), active.ID, TransactionFailed)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	requireNoError(t, lock.Close())
+	requireNoError(t, state.Close())
+
+	_, err = state.Actions(context.Background(), active.ID)
+	assertErrorIs(t, err, ErrInvalidState)
+}
+
+func TestJournalReadersRejectUnavailableAndInvalidRequests(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *Store
+
+	_, err := nilStore.Transaction(context.Background(), TransactionID{})
+	assertErrorIs(t, err, ErrInvalidState)
+	_, _, err = nilStore.UnresolvedTransaction(context.Background(), "project", "api")
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = nilStore.Actions(context.Background(), TransactionID{})
+	assertErrorIs(t, err, ErrInvalidState)
+
+	state := openJournalStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	_, _, err = state.UnresolvedTransaction(context.Background(), "", "api")
+	assertErrorIs(t, err, ErrInvalidState)
+
+	requireNoError(t, state.Close())
+	_, err = state.Actions(context.Background(), TransactionID{})
+	assertErrorIs(t, err, ErrInvalidState)
+}
+
+func TestJournalDMLRejectsStaleWriterOwner(t *testing.T) {
+	t.Parallel()
+
+	state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	transaction, err := lock.BeginTransaction(context.Background(), testTransactionIntent(domain.RuntimeDocker))
+	requireNoError(t, err)
+
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"UPDATE writer_leases SET owner = ? WHERE service_id = ?",
+		[]byte("different-owner!"),
+		lock.lease.serviceID[:],
+	)
+	requireNoError(t, err)
+
+	_, err = lock.RecordActionIntent(
+		context.Background(),
+		transaction.ID,
+		testActionIntent(1, testJournalActionKind),
+	)
+	assertErrorIs(t, err, ErrOwnershipLost)
+
+	actions, err := state.Actions(context.Background(), transaction.ID)
+	requireNoError(t, err)
+
+	if len(actions) != 0 {
+		t.Fatalf("stale writer actions = %#v", actions)
+	}
+
+	assertErrorIs(t, lock.Close(), ErrOwnershipLost)
+	requireNoError(t, state.Close())
+}
+
+func TestJournalSQLHelpersContainSchemaFailures(t *testing.T) {
+	t.Parallel()
+
+	state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	t.Cleanup(func() {
+		requireNoError(t, lock.Close())
+		requireNoError(t, state.Close())
+	})
+
+	transaction, err := state.database.BeginTx(context.Background(), nil)
+	requireNoError(t, err)
+	_, err = transaction.ExecContext(context.Background(), "DROP TABLE journal_actions")
+	requireNoError(t, err)
+
+	identifier := TransactionID{1}
+	intent := testActionIntent(1, testJournalActionKind)
+
+	err = recordActionIntent(context.Background(), transaction, lock.lease, identifier, intent)
+	assertErrorIs(t, err, ErrInvalidState)
+	err = reuseActionIntent(context.Background(), transaction, lock.lease, identifier, intent.Sequence)
+	assertErrorIs(t, err, ErrInvalidState)
+	err = insertActionIntent(context.Background(), transaction, lock.lease, identifier, intent)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	requireNoError(t, transaction.Rollback())
+}
+
+func TestJournalScannersRejectMalformedRows(t *testing.T) {
+	t.Parallel()
+
+	database := testDatabase(t, "file::memory:")
+	t.Cleanup(func() {
+		requireNoError(t, database.Close())
+	})
+
+	identifier := make([]byte, transactionIDBytes)
+	digest := make([]byte, len(domain.Digest{}))
+
+	transactionRows := [][]any{
+		{identifier, "active", "docker", digest, digest, []byte("short")},
+		{identifier, "unknown", "docker", digest, digest, digest},
+	}
+	for _, values := range transactionRows {
+		_, err := scanTransaction(context.Background(), queryValues(t, database, values...))
+		assertErrorIs(t, err, ErrInvalidState)
+	}
+
+	_, err := scanTransaction(context.Background(), failingScanner{err: errJournalTest})
+	assertErrorIs(t, err, ErrInvalidState)
+
+	actionRows := [][]any{
+		{[]byte("short"), int64(1), testJournalActionKind, "intent", digest, nil},
+		{identifier, int64(1), testJournalActionKind, "completed", digest, []byte("short")},
+		{identifier, int64(1), testJournalActionKind, "intent", digest, digest},
+	}
+	for _, values := range actionRows {
+		_, err = scanAction(context.Background(), queryValues(t, database, values...))
+		assertErrorIs(t, err, ErrInvalidState)
+	}
+
+	_, err = scanAction(context.Background(), failingScanner{err: errJournalTest})
+	assertErrorIs(t, err, ErrInvalidState)
+	assertErrorIs(t, requireJournalMutation(nil), ErrInvalidState)
+}
+
+func TestReadActionsContainsIteratorFailures(t *testing.T) {
+	t.Parallel()
+
+	_, err := readActions(
+		context.Background(),
+		&failingActionRows{next: true, scanErr: errJournalTest, rowsErr: nil},
+	)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	_, err = readActions(
+		context.Background(),
+		&failingActionRows{next: false, scanErr: nil, rowsErr: errJournalTest},
+	)
+	assertErrorIs(t, err, ErrInvalidState)
+}
+
+type failingReader struct{}
+
+func (failingReader) Read(_ []byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+type failingScanner struct {
+	err error
+}
+
+func (scanner failingScanner) Scan(_ ...any) error {
+	return scanner.err
+}
+
+type failingActionRows struct {
+	next    bool
+	scanErr error
+	rowsErr error
+}
+
+func (rows *failingActionRows) Next() bool {
+	next := rows.next
+	rows.next = false
+
+	return next
+}
+
+func (rows *failingActionRows) Scan(_ ...any) error {
+	return rows.scanErr
+}
+
+func (rows *failingActionRows) Err() error {
+	return rows.rowsErr
+}
+
+func queryValues(t *testing.T, database *sql.DB, values ...any) *sql.Row {
+	t.Helper()
+
+	placeholders := "?" + strings.Repeat(", ?", len(values)-1)
+
+	return database.QueryRowContext(context.Background(), "SELECT "+placeholders, values...)
+}
