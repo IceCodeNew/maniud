@@ -12,9 +12,16 @@ func currentSchemaMigrations() []schemaMigration {
 	return []schemaMigration{
 		{
 			source:         1,
-			target:         currentSchemaVersion,
+			target:         writerLeaseSchemaVersion,
 			apply:          addWriterLeaseTable,
 			validateSource: validateSchemaVersion(1),
+			validateTarget: validateSchemaVersion(writerLeaseSchemaVersion),
+		},
+		{
+			source:         writerLeaseSchemaVersion,
+			target:         currentSchemaVersion,
+			apply:          addJournalTables,
+			validateSource: validateSchemaVersion(writerLeaseSchemaVersion),
 			validateTarget: validateSchemaVersion(currentSchemaVersion),
 		},
 	}
@@ -24,6 +31,21 @@ func addWriterLeaseTable(ctx context.Context, transaction *sql.Tx) error {
 	_, err := transaction.ExecContext(ctx, writerLeaseTableSQL)
 	if err != nil {
 		return fmt.Errorf("create writer lease table: %w", err)
+	}
+
+	return nil
+}
+
+func addJournalTables(ctx context.Context, transaction *sql.Tx) error {
+	for _, statement := range []string{
+		journalTransactionTableSQL,
+		journalUnresolvedIndexSQL,
+		journalActionTableSQL,
+	} {
+		_, err := transaction.ExecContext(ctx, statement)
+		if err != nil {
+			return fmt.Errorf("create journal schema: %w", err)
+		}
 	}
 
 	return nil

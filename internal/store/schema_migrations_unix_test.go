@@ -12,7 +12,8 @@ import (
 func TestSchemaMigrationFromRequiresOneValidMatch(t *testing.T) {
 	t.Parallel()
 
-	migration := currentSchemaMigrations()[0]
+	migrations := currentSchemaMigrations()
+	migration := migrations[0]
 
 	match, found := schemaMigrationFrom([]schemaMigration{migration}, migration.source)
 	if !found || match.source != migration.source || match.target != migration.target {
@@ -31,6 +32,18 @@ func TestSchemaMigrationFromRequiresOneValidMatch(t *testing.T) {
 		if _, found = schemaMigrationFrom(migrations, migration.source); found {
 			t.Fatalf("schemaMigrationFrom(%#v) found a migration", migrations)
 		}
+	}
+}
+
+func TestCurrentSchemaMigrationsAreOrdered(t *testing.T) {
+	t.Parallel()
+
+	migrations := currentSchemaMigrations()
+	if len(migrations) != 2 || migrations[0].source != 1 ||
+		migrations[0].target != writerLeaseSchemaVersion ||
+		migrations[1].source != writerLeaseSchemaVersion ||
+		migrations[1].target != currentSchemaVersion {
+		t.Fatalf("currentSchemaMigrations() = %#v", migrations)
 	}
 }
 
@@ -128,6 +141,26 @@ func TestAddWriterLeaseTableContainsSQLiteFailure(t *testing.T) {
 	err = addWriterLeaseTable(context.Background(), transaction)
 	if err == nil {
 		t.Fatal("addWriterLeaseTable() replaced an existing table")
+	}
+
+	requireNoError(t, transaction.Rollback())
+	requireNoError(t, database.Close())
+}
+
+func TestAddJournalTablesContainsSQLiteFailure(t *testing.T) {
+	t.Parallel()
+
+	database := testDatabase(t, "file::memory:")
+	requireNoError(t, initializeSchema(context.Background(), database))
+
+	transaction, err := database.BeginTx(context.Background(), nil)
+	requireNoError(t, err)
+	requireNoError(t, addWriterLeaseTable(context.Background(), transaction))
+	requireNoError(t, addJournalTables(context.Background(), transaction))
+
+	err = addJournalTables(context.Background(), transaction)
+	if err == nil {
+		t.Fatal("addJournalTables() replaced an existing table")
 	}
 
 	requireNoError(t, transaction.Rollback())

@@ -25,7 +25,7 @@ func TestOpenInitializesStrictSchemaVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if objectCount != 2 || objectName != schemaTableName {
+	if objectCount != 5 || objectName != journalActionTableName {
 		t.Fatalf("schema objects = %d, %q", objectCount, objectName)
 	}
 
@@ -68,6 +68,36 @@ func TestOpenMigratesLegacySchema(t *testing.T) {
 	assertNoMigrationBackup(t, directory)
 }
 
+func TestOpenMigratesWriterLeaseSchema(t *testing.T) {
+	t.Parallel()
+
+	directory := privateTempDir(t)
+	path := filepath.Join(directory, "state.db")
+	requireNoError(t, os.WriteFile(path, nil, 0o600))
+
+	database := testDatabase(t, sqliteURI(path))
+	_, err := database.ExecContext(
+		context.Background(),
+		schemaTableSQL+"; "+
+			"INSERT INTO schema_version (singleton, version) VALUES (1, 2); "+
+			writerLeaseTableSQL,
+	)
+	requireNoError(t, err)
+	requireNoError(t, database.Close())
+
+	state, err := Open(context.Background(), path)
+	if err != nil || state == nil {
+		t.Fatalf("Open(writer lease schema) = %#v, %v", state, err)
+	}
+
+	t.Cleanup(func() {
+		requireNoError(t, state.Close())
+	})
+
+	requireNoError(t, validateSchema(context.Background(), state.database, currentSchemaVersion))
+	assertNoMigrationBackup(t, directory)
+}
+
 func TestOpenRejectsUnknownOrMalformedSchema(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +112,16 @@ func TestOpenRejectsUnknownOrMalformedSchema(t *testing.T) {
 			statement: schemaTableSQL + "; " +
 				"INSERT INTO schema_version (singleton, version) VALUES (1, 2); " +
 				"CREATE TABLE writer_leases (service_id BLOB PRIMARY KEY)",
+		},
+		{
+			name: "malformed journal table",
+			statement: schemaTableSQL + "; " +
+				"INSERT INTO schema_version (singleton, version) VALUES (1, 3); " +
+				writerLeaseTableSQL + "; " +
+				journalTransactionTableSQL + "; " +
+				"CREATE UNIQUE INDEX journal_one_unresolved_transaction_per_service " +
+				"ON journal_transactions(service_id); " +
+				journalActionTableSQL,
 		},
 	}
 
@@ -132,6 +172,77 @@ func TestOpenRejectsInvalidWriterLeaseRows(t *testing.T) {
 	if state != nil || !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("Open(invalid lease) = %#v, %v", state, err)
 	}
+}
+
+func TestValidateJournalRowsRejectsRelationalCorruption(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(privateTempDir(t), "state.db")
+
+	state, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	lock, err := state.TryLockService("project", "service")
+	if err != nil {
+		t.Fatalf("TryLockService() error = %v", err)
+	}
+
+	requireNoError(t, lock.Close())
+
+	transactionID := make([]byte, 16)
+	digest := make([]byte, 32)
+
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"INSERT INTO journal_transactions "+
+			"(transaction_id, service_id, state, runtime, source_digest, effective_digest, execution_digest) "+
+			"VALUES (?, ?, 'failed', 'docker', ?, ?, ?)",
+		transactionID,
+		lock.lease.serviceID[:],
+		digest,
+		digest,
+		digest,
+	)
+	requireNoError(t, err)
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"INSERT INTO journal_actions "+
+			"(transaction_id, sequence, kind, state, intent_digest, postcondition_digest) "+
+			"VALUES (?, 1, 'create', 'intent', ?, NULL)",
+		transactionID,
+		digest,
+	)
+	requireNoError(t, err)
+
+	if !errors.Is(validateJournalRows(context.Background(), state.database), ErrInvalidState) {
+		t.Fatal("validateJournalRows() accepted a pending action in a terminal transaction")
+	}
+
+	requireNoError(t, state.Close())
+
+	state, err = Open(context.Background(), path)
+	if state != nil || !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Open(corrupt journal) = %#v, %v", state, err)
+	}
+}
+
+func TestValidateJournalRowsContainsSQLiteFailure(t *testing.T) {
+	t.Parallel()
+
+	state, err := Open(context.Background(), filepath.Join(privateTempDir(t), "state.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	requireNoError(t, state.database.Close())
+
+	if !errors.Is(validateJournalRows(context.Background(), state.database), ErrInvalidState) {
+		t.Fatal("validateJournalRows() exposed a SQLite failure")
+	}
+
+	requireNoError(t, state.anchor.close())
 }
 
 func TestOpenRejectsUnsupportedSchemaVersion(t *testing.T) {
