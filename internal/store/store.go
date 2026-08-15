@@ -59,6 +59,14 @@ func finishOpen(ctx context.Context, database *sql.DB, anchor *stateAnchor) (*St
 		return nil, err
 	}
 
+	err = ensureSchema(ctx, database)
+	if err != nil {
+		_ = database.Close()
+		_ = anchor.close()
+
+		return nil, err
+	}
+
 	if !anchor.valid() {
 		_ = database.Close()
 		_ = anchor.close()
