@@ -215,6 +215,7 @@ func migrationSnapshotBoundaryCases() []migrationSnapshotBoundaryCase {
 }
 
 func writeInvalidSnapshot(_ context.Context, _ *sql.DB, path string) error {
+	//nolint:gosec // The test callback receives only maniud's anchored private snapshot path.
 	err := os.WriteFile(path, []byte("invalid"), privateFileMode)
 	if err != nil {
 		return fmt.Errorf("write invalid snapshot: %w", err)
