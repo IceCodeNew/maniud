@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -12,7 +13,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const serviceLockPrefix = ".maniud-service-"
+const (
+	identityLengthBytes = 8
+	serviceLockPrefix   = ".maniud-service-"
+)
 
 // ServiceLock owns one project and service transaction lock while its Store
 // remains open. Callers must not use a ServiceLock concurrently with Close.
@@ -21,6 +25,8 @@ type ServiceLock struct {
 	descriptor int
 	name       string
 	identity   fileIdentity
+	store      *Store
+	lease      writerLease
 }
 
 // TryLockService acquires the project and service transaction lock without
@@ -45,7 +51,22 @@ func (store *Store) openServiceLock(
 	serviceName string,
 	wait bool,
 ) (*ServiceLock, error) {
-	if store == nil || store.anchor == nil {
+	return store.openServiceLockWith(ctx, projectName, serviceName, wait, newWriterLease)
+}
+
+func (store *Store) openServiceLockWith(
+	ctx context.Context,
+	projectName string,
+	serviceName string,
+	wait bool,
+	acquireLease func(context.Context, *sql.DB, [sha256.Size]byte) (writerLease, error),
+) (*ServiceLock, error) {
+	if !validServiceLockRequest(store, acquireLease) {
+		return nil, ErrInvalidState
+	}
+
+	serviceID, valid := serviceIdentity(projectName, serviceName)
+	if !valid {
 		return nil, ErrInvalidState
 	}
 
@@ -59,17 +80,37 @@ func (store *Store) openServiceLock(
 		return nil, err
 	}
 
+	serviceLock.store = store
+
 	err = serviceLock.acquire(ctx, wait)
 	if err != nil {
-		if serviceLock.descriptor >= 0 {
-			_ = unix.Close(serviceLock.descriptor)
-			serviceLock.descriptor = -1
-		}
+		_ = serviceLock.closeFilesystem()
 
 		return nil, err
 	}
 
+	serviceLock.lease, err = acquireLease(ctx, store.database, serviceID)
+	if err != nil {
+		_ = serviceLock.closeFilesystem()
+
+		return nil, err
+	}
+
+	if !serviceLock.Valid() {
+		releaseErr := releaseWriterLease(context.WithoutCancel(ctx), store.database, serviceLock.lease)
+		closeErr := serviceLock.closeFilesystem()
+
+		return nil, errors.Join(ErrInvalidState, releaseErr, closeErr)
+	}
+
 	return serviceLock, nil
+}
+
+func validServiceLockRequest(
+	store *Store,
+	acquireLease func(context.Context, *sql.DB, [sha256.Size]byte) (writerLease, error),
+) bool {
+	return store != nil && store.anchor != nil && acquireLease != nil
 }
 
 func openServiceLockFile(anchor *stateAnchor, name string) (*ServiceLock, error) {
@@ -89,6 +130,12 @@ func openServiceLockFile(anchor *stateAnchor, name string) (*ServiceLock, error)
 		descriptor: descriptor,
 		name:       name,
 		identity:   identity,
+		store:      nil,
+		lease: writerLease{
+			serviceID: [sha256.Size]byte{},
+			epoch:     0,
+			owner:     [writerOwnerBytes]byte{},
+		},
 	}
 
 	if !valid || !privateRegular(identity) || !serviceLock.Valid() {
@@ -102,19 +149,31 @@ func openServiceLockFile(anchor *stateAnchor, name string) (*ServiceLock, error)
 }
 
 func serviceLockName(databaseName, projectName, serviceName string) (string, bool) {
-	if databaseName == "" || projectName == "" || serviceName == "" {
+	digest, valid := identityDigest(databaseName, projectName, serviceName)
+	if !valid {
 		return "", false
 	}
 
-	identity := make([]byte, 0, 3*8+len(databaseName)+len(projectName)+len(serviceName))
-	for _, value := range []string{databaseName, projectName, serviceName} {
+	return serviceLockPrefix + hex.EncodeToString(digest[:]) + ".lock", true
+}
+
+func identityDigest(values ...string) ([sha256.Size]byte, bool) {
+	size := len(values) * identityLengthBytes
+	for _, value := range values {
+		if value == "" {
+			return [sha256.Size]byte{}, false
+		}
+
+		size += len(value)
+	}
+
+	identity := make([]byte, 0, size)
+	for _, value := range values {
 		identity = binary.BigEndian.AppendUint64(identity, uint64(len(value)))
 		identity = append(identity, value...)
 	}
 
-	digest := sha256.Sum256(identity)
-
-	return serviceLockPrefix + hex.EncodeToString(digest[:]) + ".lock", true
+	return sha256.Sum256(identity), true
 }
 
 // Valid reports whether the lock descriptor, its directory entry, and the
@@ -130,9 +189,31 @@ func (lock *ServiceLock) Valid() bool {
 		lock.anchor.validEntry(lock.name, lock.identity)
 }
 
-// Close releases the transaction lock and closes its retained descriptor.
-// It never removes the persistent lock entry.
+// Close clears the current SQLite writer owner before releasing the filesystem
+// lock. It never removes the lease row or persistent lock entry.
 func (lock *ServiceLock) Close() error {
+	if lock == nil || lock.descriptor < 0 {
+		return ErrUnavailable
+	}
+
+	valid := lock.Valid()
+
+	releaseErr := ErrInvalidState
+	if lock.store != nil {
+		releaseErr = releaseWriterLease(context.Background(), lock.store.database, lock.lease)
+	}
+
+	valid = valid && lock.Valid()
+
+	closeErr := lock.closeFilesystem()
+	if !valid {
+		return errors.Join(ErrInvalidState, releaseErr, closeErr)
+	}
+
+	return errors.Join(releaseErr, closeErr)
+}
+
+func (lock *ServiceLock) closeFilesystem() error {
 	if lock == nil || lock.descriptor < 0 {
 		return ErrUnavailable
 	}
@@ -173,7 +254,7 @@ func (lock *ServiceLock) acquire(ctx context.Context, wait bool) error {
 	}
 
 	if !lock.Valid() {
-		_ = lock.Close()
+		_ = lock.closeFilesystem()
 
 		return ErrInvalidState
 	}

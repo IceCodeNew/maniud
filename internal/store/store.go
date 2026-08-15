@@ -23,6 +23,8 @@ var (
 	ErrInvalidPath = errors.New("state path is invalid")
 	// ErrInvalidState reports unsafe, corrupt, or replaced managed state.
 	ErrInvalidState = errors.New("managed state is invalid")
+	// ErrOwnershipLost reports a stale writer lease or a failed fence proof.
+	ErrOwnershipLost = errors.New("writer ownership is lost")
 	// ErrUnavailable reports a bounded lock or SQLite availability failure.
 	ErrUnavailable = errors.New("managed state is unavailable")
 )

@@ -135,7 +135,9 @@ func TestServiceLockDetectsReplacement(t *testing.T) {
 		t.Fatal("service lock remained valid after entry replacement")
 	}
 
-	requireNoError(t, serviceLock.Close())
+	if !errors.Is(serviceLock.Close(), ErrInvalidState) {
+		t.Fatal("ServiceLock.Close() accepted a replaced entry")
+	}
 }
 
 func TestServiceLockRejectsReplacementDuringAcquisition(t *testing.T) {
