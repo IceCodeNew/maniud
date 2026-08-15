@@ -65,7 +65,7 @@ func UnixEndpoint(socketPath string) (Endpoint, error) {
 	}
 	baseURL := url.URL{ //nolint:exhaustruct // A request base intentionally has no path, query, user, or fragment.
 		Scheme: httpScheme,
-		Host:   "docker.invalid",
+		Host:   dummyDockerHost,
 	}
 
 	return Endpoint{
