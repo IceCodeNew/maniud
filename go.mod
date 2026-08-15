@@ -6,6 +6,7 @@ toolchain go1.26.6
 
 require (
 	github.com/compose-spec/compose-go/v2 v2.14.0
+	github.com/regclient/regclient v0.11.5
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
 )
 
@@ -17,9 +18,9 @@ require (
 	github.com/mattn/go-shellwords v1.0.12 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
-	github.com/sirupsen/logrus v1.9.1 // indirect
+	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
