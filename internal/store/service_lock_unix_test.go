@@ -177,6 +177,7 @@ func TestServiceLockRejectsInvalidIdentityAndClosedDescriptor(t *testing.T) {
 
 	serviceLock := requireTryServiceLock(t, state, "project", "api")
 	requireNoError(t, unix.Close(serviceLock.descriptor))
+	serviceLock.descriptor = int(^uint(0) >> 1)
 
 	if serviceLock.Valid() {
 		t.Fatal("service lock remained valid after descriptor close")
