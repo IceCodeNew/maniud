@@ -5,12 +5,14 @@ import (
 	"context"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/registry"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
+	credentialvalue "github.com/IceCodeNew/maniud/internal/registry/credential"
 )
 
 type remoteRepository interface {
@@ -19,15 +21,11 @@ type remoteRepository interface {
 }
 
 // Credentials contains credentials for one registry.
-type Credentials struct {
-	Username     string
-	Password     string
-	RefreshToken string
-	AccessToken  string
-}
+type Credentials = credentialvalue.Value
 
 // CredentialProvider returns explicit credentials for a normalized registry
-// authority. Supplying one replaces Docker configuration lookup.
+// authority. Supplying one replaces Docker configuration lookup. Results must
+// contain valid UTF-8 and no more than 16 KiB across all fields.
 type CredentialProvider func(context.Context, string) (Credentials, error)
 
 // Options configures a registry resolver.
@@ -64,6 +62,29 @@ func NewResolver(options Options) *Resolver {
 
 func newResolver(factory repositoryFactory, credentials CredentialProvider) *Resolver {
 	return &Resolver{credentials: credentials, repositories: factory}
+}
+
+// Credentials returns the ephemeral credential for one canonical image
+// reference. Callers must not persist or log the result.
+func (resolver *Resolver) Credentials(
+	ctx context.Context,
+	reference imageref.Reference,
+) (Credentials, error) {
+	if resolver == nil || reference.Registry() == "" {
+		return Credentials{}, ErrUnavailable
+	}
+
+	value, err := resolver.credential(ctx, reference.Registry())
+	if err != nil {
+		return Credentials{}, err
+	}
+
+	return Credentials{
+		Username:     value.username,
+		Password:     value.password,
+		RefreshToken: value.refreshToken,
+		AccessToken:  value.accessToken,
+	}, nil
 }
 
 // Resolve resolves source for platform and verifies its manifest and image config.
@@ -276,12 +297,31 @@ func (resolver *Resolver) credential(ctx context.Context, registry string) (cred
 		return credential{}, ErrUnavailable
 	}
 
+	if !validCredentials(value) {
+		return credential{}, ErrUnavailable
+	}
+
 	return credential{
 		username:     value.Username,
 		password:     value.Password,
 		refreshToken: value.RefreshToken,
 		accessToken:  value.AccessToken,
 	}, nil
+}
+
+func validCredentials(value Credentials) bool {
+	values := []string{value.Username, value.Password, value.RefreshToken, value.AccessToken}
+	total := 0
+
+	for _, item := range values {
+		if !utf8.ValidString(item) {
+			return false
+		}
+
+		total += len(item)
+	}
+
+	return total <= maximumCredentialBytes
 }
 
 func normalizePlatform(value domain.Platform) (imagePlatform, error) {

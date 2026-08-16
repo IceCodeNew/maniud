@@ -427,6 +427,129 @@ func TestResolveCredentialProviderCancellation(t *testing.T) {
 	}
 }
 
+func TestCredentialsReturnsEphemeralProviderValue(t *testing.T) {
+	t.Parallel()
+
+	want := Credentials{
+		Username:     testUsername,
+		Password:     testPassword,
+		RefreshToken: testRefreshToken,
+		AccessToken:  testAccessToken,
+	}
+	source := sourceForTest(t, "example.com/team/api:1")
+
+	reference, err := source.Pin(domain.Hash([]byte("credential reference")))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	var gotRegistry string
+
+	resolver := newResolver(nil, func(_ context.Context, registryName string) (Credentials, error) {
+		gotRegistry = registryName
+
+		return want, nil
+	})
+
+	got, err := resolver.Credentials(context.Background(), reference)
+	if err != nil || got != want || gotRegistry != source.Registry() {
+		t.Fatalf("Credentials() = %#v, %v", got, err)
+	}
+}
+
+func TestCredentialsContainsInvalidProviderResults(t *testing.T) {
+	t.Parallel()
+
+	source := sourceForTest(t, "example.com/team/api:1")
+
+	reference, err := source.Pin(domain.Hash([]byte("credential validation")))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		resolver *Resolver
+		want     error
+	}{
+		{name: "nil resolver", resolver: nil, want: ErrUnavailable},
+		{
+			name: "provider failure",
+			resolver: newResolver(nil, func(context.Context, string) (Credentials, error) {
+				return Credentials{}, ErrProtocol
+			}),
+			want: ErrUnavailable,
+		},
+		{
+			name: "invalid UTF-8",
+			resolver: newResolver(nil, func(context.Context, string) (Credentials, error) {
+				return Credentials{
+					Username: "", Password: string([]byte{0xff}), RefreshToken: "", AccessToken: "",
+				}, nil
+			}),
+			want: ErrUnavailable,
+		},
+		{
+			name: "oversized",
+			resolver: newResolver(nil, func(context.Context, string) (Credentials, error) {
+				return Credentials{
+					Username: "", Password: strings.Repeat("x", maximumCredentialBytes+1),
+					RefreshToken: "", AccessToken: "",
+				}, nil
+			}),
+			want: ErrUnavailable,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := test.resolver.Credentials(context.Background(), reference)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Credentials() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCredentialsPreservesCancellationAndSupportsAnonymousAccess(t *testing.T) {
+	t.Parallel()
+
+	source := sourceForTest(t, "example.com/team/api:1")
+
+	reference, err := source.Pin(domain.Hash([]byte("credential cancellation")))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	empty, err := newResolver(nil, nil).Credentials(context.Background(), reference)
+	if err != nil || empty != (Credentials{}) {
+		t.Fatalf("Credentials(anonymous) = %#v, %v", empty, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cancelled := newResolver(nil, func(context.Context, string) (Credentials, error) {
+		return Credentials{}, context.Canceled
+	})
+
+	_, err = cancelled.Credentials(ctx, reference)
+	if !errors.Is(err, ErrCancelled) {
+		t.Fatalf("Credentials(cancelled) error = %v", err)
+	}
+}
+
+func TestCredentialsRejectsEmptyReference(t *testing.T) {
+	t.Parallel()
+
+	_, err := newResolver(nil, nil).Credentials(context.Background(), imageref.Reference{})
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Credentials(empty reference) error = %v", err)
+	}
+}
+
 func withPlatform(value descriptor, platform domain.Platform) descriptor {
 	value.Platform = &imagePlatform{
 		OS:           platform.OS,
