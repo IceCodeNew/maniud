@@ -121,7 +121,6 @@ for command_name in \
 done
 require_equal 'Go' "$(go env GOVERSION)" "go$GO_VERSION"
 require_equal 'Go CGO default' "$(go env CGO_ENABLED)" '0'
-require_equal 'prek' "$(mise current prek)" "$PREK_VERSION"
 require_equal 'golangci-lint' "$(mise current golangci-lint)" "$GOLANGCI_LINT_VERSION"
 require_equal 'Capslock' \
   "$(mise current go:github.com/google/capslock/cmd/capslock)" "${CAPSLOCK_VERSION#v}"

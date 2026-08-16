@@ -306,8 +306,7 @@ install_golang() {
 install_mise_tools() {
   mise use --global uv
   mise use --global \
-    ast-grep bun node@lts shellcheck shfmt \
-    "prek@$PREK_VERSION" \
+    ast-grep bun node@lts prek shellcheck shfmt \
     "golangci-lint@$GOLANGCI_LINT_VERSION" \
     "go:github.com/google/capslock/cmd/capslock@$CAPSLOCK_VERSION" \
     "go:go.uber.org/nilaway/cmd/nilaway@$NILAWAY_VERSION" \

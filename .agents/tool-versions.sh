@@ -9,8 +9,6 @@
 # toolchain directive as the single version source.
 # renovate: datasource=golang-version depName=go
 readonly GO_VERSION='1.26.6'
-# renovate: datasource=github-releases depName=j178/prek extractVersion=^v(?<version>.*)$
-readonly PREK_VERSION='0.4.13'
 # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.*)$
 readonly GOLANGCI_LINT_VERSION='2.12.2'
 # renovate: datasource=github-releases depName=google/capslock
