@@ -15,12 +15,10 @@
       "description": "Update explicitly annotated tool versions",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.agents/tool-versions\\.sh$/",
-        "/^prek\\.toml$/"
+        "/^\\.agents/tool-versions\\.sh$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nreadonly [A-Z0-9_]+='(?<currentValue>[^']+)'",
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nminimum_prek_version = \"(?<currentValue>[^\"]+)\""
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nreadonly [A-Z0-9_]+='(?<currentValue>[^']+)'"
       ]
     },
     {

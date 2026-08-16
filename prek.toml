@@ -1,7 +1,5 @@
 #:schema https://www.schemastore.org/prek.json
 
-# renovate: datasource=github-releases depName=j178/prek extractVersion=^v(?<version>.*)$
-minimum_prek_version = "0.4.13"
 default_install_hook_types = ["pre-commit", "pre-push"]
 
 # Cross-platform path, syntax, and repository-integrity checks. Most hooks are
@@ -130,6 +128,7 @@ stages = ["pre-push", "manual"]
 
 # Run every package test once, after static and dependency checks, and enforce
 # exact statement coverage for production packages from that same execution.
+# CI opts into the race detector; collaborator hooks keep the cheaper default.
 [[repos.hooks]]
 id = "go-coverage"
 name = "Go tests and statement coverage"
@@ -139,7 +138,13 @@ args = ['''
 set -euo pipefail
 profile="$(mktemp)"
 trap 'rm -f "$profile"' EXIT
-CGO_ENABLED=0 go test -count=1 -covermode=atomic -coverpkg=./internal/... -coverprofile="$profile" ./...
+test_args=(-count=1 -covermode=atomic -coverpkg=./internal/... -coverprofile="$profile")
+test_cgo=0
+if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
+  test_args=(-race "${test_args[@]}")
+  test_cgo=1
+fi
+CGO_ENABLED="$test_cgo" go test "${test_args[@]}" ./...
 report="$(go tool cover -func="$profile")"
 printf '%s\n' "$report"
 read -r covered total < <(
