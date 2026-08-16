@@ -1,29 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
+# shellcheck source=.agents/tool-versions.sh
+source "$repo_root/.agents/tool-versions.sh"
 
 readonly GIT_USER_NAME='IceCodeNew'
 readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
 readonly GIT_SIGNING_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/commit-signing-key"
 readonly GIT_ALLOWED_SIGNERS="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git/allowed-signers"
-readonly GO_VERSION='1.26.6'
-readonly PREK_VERSION='0.4.13'
-readonly GOLANGCI_LINT_VERSION='2.12.2'
-readonly CAPSLOCK_VERSION='v0.3.2'
-readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'
-readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
-readonly GOVULNCHECK_VERSION='v1.7.0'
-readonly DOCKER_VERSION='29.7.2'
-readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
-readonly CONTAINERD_VERSION='2.3.3'
-readonly PODMAN_APT_VERSION='4.3.1+ds1-8+deb12u1+b3'
-readonly NERDCTL_BUILDKIT_VERSION='0.31.2'
-readonly NERDCTL_RUNC_VERSION='1.5.1'
 readonly CONTAINERD_CONFIG_PATH='/etc/maniud/containerd.toml'
 readonly CONTAINERD_ADDRESS='/run/maniud-containerd/containerd.sock'
 readonly DOCKER_GROUP='docker'
-readonly NERDCTL_RUNTIME_PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+readonly NERDCTL_BIN_DIR='/usr/local/bin'
+readonly NERDCTL_RUNTIME_PATH='/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin'
 
 require_equal() {
   local label="$1"
@@ -38,11 +30,11 @@ require_equal() {
 }
 
 run_nerdctl() {
-  sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$HOME/.local/bin/nerdctl" "$@"
+  sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$NERDCTL_BIN_DIR/nerdctl" "$@"
 }
 
 probe_nerdctl() {
-  timeout 1s sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$HOME/.local/bin/nerdctl" info
+  timeout 1s sudo env "PATH=$NERDCTL_RUNTIME_PATH" "$NERDCTL_BIN_DIR/nerdctl" info
 }
 
 start_supervised_runtimes() {
@@ -55,7 +47,7 @@ start_supervised_runtimes() {
   fi
   if ! grep -Fq 'amp-svc-nerdctl-containerd.service' <<<"$running_services"; then
     amp orb service start nerdctl-containerd --command \
-      "sudo env PATH=$NERDCTL_RUNTIME_PATH $HOME/.local/bin/containerd --config $CONTAINERD_CONFIG_PATH"
+      "sudo env PATH=$NERDCTL_RUNTIME_PATH $NERDCTL_BIN_DIR/containerd --config $CONTAINERD_CONFIG_PATH"
   fi
 }
 
@@ -82,6 +74,20 @@ git config --global commit.gpgsign true
 git config --global gpg.format ssh
 git config --global gpg.ssh.program ssh-keygen
 git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS"
+
+for required_path in \
+  /usr/local/bin/buildctl \
+  /usr/local/bin/buildkitd \
+  /usr/local/bin/containerd \
+  /usr/local/bin/containerd-shim-runc-v2 \
+  /usr/local/bin/nerdctl \
+  /usr/local/bin/runc \
+  /usr/local/libexec/cni/bridge; do
+  if [[ ! -x "$required_path" ]]; then
+    printf 'The nerdctl full bundle is missing %s; rerun .agents/setup.\n' "$required_path" >&2
+    exit 1
+  fi
+done
 
 for command_name in \
   ast-grep \
@@ -125,31 +131,12 @@ require_equal 'depaware' \
   "$(mise current go:github.com/tailscale/depaware)" "${DEPAWARE_VERSION#v}"
 require_equal 'govulncheck' \
   "$(mise current go:golang.org/x/vuln/cmd/govulncheck)" "${GOVULNCHECK_VERSION#v}"
+require_equal 'nerdctl full bundle' \
+  "$(/usr/local/bin/nerdctl --version | awk '{print $3}')" "$NERDCTL_VERSION"
 if ! docker compose version >/dev/null 2>&1; then
   printf '%s\n' 'Docker Compose development conformance oracle is missing; rerun .agents/setup.' >&2
   exit 1
 fi
-require_equal \
-  'Docker package' \
-  "$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null)" \
-  "$DOCKER_APT_VERSION"
-require_equal \
-  'Podman package' \
-  "$(dpkg-query -W -f='${Version}' podman 2>/dev/null)" \
-  "$PODMAN_APT_VERSION"
-require_equal \
-  'nerdctl containerd' \
-  "$(containerd --version | awk '{print $3}')" \
-  "v$CONTAINERD_VERSION"
-require_equal \
-  'nerdctl BuildKit' \
-  "$(buildctl --version | awk '{print $3}')" \
-  "v$NERDCTL_BUILDKIT_VERSION"
-require_equal \
-  'nerdctl runc' \
-  "$(runc --version | sed -n '1s/^runc version //p')" \
-  "$NERDCTL_RUNC_VERSION"
-
 if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
   printf 'The current shell is missing the %s group; start a new shell after running .agents/setup.\n' \
     "$DOCKER_GROUP" >&2
@@ -184,8 +171,6 @@ if [[ "$nerdctl_ready" != true ]]; then
   exit 1
 fi
 
-require_equal 'Docker client' "$(docker version --format '{{.Client.Version}}')" "$DOCKER_VERSION"
-require_equal 'Docker server' "$(docker version --format '{{.Server.Version}}')" "$DOCKER_VERSION"
 if docker info --format '{{json .SecurityOptions}}' | grep -Fq 'name=rootless'; then
   printf '%s\n' 'Docker unexpectedly connected to a rootless daemon.' >&2
   exit 1
@@ -213,9 +198,15 @@ IFS=$'\t' read -r \
   nerdctl_buildkit_version \
   nerdctl_containerd_version \
   nerdctl_runc_version <<<"$nerdctl_runtime_versions"
-require_equal 'active nerdctl BuildKit' "$nerdctl_buildkit_version" "v$NERDCTL_BUILDKIT_VERSION"
-require_equal 'active nerdctl containerd' "$nerdctl_containerd_version" "v$CONTAINERD_VERSION"
-require_equal 'active nerdctl runc' "$nerdctl_runc_version" "$NERDCTL_RUNC_VERSION"
+for component_version in \
+  "$nerdctl_buildkit_version" \
+  "$nerdctl_containerd_version" \
+  "$nerdctl_runc_version"; do
+  if [[ -z "$component_version" ]]; then
+    printf '%s\n' 'The active nerdctl runtime reported an empty component version.' >&2
+    exit 1
+  fi
+done
 
 if [[ ! -S /var/run/docker.sock ]] \
   || [[ "$(stat -c '%a:%U:%G' /var/run/docker.sock)" != "660:root:$DOCKER_GROUP" ]]; then
