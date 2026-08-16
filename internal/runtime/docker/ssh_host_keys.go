@@ -10,7 +10,7 @@ import (
 )
 
 func loadHostKeyCallback(configured []string) (ssh.HostKeyCallback, error) {
-	files, err := knownHostsFiles(configured, os.UserHomeDir)
+	files, err := knownHostsFiles(configured, os.UserHomeDir, os.Stat)
 	if err != nil || len(files) == 0 {
 		return nil, ErrInvalidEndpoint
 	}
@@ -23,7 +23,11 @@ func loadHostKeyCallback(configured []string) (ssh.HostKeyCallback, error) {
 	return callback, nil
 }
 
-func knownHostsFiles(configured []string, userHomeDir func() (string, error)) ([]string, error) {
+func knownHostsFiles(
+	configured []string,
+	userHomeDir func() (string, error),
+	stat func(string) (os.FileInfo, error),
+) ([]string, error) {
 	if len(configured) > maximumSSHFiles {
 		return nil, ErrInvalidEndpoint
 	}
@@ -41,7 +45,7 @@ func knownHostsFiles(configured []string, userHomeDir func() (string, error)) ([
 
 	files := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		info, statErr := os.Stat(candidate)
+		info, statErr := stat(candidate)
 		if errors.Is(statErr, os.ErrNotExist) {
 			continue
 		}

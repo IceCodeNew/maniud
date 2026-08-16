@@ -350,14 +350,14 @@ func TestSSHHostKeyAndValueValidation(t *testing.T) {
 		t.Fatalf("loadHostKeyCallback(too many) error = %v", err)
 	}
 
-	_, err = knownHostsFiles(tooMany, os.UserHomeDir)
+	_, err = knownHostsFiles(tooMany, os.UserHomeDir, os.Stat)
 	if !errors.Is(err, ErrInvalidEndpoint) {
 		t.Fatalf("knownHostsFiles(too many) error = %v", err)
 	}
 
 	_, err = knownHostsFiles(nil, func() (string, error) {
 		return "", io.ErrUnexpectedEOF
-	})
+	}, os.Stat)
 	if !errors.Is(err, ErrInvalidEndpoint) {
 		t.Fatalf("knownHostsFiles(home failure) error = %v", err)
 	}
@@ -369,7 +369,7 @@ func TestSSHHostKeyAndValueValidation(t *testing.T) {
 		t.Fatalf("os.MkdirAll(known_hosts directory) error = %v", err)
 	}
 
-	_, err = knownHostsFiles(nil, func() (string, error) { return home, nil })
+	_, err = knownHostsFiles(nil, func() (string, error) { return home, nil }, os.Stat)
 	if !errors.Is(err, ErrInvalidEndpoint) {
 		t.Fatalf("knownHostsFiles(directory) error = %v", err)
 	}
@@ -399,9 +399,35 @@ func TestSSHDefaultKnownHostsIncludesRegularHomeFile(t *testing.T) {
 		t.Fatalf("os.WriteFile(known_hosts) error = %v", err)
 	}
 
-	files, err := knownHostsFiles(nil, func() (string, error) { return home, nil })
+	files, err := knownHostsFiles(nil, func() (string, error) { return home, nil }, os.Stat)
 	if err != nil || len(files) == 0 || files[0] != knownHosts {
 		t.Fatalf("knownHostsFiles() = %v, %v", files, err)
+	}
+}
+
+func TestSSHDefaultKnownHostsRejectsFileDiscoveryFailure(t *testing.T) {
+	t.Parallel()
+
+	_, err := knownHostsFiles(
+		nil,
+		func() (string, error) { return "/home/operator", nil },
+		func(string) (os.FileInfo, error) { return nil, io.ErrUnexpectedEOF },
+	)
+	if !errors.Is(err, ErrInvalidEndpoint) {
+		t.Fatalf("knownHostsFiles(stat failure) error = %v", err)
+	}
+}
+
+func TestSSHDefaultKnownHostsIgnoresMissingFiles(t *testing.T) {
+	t.Parallel()
+
+	files, err := knownHostsFiles(
+		nil,
+		func() (string, error) { return "/home/operator", nil },
+		func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+	)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("knownHostsFiles(missing files) = %v, %v", files, err)
 	}
 }
 
