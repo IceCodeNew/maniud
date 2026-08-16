@@ -158,7 +158,7 @@ func TestObserveWorkloadMapsDockerProbe(t *testing.T) {
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-				if request.URL.Path != "/v1.55/containers/example-api/json" {
+				if request.URL.Path != "/v1.54/containers/example-api/json" {
 					t.Errorf("request path = %q", request.URL.Path)
 				}
 

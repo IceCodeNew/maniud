@@ -86,8 +86,18 @@ func (client *Client) CloseIdleConnections() {
 }
 
 func (client *Client) request(ctx context.Context, method, path string) (*http.Response, error) {
+	return client.requestQuery(ctx, method, path, nil)
+}
+
+func (client *Client) requestQuery(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+) (*http.Response, error) {
 	endpoint := client.baseURL
 	endpoint.Path = path
+	endpoint.RawQuery = query.Encode()
 
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), nil)
 	if err != nil {
