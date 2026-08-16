@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	testProjectName = "example"
-	testServiceName = "api"
-	eventJournal    = "journal"
+	testProjectName       = "example"
+	testServiceName       = "api"
+	testOperatingSystem   = "linux"
+	testArchitectureAMD64 = "amd64"
+	eventJournal          = "journal"
 )
 
 var errTestBoundary = errors.New("test boundary failed")
@@ -104,8 +106,8 @@ func testExecutionEvidence() RuntimeEvidence {
 	return RuntimeEvidence{
 		Kind: domain.RuntimeDocker,
 		Platform: domain.Platform{
-			OS:           "linux",
-			Architecture: "amd64",
+			OS:           testOperatingSystem,
+			Architecture: testArchitectureAMD64,
 			Variant:      "",
 		},
 		Digest: domain.Hash([]byte("execution")),

@@ -82,7 +82,7 @@ func assertNewApplyPlan(
 	t.Helper()
 
 	valid := plan.Kind == test.want && plan.Project == testProjectName && plan.Service == testServiceName &&
-		plan.Runtime == domain.RuntimeDocker && plan.Platform.OS == "linux" &&
+		plan.Runtime == domain.RuntimeDocker && plan.Platform.OS == testOperatingSystem &&
 		plan.Image.Reference == "example.com/team/api:1@"+plan.Image.ReferenceDigest.String() &&
 		plan.Source != (domain.Digest{}) && plan.Desired != (domain.Digest{}) &&
 		plan.Observation == observation

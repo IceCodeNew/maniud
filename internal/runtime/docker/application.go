@@ -27,7 +27,10 @@ var (
 	ErrUnsupportedWorkload = errors.New("docker workload is unsupported")
 )
 
-var _ application.Runtime = (*Client)(nil)
+var (
+	_ application.Runtime      = (*Client)(nil)
+	_ application.ImageRuntime = (*Client)(nil)
+)
 
 // Inspect returns Docker daemon identity and platform evidence for apply
 // planning.

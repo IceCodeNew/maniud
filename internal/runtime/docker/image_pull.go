@@ -39,12 +39,6 @@ const (
 // credentials, image references, endpoints, or upstream diagnostics.
 var ErrImagePull = errors.New("docker image pull failed")
 
-// RegistryAuthenticator provides one ephemeral Docker registry-auth value.
-// Implementations must not persist or log the returned value.
-type RegistryAuthenticator interface {
-	Credentials(ctx context.Context, reference imageref.Reference) (credential.Value, error)
-}
-
 type imagePullMessage struct {
 	Stream       string               `json:"stream,omitempty"`
 	Status       string               `json:"status,omitempty"`
@@ -62,7 +56,7 @@ type imagePullMessage struct {
 func (client *Client) PullImage(
 	ctx context.Context,
 	expected domain.ImageIdentity,
-	authenticator RegistryAuthenticator,
+	authenticator credential.Provider,
 ) error {
 	if client == nil {
 		return ErrUnsupportedWorkload
@@ -171,7 +165,7 @@ func (client *Client) imagePullHTTPClient() *http.Client {
 
 func imagePullAuth(
 	ctx context.Context,
-	authenticator RegistryAuthenticator,
+	authenticator credential.Provider,
 	reference imageref.Reference,
 ) (string, error) {
 	if authenticator == nil {

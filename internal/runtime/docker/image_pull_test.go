@@ -460,7 +460,7 @@ func assertImagePullError(
 	t *testing.T,
 	client *Client,
 	expected domain.ImageIdentity,
-	authenticator RegistryAuthenticator,
+	authenticator credential.Provider,
 	want error,
 ) {
 	t.Helper()

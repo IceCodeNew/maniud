@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
@@ -27,7 +28,7 @@ func TestProbeImageProvesResolvedPlatformIdentity(t *testing.T) {
 	}))
 
 	probe, err := client.ProbeImage(context.Background(), expected)
-	if err != nil || !probe.Matches(expected) || probe.State != ImageProbeObserved {
+	if err != nil || !probe.Matches(expected) || probe.State != application.ImageProbeObserved {
 		t.Fatalf("ProbeImage() = %#v, %v", probe, err)
 	}
 }
@@ -94,7 +95,7 @@ func TestProbeImageSeparatesValidAbsenceFromUnknown(t *testing.T) {
 
 			probe, err := client.ProbeImage(context.Background(), expected)
 			if test.wantMissing {
-				if err != nil || probe.State != ImageProbeMissing || probe.Matches(expected) {
+				if err != nil || probe.State != application.ImageProbeMissing || probe.Matches(expected) {
 					t.Fatalf("ProbeImage() = %#v, %v", probe, err)
 				}
 
@@ -282,8 +283,8 @@ func testDockerVersion() Version {
 	}
 }
 
-func emptyImageProbe() ImageProbe {
-	return ImageProbe{State: ImageProbeUnknown, Image: emptyImage()}
+func emptyImageProbe() application.ImageProbe {
+	return application.ImageProbe{State: application.ImageProbeUnknown, Image: emptyImage()}
 }
 
 func assertImageProbeRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) {
