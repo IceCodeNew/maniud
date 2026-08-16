@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	containertypes "github.com/moby/moby/api/types/container"
+
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
@@ -28,8 +30,9 @@ var (
 )
 
 var (
-	_ application.Runtime      = (*Client)(nil)
-	_ application.ImageRuntime = (*Client)(nil)
+	_ application.Runtime               = (*Client)(nil)
+	_ application.ImageRuntime          = (*Client)(nil)
+	_ application.WorkloadEffectRuntime = (*Client)(nil)
 )
 
 // Inspect returns Docker daemon identity and platform evidence for apply
@@ -120,6 +123,7 @@ func validNegotiatedVersion(version Version) bool {
 func validDockerWorkload(version Version, workload domain.DesiredWorkload) bool {
 	return validOwnershipName(workload.ServiceName) && validContainerName(workload.ContainerName) &&
 		validDockerImage(version, workload.Image) && validWorkloadDigests(workload) &&
+		len(workload.Entrypoint)+len(workload.Command) > 0 &&
 		validProcessArguments(workload.Entrypoint) && validProcessArguments(workload.Command)
 }
 
@@ -195,11 +199,15 @@ func workloadObservation(
 			Entrypoint:       workload.Entrypoint,
 			Command:          workload.Command,
 			NetworkMode:      dockerNetworkMode,
-			Service:          "",
-			Transaction:      "",
-			DesiredState:     domain.Digest{},
-			Reference:        domain.Digest{},
-			AllowedStates:    nil,
+			RestartPolicy: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyDisabled,
+				MaximumRetryCount: 0,
+			},
+			Service:       "",
+			Transaction:   "",
+			DesiredState:  domain.Digest{},
+			Reference:     domain.Digest{},
+			AllowedStates: nil,
 		}
 
 		return application.WorkloadObservation{

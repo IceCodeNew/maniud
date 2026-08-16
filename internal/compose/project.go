@@ -11,7 +11,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
-const effectiveWorkloadVersion = 2
+const effectiveWorkloadVersion = 3
 
 // ImageSource returns the normalized registry source for one active service.
 func (project Project) ImageSource(serviceName string) (imageref.Source, error) {
@@ -38,18 +38,41 @@ func (project Project) Workload(
 		return domain.DesiredWorkload{}, ErrInvalidSource
 	}
 
+	image.Entrypoint = slices.Clone(image.Entrypoint)
+	image.Command = slices.Clone(image.Command)
+
 	workload := domain.DesiredWorkload{
 		ServiceName:     selected.Name,
 		ContainerName:   selected.ContainerName,
 		Image:           image,
-		Entrypoint:      slices.Clone(selected.Entrypoint),
-		Command:         slices.Clone(selected.Command),
+		Entrypoint:      effectiveProcessArguments(selected.Entrypoint, image.Entrypoint),
+		Command:         effectiveCommandArguments(selected, image.Command),
 		SourceDigest:    project.sourceDigest,
 		EffectiveDigest: domain.Digest{},
 	}
 	workload.EffectiveDigest = domain.Hash(effectiveWorkloadBytes(workload))
 
 	return workload, nil
+}
+
+func effectiveProcessArguments(override, imageDefault []string) []string {
+	if override == nil {
+		return slices.Clone(imageDefault)
+	}
+
+	return slices.Clone(override)
+}
+
+func effectiveCommandArguments(service composetypes.ServiceConfig, imageDefault []string) []string {
+	if service.Command != nil {
+		return slices.Clone(service.Command)
+	}
+
+	if service.Entrypoint != nil {
+		return []string{}
+	}
+
+	return slices.Clone(imageDefault)
 }
 
 func (project Project) service(serviceName string) (composetypes.ServiceConfig, error) {

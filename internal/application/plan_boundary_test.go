@@ -46,13 +46,13 @@ func transactionMismatchTests(exact store.Transaction) []mismatchTest {
 			value.Runtime = domain.RuntimePodman
 		}),
 		mismatchTransaction("source", exact, func(value *store.Transaction) {
-			value.SourceDigest = domain.Hash([]byte("other"))
+			value.SourceDigest = domain.Hash([]byte(testOtherValue))
 		}),
 		mismatchTransaction("desired", exact, func(value *store.Transaction) {
-			value.EffectiveDigest = domain.Hash([]byte("other"))
+			value.EffectiveDigest = domain.Hash([]byte(testOtherValue))
 		}),
 		mismatchTransaction("execution", exact, func(value *store.Transaction) {
-			value.ExecutionDigest = domain.Hash([]byte("other"))
+			value.ExecutionDigest = domain.Hash([]byte(testOtherValue))
 		}),
 		mismatchTransaction("terminal", exact, func(value *store.Transaction) {
 			value.State = store.TransactionSucceeded

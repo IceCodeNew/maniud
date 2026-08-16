@@ -23,6 +23,7 @@ const (
 	containerIDHexBytes        = 64
 	dockerManifestMediaType    = "application/vnd.docker.distribution.manifest.v2+json"
 	ociManifestMediaType       = "application/vnd.oci.image.manifest.v1+json"
+	containerNameQueryKey      = "name"
 )
 
 var (
@@ -52,6 +53,7 @@ type Container struct {
 	Entrypoint       []string
 	Command          []string
 	NetworkMode      string
+	RestartPolicy    containertypes.RestartPolicy
 	State            ContainerState
 	Running          bool
 	Ownership        domain.WorkloadOwnership
@@ -68,6 +70,7 @@ type ContainerExpectation struct {
 	Entrypoint       []string
 	Command          []string
 	NetworkMode      string
+	RestartPolicy    containertypes.RestartPolicy
 	Service          string
 	Transaction      string
 	DesiredState     domain.Digest
@@ -103,7 +106,8 @@ func (container Container) matchesConfiguration(expectation ContainerExpectation
 		container.PlatformManifest == expectation.PlatformManifest &&
 		equalStringSlice(container.Entrypoint, expectation.Entrypoint) &&
 		equalStringSlice(container.Command, expectation.Command) &&
-		container.NetworkMode == expectation.NetworkMode
+		container.NetworkMode == expectation.NetworkMode &&
+		container.RestartPolicy == expectation.RestartPolicy
 }
 
 func equalStringSlice(left, right []string) bool {
@@ -140,7 +144,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 		return ContainerProbe{State: ContainerProbeMissing, Container: emptyContainer}, nil
 	}
 
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		return unknown, ErrProtocol
 	}
 
@@ -158,7 +162,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 }
 
 func validNotFoundResponse(response *http.Response) bool {
-	if !isJSON(response.Header.Get("Content-Type")) {
+	if !isJSON(response.Header.Get(contentTypeHeader)) {
 		return false
 	}
 
@@ -199,6 +203,7 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 	}
 
 	ownership := decodeOwnership(payload.Config.Labels, imageConfig, platformManifest)
+	restartPolicy := normalizeRestartPolicy(payload.HostConfig.RestartPolicy)
 
 	return Container{
 		ID:               payload.ID,
@@ -209,6 +214,7 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 		Entrypoint:       slices.Clone(payload.Config.Entrypoint),
 		Command:          slices.Clone(payload.Config.Cmd),
 		NetworkMode:      string(payload.HostConfig.NetworkMode),
+		RestartPolicy:    restartPolicy,
 		State:            state,
 		Running:          payload.State.Running,
 		Ownership:        ownership,
@@ -230,7 +236,27 @@ func validContainerPayload(reference string, payload containertypes.InspectRespo
 	return validContainerID(payload.ID) && validContainerName(name) && payload.Name == "/"+name &&
 		matchesContainerReference(reference, payload) &&
 		validOpaqueValue(payload.Config.Image, maximumImageReferenceBytes) &&
-		validOpaqueValue(string(payload.HostConfig.NetworkMode), maximumNetworkModeBytes)
+		validContainerHostConfig(payload.HostConfig)
+}
+
+func validContainerHostConfig(config *containertypes.HostConfig) bool {
+	return validOpaqueValue(string(config.NetworkMode), maximumNetworkModeBytes) &&
+		validRestartPolicy(config.RestartPolicy)
+}
+
+func validRestartPolicy(policy containertypes.RestartPolicy) bool {
+	return containertypes.ValidateRestartPolicy(policy) == nil
+}
+
+func normalizeRestartPolicy(policy containertypes.RestartPolicy) containertypes.RestartPolicy {
+	if policy.Name == "" {
+		return containertypes.RestartPolicy{
+			Name:              containertypes.RestartPolicyDisabled,
+			MaximumRetryCount: 0,
+		}
+	}
+
+	return policy
 }
 
 func validContainerReference(reference string) bool {

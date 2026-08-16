@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -93,6 +94,7 @@ func TestDecodeManifestRejectsInvalidDocuments(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The table is the strict image-config rejection corpus.
 func TestDecodeImageConfigRejectsInvalidContent(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +129,37 @@ func TestDecodeImageConfigRejectsInvalidContent(t *testing.T) {
 			raw:       `{"architecture":"amd64","os":"linux","os.features":["x"],"rootfs":{}}`,
 			mediaType: ocispec.MediaTypeImageConfig,
 		},
+		{
+			name:      "process config shape",
+			raw:       `{"architecture":"amd64","os":"linux","config":[],"rootfs":{}}`,
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
+		{
+			name:      "process arguments",
+			raw:       `{"architecture":"amd64","os":"linux","config":{"Entrypoint":1},"rootfs":{}}`,
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
+		{
+			name:      "unknown process field",
+			raw:       `{"architecture":"amd64","os":"linux","config":{"Unknown":true},"rootfs":{}}`,
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
+		{
+			name:      "duplicate process field",
+			raw:       `{"architecture":"amd64","os":"linux","config":{"Cmd":[],"Cmd":[]},"rootfs":{}}`,
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
+		{
+			name:      "NUL process argument",
+			raw:       `{"architecture":"amd64","os":"linux","config":{"Cmd":["bad\u0000value"]},"rootfs":{}}`,
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
+		{
+			name: "invalid UTF-8 process argument",
+			raw: "{\"architecture\":\"amd64\",\"os\":\"linux\",\"config\":{\"Cmd\":[\"" +
+				string([]byte{0xff}) + "\"]},\"rootfs\":{}}",
+			mediaType: ocispec.MediaTypeImageConfig,
+		},
 	}
 
 	for _, test := range tests {
@@ -138,6 +171,41 @@ func TestDecodeImageConfigRejectsInvalidContent(t *testing.T) {
 			_, _, err := decodeImageConfig(raw, descriptorForTest(raw, test.mediaType))
 			if !errors.Is(err, ErrProtocol) {
 				t.Fatalf("decodeImageConfig() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestDecodeImageConfigPreservesProcessDefaults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		config         string
+		wantEntrypoint []string
+		wantCommand    []string
+	}{
+		{name: "omitted", config: "", wantEntrypoint: nil, wantCommand: nil},
+		{name: "null", config: `,"config":null`, wantEntrypoint: nil, wantCommand: nil},
+		{
+			name: "explicit", config: `,"config":{"Entrypoint":["/bin/api"],"Cmd":[]}`,
+			wantEntrypoint: []string{"/bin/api"}, wantCommand: []string{},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := []byte(`{"architecture":"amd64","os":"linux","rootfs":{}` + test.config + `}`)
+
+			config, digest, err := decodeImageConfig(raw, descriptorForTest(raw, ocispec.MediaTypeImageConfig))
+			if err != nil || digest == (domain.Digest{}) ||
+				(config.entrypoint == nil) != (test.wantEntrypoint == nil) ||
+				(config.command == nil) != (test.wantCommand == nil) ||
+				!slices.Equal(config.entrypoint, test.wantEntrypoint) ||
+				!slices.Equal(config.command, test.wantCommand) {
+				t.Fatalf("decodeImageConfig(%s) = %#v, %s, %v", test.name, config, digest, err)
 			}
 		})
 	}

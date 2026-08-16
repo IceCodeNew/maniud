@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -83,6 +85,18 @@ type imageConfig struct {
 	OSVersion       string          `json:"os.version,omitempty"`
 	RootFS          json.RawMessage `json:"rootfs"`
 	Variant         string          `json:"variant,omitempty"`
+}
+
+//nolint:tagliatelle // OCI and Docker define these wire-field names.
+type imageProcessConfig struct {
+	Entrypoint []string `json:"Entrypoint,omitempty"`
+	Command    []string `json:"Cmd,omitempty"`
+}
+
+type imageConfigEvidence struct {
+	platform   imagePlatform
+	entrypoint []string
+	command    []string
 }
 
 func decodeManifest(raw []byte, descriptorValue ocispec.Descriptor) (manifestDocument, error) {
@@ -221,7 +235,10 @@ func selectPlatform(values []descriptor, target imagePlatform) (descriptor, erro
 	return selected, nil
 }
 
-func decodeImageConfig(raw []byte, descriptorValue ocispec.Descriptor) (imagePlatform, domain.Digest, error) {
+func decodeImageConfig(
+	raw []byte,
+	descriptorValue ocispec.Descriptor,
+) (imageConfigEvidence, domain.Digest, error) {
 	var parsed imageConfig
 
 	digest, valid := validRawDescriptor(descriptorValue, raw, maximumConfigBytes)
@@ -229,7 +246,7 @@ func decodeImageConfig(raw []byte, descriptorValue ocispec.Descriptor) (imagePla
 		[]string{dockerMediaTypeImageConfig, ocispec.MediaTypeImageConfig},
 		descriptorValue.MediaType,
 	) || !jsonstrict.Decode(bytes.NewReader(raw), maximumConfigBytes, &parsed) {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
 	platform, err := normalizePlatform(domain.Platform{
@@ -238,8 +255,41 @@ func decodeImageConfig(raw []byte, descriptorValue ocispec.Descriptor) (imagePla
 		Variant:      parsed.Variant,
 	})
 	if err != nil || platform.OSVersion != parsed.OSVersion || len(parsed.OSFeatures) != 0 {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
-	return platform, digest, nil
+	process, err := decodeImageProcessConfig(parsed.Config)
+	if err != nil {
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
+	}
+
+	return imageConfigEvidence{
+		platform:   platform,
+		entrypoint: process.Entrypoint,
+		command:    process.Command,
+	}, digest, nil
+}
+
+func decodeImageProcessConfig(raw json.RawMessage) (imageProcessConfig, error) {
+	var process imageProcessConfig
+	if len(raw) == 0 {
+		return process, nil
+	}
+
+	if !utf8.Valid(raw) || !jsonstrict.Decode(bytes.NewReader(raw), int64(len(raw)), &process) ||
+		!validImageProcessArguments(process.Entrypoint) || !validImageProcessArguments(process.Command) {
+		return imageProcessConfig{}, ErrProtocol
+	}
+
+	return process, nil
+}
+
+func validImageProcessArguments(arguments []string) bool {
+	for _, argument := range arguments {
+		if !utf8.ValidString(argument) || strings.IndexByte(argument, 0) >= 0 {
+			return false
+		}
+	}
+
+	return true
 }

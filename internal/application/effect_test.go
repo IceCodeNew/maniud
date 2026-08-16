@@ -266,7 +266,7 @@ func TestRunRuntimeEffectRejectsInvalidDependenciesAndJournalEvidence(t *testing
 		mutate func(*testEffectJournal)
 	}{
 		{name: "completed", state: store.ActionStateCompleted, mutate: func(*testEffectJournal) {}},
-		{name: "invalid state", state: "invalid", mutate: func(*testEffectJournal) {}},
+		{name: testInvalidStateName, state: "invalid", mutate: func(*testEffectJournal) {}},
 		{name: "intent identity", state: store.ActionStateIntent, mutate: func(journal *testEffectJournal) {
 			journal.mutateRecord = func(action *store.Action) { action.Kind = "workload.create" }
 		}},

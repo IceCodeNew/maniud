@@ -14,6 +14,7 @@ const (
 	maximumPingBytes  = 1024
 	maximumJSONBytes  = 1 << 20
 	jsonContentType   = "application/json"
+	contentTypeHeader = "Content-Type"
 	apiVersionHeader  = "Api-Version"
 	httpScheme        = "http"
 	dummyDockerHost   = "docker.invalid"

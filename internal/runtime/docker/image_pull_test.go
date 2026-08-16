@@ -62,7 +62,7 @@ func TestPullImageSendsImmutableAuthenticatedRequestAndConsumesStream(t *testing
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		assertImagePullRequest(t, request, expected.ReferenceDigest.String())
-		response.Header().Set("Content-Type", jsonContentType+"; charset=utf-8")
+		response.Header().Set(contentTypeHeader, jsonContentType+"; charset=utf-8")
 		_, _ = io.WriteString(response,
 			`{"status":"Pulling manifest","id":"sha256:layer","progress":"1 B / 2 B",`+
 				`"progressDetail":{"current":1,"total":2,"start":0,"hidecounts":false,"units":"bytes"}}`+"\n"+
@@ -102,7 +102,7 @@ func TestPullImageSupportsAnonymousVariantPulls(t *testing.T) {
 			t.Fatal("anonymous variant pull request is invalid")
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 	}))
 	client.version.Architecture = dockerArchitectureARM64
 
@@ -119,7 +119,7 @@ func TestPullImageRejectsInvalidInputAndAuthentication(t *testing.T) {
 	authenticator := testImagePullAuthenticator()
 
 	invalid := expected
-	invalid.Reference = "invalid"
+	invalid.Reference = testInvalidLiteral
 	assertImagePullError(t, connectedTestClient(t, nil), invalid, authenticator, ErrUnsupportedWorkload)
 	assertImagePullError(t, nil, expected, authenticator, ErrUnsupportedWorkload)
 	assertImagePullError(t, connectedTestClient(t, nil), expected, nil, ErrUnavailable)
@@ -198,8 +198,8 @@ func TestPullImageContainsTransportCancellationAndResponseFailures(t *testing.T)
 		status      int
 		contentType string
 	}{
-		{name: "status", status: http.StatusUnauthorized, contentType: jsonContentType},
-		{name: "content type", status: http.StatusOK, contentType: plainTextContentType},
+		{name: testStatusCase, status: http.StatusUnauthorized, contentType: jsonContentType},
+		{name: testContentTypeCase, status: http.StatusOK, contentType: plainTextContentType},
 	}
 
 	for _, test := range tests {
@@ -207,7 +207,7 @@ func TestPullImageContainsTransportCancellationAndResponseFailures(t *testing.T)
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", test.contentType)
+				response.Header().Set(contentTypeHeader, test.contentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, `{"message":"contains private upstream detail"}`)
 			}))
@@ -248,7 +248,7 @@ func TestPullImageContainsDaemonErrorsAndCloseFailures(t *testing.T) {
 	authenticator := testImagePullAuthenticator()
 	secret := "private daemon diagnostic"
 	daemonFailure := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response,
 			`{"error":"`+secret+`","errorDetail":{"code":401,"message":"`+secret+`"}}`,
 		)
@@ -262,7 +262,7 @@ func TestPullImageContainsDaemonErrorsAndCloseFailures(t *testing.T) {
 	closeFailure := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{ //nolint:exhaustruct // The pull consumer needs only status, header, and body.
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": {jsonContentType}},
+			Header:     http.Header{contentTypeHeader: {jsonContentType}},
 			Body: imagePullErrorBody{
 				Reader:   strings.NewReader(`{"status":"complete"}`),
 				closeErr: errImagePullClose,
@@ -288,7 +288,7 @@ func TestConsumeImagePullResponseReturnsCancellationDuringStreamRead(t *testing.
 	}
 	response := &http.Response{ //nolint:exhaustruct // The pull consumer needs only status, header, and body.
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": {jsonContentType}},
+		Header:     http.Header{contentTypeHeader: {jsonContentType}},
 		Body:       body,
 	}
 
@@ -336,7 +336,7 @@ func TestDecodeImagePullStreamRejectsInvalidOrUnboundedFrames(t *testing.T) {
 		stream io.Reader
 		want   error
 	}{
-		{name: "malformed", stream: strings.NewReader(`{"status":`), want: ErrProtocol},
+		{name: testMalformedCase, stream: strings.NewReader(`{"status":`), want: ErrProtocol},
 		{name: "trailing malformed", stream: strings.NewReader(`{"status":"ok"}{`), want: ErrProtocol},
 		{name: "duplicate", stream: strings.NewReader(`{"status":"a","status":"b"}`), want: ErrProtocol},
 		{name: "nested duplicate", stream: strings.NewReader(`{"aux":{"id":1,"id":2}}`), want: ErrProtocol},

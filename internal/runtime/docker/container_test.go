@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	containertypes "github.com/moby/moby/api/types/container"
+
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
@@ -27,7 +29,7 @@ func TestProbeContainerObservesManagedIdentity(t *testing.T) {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, document)
 	}))
 
@@ -47,11 +49,15 @@ func TestProbeContainerObservesManagedIdentity(t *testing.T) {
 		Entrypoint:       testContainerEntrypoint(),
 		Command:          testContainerCommand(),
 		NetworkMode:      testNetworkMode,
-		Service:          testContainerService,
-		Transaction:      testTransaction,
-		DesiredState:     mustTestDigest(t, testDesiredState),
-		Reference:        mustTestDigest(t, testReferenceDigest),
-		AllowedStates:    []ContainerState{ContainerCreated, ContainerRunning},
+		RestartPolicy: containertypes.RestartPolicy{
+			Name:              containertypes.RestartPolicyDisabled,
+			MaximumRetryCount: 0,
+		},
+		Service:       testContainerService,
+		Transaction:   testTransaction,
+		DesiredState:  mustTestDigest(t, testDesiredState),
+		Reference:     mustTestDigest(t, testReferenceDigest),
+		AllowedStates: []ContainerState{ContainerCreated, ContainerRunning},
 	}
 	if !probe.Matches(expectation) {
 		t.Fatal("ContainerProbe.Matches(name recovery) = false")
@@ -66,13 +72,13 @@ func TestProbeContainerObservesManagedIdentity(t *testing.T) {
 func TestProbeContainerObservesUnmanagedID(t *testing.T) {
 	t.Parallel()
 
-	document := validContainerDocument(t, map[string]string{"com.example.owner": "test-owner"}, createdContainerState())
+	document := validContainerDocument(t, map[string]string{testForeignOwnerLabel: "test-owner"}, createdContainerState())
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1.54/containers/"+testContainerID+"/json" {
 			t.Errorf("path = %s", request.URL.Path)
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, document)
 	}))
 
@@ -87,7 +93,7 @@ func TestProbeContainerProvesMissing(t *testing.T) {
 	t.Parallel()
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		response.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(response, `{"message":"No such container: example-api"}`)
 	}))
@@ -157,7 +163,7 @@ func assertContainerResponsesRejected(t *testing.T, tests []containerResponseTes
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", test.contentType)
+				response.Header().Set(contentTypeHeader, test.contentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, test.body)
 			}))

@@ -109,7 +109,8 @@ services:
     command: []
 `)
 
-	if inherited.Entrypoint != nil || inherited.Command != nil {
+	if !reflect.DeepEqual(inherited.Entrypoint, []string{"/image-entrypoint"}) ||
+		!reflect.DeepEqual(inherited.Command, []string{"image-command"}) {
 		t.Fatalf("inherited process = %#v", inherited)
 	}
 
@@ -119,6 +120,83 @@ services:
 
 	if inherited.EffectiveDigest == cleared.EffectiveDigest {
 		t.Fatal("EffectiveDigest ignored explicit process clearing")
+	}
+}
+
+func TestWorkloadPreservesAbsentImageProcessDefaults(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	image := resolvedImageForService(t, project, "api")
+	image.Entrypoint = nil
+	image.Command = nil
+
+	workload, err := project.Workload("api", image)
+	if err != nil || workload.Entrypoint != nil || workload.Command != nil ||
+		workload.EffectiveDigest == (domain.Digest{}) {
+		t.Fatalf("Workload(absent image process) = %#v, %v", workload, err)
+	}
+}
+
+func TestWorkloadEntrypointOverrideClearsImageCommand(t *testing.T) {
+	t.Parallel()
+
+	workload := loadWorkload(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    entrypoint: ["/override-entrypoint"]
+`)
+
+	if !reflect.DeepEqual(workload.Entrypoint, []string{"/override-entrypoint"}) ||
+		workload.Command == nil || len(workload.Command) != 0 {
+		t.Fatalf("overridden process = %#v", workload)
+	}
+}
+
+func TestWorkloadClonesResolvedImageProcessEvidence(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	image := resolvedImageForService(t, project, "api")
+
+	workload, err := project.Workload("api", image)
+	if err != nil {
+		t.Fatalf("Workload() error = %v", err)
+	}
+
+	image.Entrypoint[0] = "mutated-entrypoint"
+	image.Command[0] = "mutated-command"
+
+	if reflect.DeepEqual(workload.Image.Entrypoint, image.Entrypoint) ||
+		reflect.DeepEqual(workload.Image.Command, image.Command) ||
+		reflect.DeepEqual(workload.Entrypoint, image.Entrypoint) || reflect.DeepEqual(workload.Command, image.Command) {
+		t.Fatalf("Workload() retained caller-owned process slices: %#v", workload)
 	}
 }
 
@@ -263,6 +341,8 @@ func TestImageResolvesSourceRejectsInvalidProof(t *testing.T) {
 		},
 		PlatformManifest: mustTestDigest(t, testPlatformManifestDigest),
 		ImageConfig:      mustTestDigest(t, testImageConfigDigest),
+		Entrypoint:       nil,
+		Command:          nil,
 	}
 
 	if imageResolvesSource("https://example.com/team/api:1", image) {
@@ -307,6 +387,8 @@ services:
 				value.ImageConfig = domain.Hash([]byte("other image config"))
 			},
 		},
+		{name: "image entrypoint", mutate: func(value *domain.ImageIdentity) { value.Entrypoint = []string{"other"} }},
+		{name: "image command", mutate: func(value *domain.ImageIdentity) { value.Command = []string{"other"} }},
 	}
 
 	for _, test := range tests {
@@ -413,6 +495,8 @@ func resolvedImageForService(t *testing.T, project Project, serviceName string) 
 		},
 		PlatformManifest: mustTestDigest(t, testPlatformManifestDigest),
 		ImageConfig:      mustTestDigest(t, testImageConfigDigest),
+		Entrypoint:       []string{"/image-entrypoint"},
+		Command:          []string{"image-command"},
 	}
 }
 

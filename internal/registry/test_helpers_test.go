@@ -104,8 +104,17 @@ func internalDescriptorForTest(raw []byte, mediaType string) descriptor {
 func configForTest(t *testing.T, platform domain.Platform) ([]byte, descriptor) {
 	t.Helper()
 
+	process, err := json.Marshal(imageProcessConfig{
+		Entrypoint: []string{"/usr/local/bin/api"},
+		Command:    []string{"serve"},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(image process config) error = %v", err)
+	}
+
 	raw, err := json.Marshal(imageConfig{
 		Architecture: platform.Architecture,
+		Config:       process,
 		OS:           platform.OS,
 		RootFS:       json.RawMessage(`{"type":"layers","diff_ids":[]}`),
 		Variant:      platform.Variant,

@@ -61,7 +61,7 @@ func decodeImageResponse(
 		return application.ImageProbe{State: application.ImageProbeMissing, Image: emptyImage()}, nil
 	}
 
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		return unknown, ErrProtocol
 	}
 

@@ -27,6 +27,14 @@ const (
 	testNetworkMode          = "bridge"
 	testManifestMediaType    = ociManifestMediaType
 	testInvalidValue         = "bad"
+	testMalformedCase        = "malformed"
+	testContentTypeCase      = "content type"
+	testStatusCase           = "status"
+	testMissingValue         = "missing"
+	testUnknownValue         = "unknown"
+	testInvalidLiteral       = "invalid"
+	testForeignOwnerLabel    = "com.example.owner"
+	testContainerListPath    = "/v1.54/containers/json"
 	testOtherValue           = "other"
 )
 
@@ -57,7 +65,8 @@ type containerConfigFixture struct {
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
 type containerHostConfigFixture struct {
-	NetworkMode string `json:"NetworkMode"`
+	NetworkMode   string                       `json:"NetworkMode"`
+	RestartPolicy containertypes.RestartPolicy `json:"RestartPolicy"`
 }
 
 //nolint:tagliatelle // OCI descriptors use lower camel case on the wire.
@@ -96,7 +105,13 @@ func validContainerDocument(
 			Entrypoint: testContainerEntrypoint(),
 			Command:    testContainerCommand(),
 		},
-		HostConfig: &containerHostConfigFixture{NetworkMode: testNetworkMode},
+		HostConfig: &containerHostConfigFixture{
+			NetworkMode: testNetworkMode,
+			RestartPolicy: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyDisabled,
+				MaximumRetryCount: 0,
+			},
+		},
 		ImageManifestDescriptor: &descriptorFixture{
 			MediaType: testManifestMediaType,
 			Digest:    testPlatformManifest,
@@ -236,8 +251,12 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 			Entrypoint:       testContainerEntrypoint(),
 			Command:          testContainerCommand(),
 			NetworkMode:      testNetworkMode,
-			State:            ContainerRunning,
-			Running:          true,
+			RestartPolicy: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyDisabled,
+				MaximumRetryCount: 0,
+			},
+			State:   ContainerRunning,
+			Running: true,
 			Ownership: domain.WorkloadOwnership{
 				Status:           domain.OwnershipManaged,
 				Service:          testContainerService,
@@ -257,7 +276,7 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 func assertOwnershipBaseline(t *testing.T, imageConfig, manifest domain.Digest) {
 	t.Helper()
 
-	unmanaged := decodeOwnership(map[string]string{"com.example.owner": "test-owner"}, imageConfig, manifest)
+	unmanaged := decodeOwnership(map[string]string{testForeignOwnerLabel: "test-owner"}, imageConfig, manifest)
 	if unmanaged.Status != domain.OwnershipUnmanaged {
 		t.Fatalf("decodeOwnership(unmanaged) = %#v", unmanaged)
 	}
@@ -280,10 +299,14 @@ func matchingContainerExpectation(t *testing.T) ContainerExpectation {
 		Entrypoint:       testContainerEntrypoint(),
 		Command:          testContainerCommand(),
 		NetworkMode:      testNetworkMode,
-		Service:          testContainerService,
-		Transaction:      testTransaction,
-		DesiredState:     mustTestDigest(t, testDesiredState),
-		Reference:        mustTestDigest(t, testReferenceDigest),
-		AllowedStates:    []ContainerState{ContainerRunning},
+		RestartPolicy: containertypes.RestartPolicy{
+			Name:              containertypes.RestartPolicyDisabled,
+			MaximumRetryCount: 0,
+		},
+		Service:       testContainerService,
+		Transaction:   testTransaction,
+		DesiredState:  mustTestDigest(t, testDesiredState),
+		Reference:     mustTestDigest(t, testReferenceDigest),
+		AllowedStates: []ContainerState{ContainerRunning},
 	}
 }

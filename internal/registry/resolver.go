@@ -4,6 +4,7 @@ package registry
 import (
 	"context"
 	"io"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -149,12 +150,12 @@ func (resolver *Resolver) resolveImageConfig(
 	target imagePlatform,
 	reference imageref.Reference,
 ) (domain.ImageIdentity, error) {
-	configPlatform, configDigest, err := resolver.readConfig(ctx, repository, *selected.config)
+	config, configDigest, err := resolver.readConfig(ctx, repository, *selected.config)
 	if err != nil {
 		return domain.ImageIdentity{}, err
 	}
 
-	if !exactPlatform(&configPlatform, target) {
+	if !exactPlatform(&config.platform, target) {
 		if top.config != nil {
 			return domain.ImageIdentity{}, ErrPlatformUnavailable
 		}
@@ -172,6 +173,8 @@ func (resolver *Resolver) resolveImageConfig(
 		},
 		PlatformManifest: selected.digest,
 		ImageConfig:      configDigest,
+		Entrypoint:       slices.Clone(config.entrypoint),
+		Command:          slices.Clone(config.command),
 	}, nil
 }
 
@@ -256,26 +259,26 @@ func (resolver *Resolver) readConfig(
 	ctx context.Context,
 	repository remoteRepository,
 	descriptorValue descriptor,
-) (imagePlatform, domain.Digest, error) {
+) (imageConfigEvidence, domain.Digest, error) {
 	if !validDescriptor(
 		descriptorValue,
 		maximumConfigBytes,
 		dockerMediaTypeImageConfig,
 		ocispec.MediaTypeImageConfig,
 	) {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
 	configDescriptor := toOCIDescriptor(descriptorValue)
 
 	reader, err := repository.Fetch(ctx, configDescriptor)
 	if err != nil {
-		return imagePlatform{}, domain.Digest{}, classifyRemoteError(err)
+		return imageConfigEvidence{}, domain.Digest{}, classifyRemoteError(err)
 	}
 
 	raw, err := readVerified(reader, configDescriptor, maximumConfigBytes)
 	if err != nil {
-		return imagePlatform{}, domain.Digest{}, classifyRemoteError(err)
+		return imageConfigEvidence{}, domain.Digest{}, classifyRemoteError(err)
 	}
 
 	return decodeImageConfig(raw, configDescriptor)

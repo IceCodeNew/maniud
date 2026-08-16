@@ -24,7 +24,7 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 			value.ImageManifestDescriptor = nil
 		}},
 		{name: "ID", mutate: func(value *containertypes.InspectResponse) { value.ID = "short" }},
-		{name: "name", mutate: func(value *containertypes.InspectResponse) { value.Name = "example-api" }},
+		{name: containerNameQueryKey, mutate: func(value *containertypes.InspectResponse) { value.Name = "example-api" }},
 		{name: "name grammar", mutate: func(value *containertypes.InspectResponse) { value.Name = "/example_api" }},
 		{name: "image reference", mutate: func(value *containertypes.InspectResponse) { value.Config.Image = "bad image" }},
 		{name: "image digest", mutate: func(value *containertypes.InspectResponse) { value.Image = "sha256:bad" }},
@@ -80,6 +80,75 @@ func TestDecodeContainerRejectsInvalidNetworkMode(t *testing.T) {
 		if valid || observed.ID != "" {
 			t.Fatalf("decodeContainer(network mode %q) = %#v, %t", networkMode, observed, valid)
 		}
+	}
+}
+
+func TestDecodeContainerRejectsInvalidRestartPolicy(t *testing.T) {
+	t.Parallel()
+
+	policies := []containertypes.RestartPolicy{
+		{Name: testInvalidLiteral, MaximumRetryCount: 0},
+		{Name: containertypes.RestartPolicyAlways, MaximumRetryCount: 1},
+	}
+	for _, policy := range policies {
+		payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
+		payload.HostConfig.RestartPolicy = policy
+
+		observed, valid := decodeContainer(testContainerName, payload)
+		if valid || observed.ID != "" {
+			t.Fatalf("decodeContainer(restart policy %#v) = %#v, %t", policy, observed, valid)
+		}
+	}
+}
+
+func TestDecodeContainerNormalizesSupportedRestartPolicies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		policy containertypes.RestartPolicy
+		want   containertypes.RestartPolicy
+	}{
+		{
+			name:   "legacy empty",
+			policy: containertypes.RestartPolicy{Name: "", MaximumRetryCount: 3},
+			want: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyDisabled,
+				MaximumRetryCount: 0,
+			},
+		},
+		{
+			name:   "always",
+			policy: containertypes.RestartPolicy{Name: containertypes.RestartPolicyAlways, MaximumRetryCount: 0},
+			want:   containertypes.RestartPolicy{Name: containertypes.RestartPolicyAlways, MaximumRetryCount: 0},
+		},
+		{
+			name:   "unless stopped",
+			policy: containertypes.RestartPolicy{Name: containertypes.RestartPolicyUnlessStopped, MaximumRetryCount: 0},
+			want: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyUnlessStopped,
+				MaximumRetryCount: 0,
+			},
+		},
+		{
+			name:   "on failure",
+			policy: containertypes.RestartPolicy{Name: containertypes.RestartPolicyOnFailure, MaximumRetryCount: 3},
+			want:   containertypes.RestartPolicy{Name: containertypes.RestartPolicyOnFailure, MaximumRetryCount: 3},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
+			payload.HostConfig.RestartPolicy = test.policy
+
+			observed, valid := decodeContainer(testContainerName, payload)
+			if !valid || observed.RestartPolicy != test.want {
+				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed.RestartPolicy, valid)
+			}
+		})
 	}
 }
 
@@ -147,14 +216,15 @@ func TestDecodeContainerStateSemantics(t *testing.T) {
 		{status: ContainerRemoving, running: true, paused: false, restarting: false, dead: false, valid: false},
 		{status: ContainerExited, running: false, paused: false, restarting: false, dead: true, valid: false},
 		{status: ContainerDead, running: true, paused: false, restarting: false, dead: true, valid: false},
-		{status: "unknown", running: false, paused: false, restarting: false, dead: false, valid: false},
+		{status: testUnknownValue, running: false, paused: false, restarting: false, dead: false, valid: false},
 	}
 
 	for _, test := range tests {
 		state := dockerContainerState(test.status, test.running, test.paused, test.restarting, test.dead)
 
 		got, valid := decodeContainerState(state)
-		if valid != test.valid || valid && got != test.status || !valid && got != "" && test.status == "unknown" {
+		if valid != test.valid || valid && got != test.status ||
+			!valid && got != "" && test.status == testUnknownValue {
 			t.Fatalf("decodeContainerState(%q) = %q, %t; want %t", test.status, got, valid, test.valid)
 		}
 	}
@@ -233,13 +303,16 @@ func TestContainerProbeMatchesRejectsIdentityDrift(t *testing.T) {
 		mutate func(*ContainerExpectation)
 	}{
 		{name: "ID", mutate: func(value *ContainerExpectation) { value.ID = strings.Repeat("f", containerIDHexBytes) }},
-		{name: "name", mutate: func(value *ContainerExpectation) { value.Name = testOtherValue }},
+		{name: containerNameQueryKey, mutate: func(value *ContainerExpectation) { value.Name = testOtherValue }},
 		{name: "image reference", mutate: func(value *ContainerExpectation) { value.ImageReference = testOtherValue }},
 		{name: "image", mutate: func(value *ContainerExpectation) { value.ImageConfig = domain.Hash(nil) }},
 		{name: "manifest", mutate: func(value *ContainerExpectation) { value.PlatformManifest = domain.Hash(nil) }},
 		{name: "entrypoint", mutate: func(value *ContainerExpectation) { value.Entrypoint = []string{testOtherValue} }},
 		{name: "command", mutate: func(value *ContainerExpectation) { value.Command = []string{testOtherValue} }},
 		{name: "network mode", mutate: func(value *ContainerExpectation) { value.NetworkMode = "host" }},
+		{name: "restart policy", mutate: func(value *ContainerExpectation) {
+			value.RestartPolicy.Name = containertypes.RestartPolicyAlways
+		}},
 		{name: "state", mutate: func(value *ContainerExpectation) {
 			value.AllowedStates = []ContainerState{ContainerExited}
 		}},

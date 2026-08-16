@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -79,7 +80,7 @@ func TestRunImagePullFencesEffectAndCompletesFromObservedIdentity(t *testing.T) 
 		t.Fatalf("runImagePull() = %#v, %v", got, err)
 	}
 
-	if !runtime.pullInvoked || runtime.pulled != expected || runtime.auth != authenticator {
+	if !runtime.pullInvoked || !reflect.DeepEqual(runtime.pulled, expected) || runtime.auth != authenticator {
 		t.Fatal("runImagePull() did not pass the expected execution capability")
 	}
 
@@ -177,7 +178,7 @@ func TestRunImagePullRejectsUnprovenPostconditions(t *testing.T) {
 			want:     ErrConflictingState,
 		},
 		{
-			name:     "invalid state",
+			name:     testInvalidStateName,
 			probe:    ImageProbe{State: ImageProbeState(99), Image: emptyImageEvidence()},
 			probeErr: nil,
 			want:     ErrConflictingState,
@@ -306,9 +307,12 @@ func TestImageEffectDigestBindsStableNonSecretIdentity(t *testing.T) {
 	observed := imageEffectDigest(imageEffectObserved, expected)
 	changed := expected
 	changed.Platform.Variant = "v2"
+	processChanged := expected
+	processChanged.Command = []string{testOtherValue}
 
 	if intent == (domain.Digest{}) || intent == observed ||
 		intent == imageEffectDigest(imageEffectIntent, changed) ||
+		intent != imageEffectDigest(imageEffectIntent, processChanged) ||
 		intent != imageEffectDigest(imageEffectIntent, expected) {
 		t.Fatal("image effect digest does not bind its format, state, and image identity")
 	}
@@ -386,5 +390,7 @@ func testImageEffectIdentity(t *testing.T) domain.ImageIdentity {
 		},
 		PlatformManifest: domain.Hash([]byte("image effect platform manifest")),
 		ImageConfig:      domain.Hash([]byte("image effect config")),
+		Entrypoint:       []string{testProcessEntrypoint},
+		Command:          []string{testProcessCommand},
 	}
 }

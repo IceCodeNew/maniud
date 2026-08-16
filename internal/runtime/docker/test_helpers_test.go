@@ -113,7 +113,7 @@ func engineHandler(t *testing.T, fixture engineFixture) http.Handler {
 			contentType = jsonContentType
 		}
 
-		response.Header().Set("Content-Type", contentType)
+		response.Header().Set(contentTypeHeader, contentType)
 		response.WriteHeader(status)
 		_, _ = io.WriteString(response, fixture.version)
 	})

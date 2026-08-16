@@ -23,7 +23,7 @@ func TestInspectReturnsApplicationRuntimeEvidence(t *testing.T) {
 		Rootless:     true,
 	}
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, daemonDocument(
 			daemon.ID,
 			daemon.Driver,
@@ -62,7 +62,7 @@ func TestInspectRejectsUnsupportedDaemonPlatform(t *testing.T) {
 	t.Parallel()
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, daemonDocument(
 			"engine-id",
 			"overlay2",
@@ -162,7 +162,7 @@ func TestObserveWorkloadMapsDockerProbe(t *testing.T) {
 					t.Errorf("request path = %q", request.URL.Path)
 				}
 
-				response.Header().Set("Content-Type", jsonContentType)
+				response.Header().Set(contentTypeHeader, jsonContentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, test.body)
 			}))
@@ -190,7 +190,7 @@ func applicationObservationTests(t *testing.T) []applicationObservationTest {
 
 	return []applicationObservationTest{
 		{
-			name:       "missing",
+			name:       testMissingValue,
 			status:     http.StatusNotFound,
 			body:       `{"message":"No such container: example-api"}`,
 			mutate:     func(*domain.DesiredWorkload) {},
@@ -267,6 +267,8 @@ func validApplicationWorkload(t *testing.T) domain.DesiredWorkload {
 			Platform:         domain.Platform{OS: testOS, Architecture: testArchitecture, Variant: ""},
 			PlatformManifest: mustTestDigest(t, testPlatformManifest),
 			ImageConfig:      mustTestDigest(t, testImageConfig),
+			Entrypoint:       testContainerEntrypoint(),
+			Command:          testContainerCommand(),
 		},
 		Entrypoint:      testContainerEntrypoint(),
 		Command:         testContainerCommand(),
@@ -293,6 +295,7 @@ func unsupportedApplicationWorkloads(t *testing.T) []domain.DesiredWorkload {
 		func(value *domain.DesiredWorkload) { value.Image.ImageConfig = empty },
 		func(value *domain.DesiredWorkload) { value.SourceDigest = empty },
 		func(value *domain.DesiredWorkload) { value.EffectiveDigest = empty },
+		func(value *domain.DesiredWorkload) { value.Entrypoint = nil; value.Command = nil },
 		func(value *domain.DesiredWorkload) { value.Entrypoint = []string{"\xff"} },
 		func(value *domain.DesiredWorkload) { value.Command = []string{"bad\x00argument"} },
 	}

@@ -40,7 +40,7 @@ func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 	}
 	defer closeResponse(response)
 
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		return emptyDaemon, ErrProtocol
 	}
 

@@ -146,6 +146,8 @@ func (resolver applyImageResolverFixture) Resolve(
 		Platform:         platform,
 		PlatformManifest: domain.Hash([]byte("manifest")),
 		ImageConfig:      domain.Hash([]byte("config")),
+		Entrypoint:       []string{"/usr/local/bin/api"},
+		Command:          []string{"serve"},
 	}, nil
 }
 

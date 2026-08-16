@@ -23,7 +23,7 @@ func TestProbeImageProvesResolvedPlatformIdentity(t *testing.T) {
 	expected := testImageIdentity(t)
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		assertImageProbeRequest(t, request, expected)
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, imageInspectDocument(expected, true))
 	}))
 
@@ -38,7 +38,7 @@ func TestProbeImageAcceptsClassicImageStoreProof(t *testing.T) {
 
 	expected := testSingleManifestImageIdentity(t)
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, imageInspectDocument(expected, false))
 	}))
 
@@ -61,7 +61,7 @@ func TestProbeImageSeparatesValidAbsenceFromUnknown(t *testing.T) {
 		wantMissing bool
 	}{
 		{
-			name:        "missing",
+			name:        testMissingValue,
 			status:      http.StatusNotFound,
 			contentType: jsonContentType,
 			body:        `{"message":"No such image"}`,
@@ -88,7 +88,7 @@ func TestProbeImageSeparatesValidAbsenceFromUnknown(t *testing.T) {
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", test.contentType)
+				response.Header().Set(contentTypeHeader, test.contentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, test.body)
 			}))
@@ -137,7 +137,7 @@ func TestProbeImageRejectsConflictingEvidence(t *testing.T) {
 			return strings.Replace(value, `"Size":0`, `"Size":-1`, 1)
 		}},
 		{name: "invalid repository digest", mutate: func(value string) string {
-			return strings.Replace(value, `"RepoDigests":[`, `"RepoDigests":["invalid",`, 1)
+			return strings.Replace(value, `"RepoDigests":[`, `"RepoDigests":["`+testInvalidLiteral+`",`, 1)
 		}},
 		{name: "invalid descriptor", mutate: func(value string) string {
 			return strings.Replace(value, `"size":123`, `"size":0`, 1)
@@ -154,7 +154,7 @@ func TestProbeImageRejectsConflictingEvidence(t *testing.T) {
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", jsonContentType)
+				response.Header().Set(contentTypeHeader, jsonContentType)
 				_, _ = io.WriteString(response, test.mutate(imageInspectDocument(expected, true)))
 			}))
 
@@ -171,7 +171,7 @@ func TestProbeImageRejectsInvalidRequestAndResponse(t *testing.T) {
 
 	expected := testImageIdentity(t)
 	invalid := expected
-	invalid.Reference = "invalid"
+	invalid.Reference = testInvalidLiteral
 
 	probe, err := connectedTestClient(t, nil).ProbeImage(context.Background(), invalid)
 	if err == nil || probe != emptyImageProbe() {
@@ -184,7 +184,7 @@ func TestProbeImageRejectsInvalidRequestAndResponse(t *testing.T) {
 	}
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", "text/plain")
+		response.Header().Set(contentTypeHeader, plainTextContentType)
 		_, _ = io.WriteString(response, imageInspectDocument(expected, true))
 	}))
 
@@ -218,7 +218,7 @@ func TestProbeImageContainsTransportAndProtocolFailures(t *testing.T) {
 	}
 
 	malformed := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, `{`)
 	}))
 
@@ -259,6 +259,8 @@ func testImageIdentity(t *testing.T) domain.ImageIdentity {
 		},
 		PlatformManifest: domain.Hash([]byte("platform manifest")),
 		ImageConfig:      domain.Hash([]byte("image config")),
+		Entrypoint:       []string{"/usr/local/bin/api"},
+		Command:          []string{"serve"},
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -113,7 +114,9 @@ func assertResolvedImage(
 	if result.Reference != wantReference.String() || result.ReferenceDigest != wantReference.Digest() ||
 		result.Platform != wantPlatform ||
 		result.PlatformManifest.String() != wantManifest.Digest.String() ||
-		result.ImageConfig.String() != wantConfig.Digest.String() {
+		result.ImageConfig.String() != wantConfig.Digest.String() ||
+		!slices.Equal(result.Entrypoint, []string{"/usr/local/bin/api"}) ||
+		!slices.Equal(result.Command, []string{"serve"}) {
 		t.Fatalf("Resolve() = %#v", result)
 	}
 }

@@ -233,7 +233,7 @@ func consumeImagePullResponse(
 	pullContext context.Context,
 	response *http.Response,
 ) error {
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		closeResponse(response)
 
 		return ErrProtocol

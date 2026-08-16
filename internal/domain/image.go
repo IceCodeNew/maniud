@@ -14,4 +14,6 @@ type ImageIdentity struct {
 	Platform         Platform
 	PlatformManifest Digest
 	ImageConfig      Digest
+	Entrypoint       []string
+	Command          []string
 }

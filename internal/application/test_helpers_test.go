@@ -18,6 +18,10 @@ const (
 	testServiceName       = "api"
 	testOperatingSystem   = "linux"
 	testArchitectureAMD64 = "amd64"
+	testInvalidStateName  = "invalid state"
+	testOtherValue        = "other"
+	testProcessEntrypoint = "/usr/local/bin/api"
+	testProcessCommand    = "serve"
 	eventJournal          = "journal"
 )
 
@@ -141,6 +145,8 @@ func newTestImageResolver(events *[]string, execution RuntimeEvidence) imageReso
 			Platform:         platform,
 			PlatformManifest: platformManifest,
 			ImageConfig:      imageConfig,
+			Entrypoint:       []string{testProcessEntrypoint},
+			Command:          []string{testProcessCommand},
 		}, nil
 	})
 }
@@ -220,6 +226,8 @@ func emptyImageIdentity() domain.ImageIdentity {
 		Platform:         domain.Platform{OS: "", Architecture: "", Variant: ""},
 		PlatformManifest: domain.Digest{},
 		ImageConfig:      domain.Digest{},
+		Entrypoint:       nil,
+		Command:          nil,
 	}
 }
 
