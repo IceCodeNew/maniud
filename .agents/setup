@@ -10,13 +10,11 @@ readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
 readonly GO_VERSION='1.26.6'
 readonly PREK_VERSION='0.4.13'
 readonly GOLANGCI_LINT_VERSION='2.12.2'
-readonly GITLEAKS_VERSION='8.30.1'
 readonly CAPSLOCK_VERSION='v0.3.2'
 # NilAway and depaware do not publish stable releases. Pin their exact pseudo-versions.
 readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'
 readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
 readonly GOVULNCHECK_VERSION='v1.7.0'
-readonly PREALLOC_VERSION='v1.1.0'
 readonly DOCKER_VERSION='29.7.2'
 readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
 readonly CONTAINERD_VERSION='2.3.3'
@@ -309,7 +307,8 @@ PY
 install_golang() {
   mise use --global "go@$GO_VERSION"
   eval "$(mise hook-env -s bash)"
-  go env -w GOPROXY='https://golang.flatt.tech'
+  # Keep developer builds CGO-free by default. The race gate opts back in explicitly.
+  go env -w CGO_ENABLED=0 GOPROXY='https://golang.flatt.tech'
 }
 
 install_mise_tools() {
@@ -318,13 +317,11 @@ install_mise_tools() {
     ast-grep bun node@lts shellcheck shfmt \
     "prek@$PREK_VERSION" \
     "golangci-lint@$GOLANGCI_LINT_VERSION" \
-    "gitleaks@$GITLEAKS_VERSION" \
     "go:github.com/google/capslock/cmd/capslock@$CAPSLOCK_VERSION" \
     "go:go.uber.org/nilaway/cmd/nilaway@$NILAWAY_VERSION" \
     "go:github.com/tailscale/depaware@$DEPAWARE_VERSION" \
     "go:github.com/uber-go/gopatch" \
     "go:golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" \
-    "go:github.com/alexkohler/prealloc@$PREALLOC_VERSION" \
     "npm:openskills" \
     "pipx:nmem-cli"
   mise reshim
