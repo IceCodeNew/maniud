@@ -1,5 +1,6 @@
 #:schema https://www.schemastore.org/prek.json
 
+# renovate: datasource=github-releases depName=j178/prek extractVersion=^v(?<version>.*)$
 minimum_prek_version = "0.4.13"
 default_install_hook_types = ["pre-commit", "pre-push"]
 
@@ -117,13 +118,12 @@ pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
 
-# Keep the Linux/Darwin dependency snapshot current for review.
-# CI cross-builds, rather than depaware's informational bomb icon, enforce CGO-free builds.
+# Keep depaware's default operating-system and cgo annotations in the reviewed baseline.
 [[repos.hooks]]
 id = "depaware"
 name = "depaware dependency baseline"
 language = "system"
-entry = "depaware -check -file depaware.txt -goos linux,darwin -cgo false ./cmd/maniud"
+entry = "depaware -check -file depaware.txt ./cmd/maniud"
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]

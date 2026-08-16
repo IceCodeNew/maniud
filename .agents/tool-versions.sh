@@ -2,13 +2,16 @@
 # ShellCheck analyzes this sourced file in isolation and cannot see its consumers.
 # shellcheck disable=SC2034
 
-# Shared version pins for Orb setup, resume checks, and CI policy tools.
+# Shared versions for Orb setup, resume checks, and CI policy tools.
 # Renovate metadata is consumed by the custom regex manager in renovate.json.
 
-# PR #2 has no go.mod yet; Foundation replaces this bootstrap pin with its
-# toolchain directive as the single version source.
-# renovate: datasource=golang-version depName=go
-readonly GO_VERSION='1.26.6'
+# go.mod is the single Go toolchain version source; Renovate's gomod manager owns it.
+GO_VERSION="$(sed -n 's/^toolchain go//p' "$(dirname "${BASH_SOURCE[0]}")/../go.mod")"
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf '%s\n' 'go.mod must declare an exact Go toolchain version.' >&2
+  return 1
+fi
+readonly GO_VERSION
 # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.*)$
 readonly GOLANGCI_LINT_VERSION='2.12.2'
 # renovate: datasource=github-releases depName=google/capslock
@@ -20,6 +23,9 @@ readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'
 readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
 # renovate: datasource=go depName=golang.org/x/vuln
 readonly GOVULNCHECK_VERSION='v1.7.0'
+# Gitleaks is installed only by CI and prek, not by Orb setup.
+# renovate: datasource=github-releases depName=gitleaks/gitleaks
+readonly GITLEAKS_VERSION='v8.30.1'
 
 # The setup script verifies nerdctl-full against the release's published SHA256SUMS.
 # renovate: datasource=github-releases depName=containerd/nerdctl extractVersion=^v(?<version>.*)$

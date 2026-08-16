@@ -15,11 +15,22 @@
       "description": "Update explicitly annotated tool versions",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.agents/tool-versions\\.sh$/"
+        "/^\\.agents/tool-versions\\.sh$/",
+        "/^prek\\.toml$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nreadonly [A-Z0-9_]+='(?<currentValue>[^']+)'"
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nreadonly [A-Z0-9_]+='(?<currentValue>[^']+)'",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nminimum_prek_version = \"(?<currentValue>[^\"]+)\""
       ]
+    },
+    {
+      "description": "Update prek hook revisions from their GitHub repositories",
+      "customType": "regex",
+      "managerFilePatterns": ["/^prek\\.toml$/"],
+      "matchStrings": [
+        "repo = \"https://github\\.com/(?<depName>[^\"]+)\"\\nrev = \"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-tags"
     }
   ],
   "packageRules": [
