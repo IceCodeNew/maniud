@@ -559,13 +559,9 @@ func existingPublicationRoot(
 		return nil, false, fmt.Errorf("open backup: %w", err)
 	}
 
-	root, err := openExistingBackupRoot(rootPath)
-	if err != nil {
-		if errors.Is(err, ErrInvalidBackupRoot) {
-			return nil, false, nil
-		}
-
-		return nil, false, err
+	root, found := openExistingBackupRoot(rootPath)
+	if !found {
+		return nil, false, nil
 	}
 
 	return root, true, nil
