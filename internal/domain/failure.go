@@ -9,10 +9,16 @@ const (
 	ErrorInvalidInput ErrorCode = "invalid_input"
 	// ErrorOperationCancelled identifies an operator cancellation.
 	ErrorOperationCancelled ErrorCode = "operation_cancelled"
+	// ErrorApplyFailed identifies an apply whose validation could not complete.
+	ErrorApplyFailed ErrorCode = "apply_failed"
+	// ErrorGenerationFailed identifies generation that could not complete.
+	ErrorGenerationFailed ErrorCode = "generation_failed"
 	// ErrorInternal identifies a build or programming failure.
 	ErrorInternal ErrorCode = "internal_error"
 
-	cancelledExitStatus = 130
+	cancelledExitStatus     = 130
+	applyFailedMessage      = "apply validation failed"
+	generationFailedMessage = "Compose generation failed"
 )
 
 // FailureError is an expected, privacy-safe error at the application boundary.
@@ -40,6 +46,28 @@ func OperationCancelled() *FailureError {
 		message:    "operation interrupted; rerun the same command to resume",
 		retryable:  false,
 		exitStatus: cancelledExitStatus,
+	}
+}
+
+// ApplyFailed reports a privacy-safe validation failure. Retryable distinguishes
+// temporary runtime, registry, and state availability from rejected evidence.
+func ApplyFailed(retryable bool) *FailureError {
+	return &FailureError{
+		code:       ErrorApplyFailed,
+		message:    applyFailedMessage,
+		retryable:  retryable,
+		exitStatus: 1,
+	}
+}
+
+// GenerationFailed reports a privacy-safe generation failure. Retryable
+// distinguishes temporary registry availability from rejected input.
+func GenerationFailed(retryable bool) *FailureError {
+	return &FailureError{
+		code:       ErrorGenerationFailed,
+		message:    generationFailedMessage,
+		retryable:  retryable,
+		exitStatus: 1,
 	}
 }
 
