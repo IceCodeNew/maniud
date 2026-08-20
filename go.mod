@@ -6,6 +6,7 @@ toolchain go1.26.6
 
 require (
 	github.com/compose-spec/compose-go/v2 v2.14.0
+	github.com/moby/moby/api v1.54.2
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.56.0
@@ -21,6 +22,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-shellwords v1.0.12 // indirect
+	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
