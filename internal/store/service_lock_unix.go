@@ -25,6 +25,7 @@ type ServiceLock struct {
 	descriptor int
 	name       string
 	identity   fileIdentity
+	operation  *stateOperationLock
 	store      *Store
 	lease      writerLease
 }
@@ -63,11 +64,19 @@ func (store *Store) openServiceLockWith(
 		return nil, ErrInvalidState
 	}
 
-	serviceLock, err := openServiceLockFile(store.anchor, name)
+	operation, err := trySharedStateOperation(ctx, store.anchor)
 	if err != nil {
 		return nil, err
 	}
 
+	serviceLock, err := openServiceLockFile(store.anchor, name)
+	if err != nil {
+		_ = operation.close()
+
+		return nil, err
+	}
+
+	serviceLock.operation = operation
 	serviceLock.store = store
 
 	err = serviceLock.acquire()
@@ -118,6 +127,7 @@ func openServiceLockFile(anchor *stateAnchor, name string) (*ServiceLock, error)
 		descriptor: descriptor,
 		name:       name,
 		identity:   identity,
+		operation:  nil,
 		store:      nil,
 		lease: writerLease{
 			serviceID: [sha256.Size]byte{},
@@ -170,6 +180,9 @@ func (lock *ServiceLock) Valid() bool {
 	if lock == nil || lock.descriptor < 0 || !lock.anchor.valid() {
 		return false
 	}
+	if lock.operation != nil && !lock.operation.valid() {
+		return false
+	}
 
 	identity, valid := descriptorIdentity(lock.descriptor)
 
@@ -212,8 +225,12 @@ func (lock *ServiceLock) closeFilesystem() error {
 	unlockErr := unix.Flock(descriptor, unix.LOCK_UN)
 
 	closeErr := unix.Close(descriptor)
-	if unlockErr != nil || closeErr != nil {
-		return errors.Join(ErrUnavailable, unlockErr, closeErr)
+	operationErr := error(nil)
+	if lock.operation != nil {
+		operationErr = lock.operation.close()
+	}
+	if unlockErr != nil || closeErr != nil || operationErr != nil {
+		return errors.Join(ErrUnavailable, unlockErr, closeErr, operationErr)
 	}
 
 	return nil
