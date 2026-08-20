@@ -8,6 +8,7 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
 const effectiveWorkloadVersion = 1
@@ -24,8 +25,8 @@ func (project Project) Workload(serviceName string) (domain.DesiredWorkload, err
 		return domain.DesiredWorkload{}, ErrInvalidSource
 	}
 
-	referenceDigest, digestFound := pinnedImageDigest(selected.Image)
-	if !digestFound {
+	reference, err := imageref.Parse(selected.Image)
+	if err != nil {
 		return domain.DesiredWorkload{}, ErrInvalidSource
 	}
 
@@ -33,7 +34,7 @@ func (project Project) Workload(serviceName string) (domain.DesiredWorkload, err
 		ServiceName:     selected.Name,
 		ContainerName:   selected.ContainerName,
 		Image:           selected.Image,
-		ReferenceDigest: referenceDigest,
+		ReferenceDigest: reference.Digest(),
 		Entrypoint:      slices.Clone(selected.Entrypoint),
 		Command:         slices.Clone(selected.Command),
 		SourceDigest:    project.sourceDigest,
