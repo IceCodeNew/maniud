@@ -99,7 +99,7 @@ func reconcileRegisteredRepository(
 		registration.Commit,
 	)
 	if err != nil {
-		return classifyGitOpsFailure(err)
+		return err
 	}
 	if err = recoverGitOpsSnapshot(ctx, root, currentCommit, output, dependencies); err != nil {
 		return err
@@ -112,7 +112,7 @@ func reconcileRegisteredRepository(
 		registration.Commit,
 	)
 	if err != nil {
-		return classifyGitOpsFailure(err)
+		return err
 	}
 
 	return reconcileGitOpsSnapshot(ctx, root, selectedCommit, output, dependencies)

@@ -19,7 +19,7 @@ func executeGitOpsInit(
 
 	root, commit, err := proveGitOpsCheckout(ctx, arguments.repository, arguments.branch)
 	if err != nil {
-		return classifyGitOpsFailure(err)
+		return err
 	}
 
 	statePath, err := defaultStatePath(environment)
