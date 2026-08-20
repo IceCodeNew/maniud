@@ -20,11 +20,8 @@ func fastForwardGitOpsCheckout(
 	if err != nil || requireFastForward(ctx, root, before, upstream) != nil {
 		return "", "", errGitOpsRepositoryInvalid
 	}
-	if err = advanceGitOpsCheckout(ctx, root, before, upstream); err != nil {
-		return "", "", errGitOpsRepositoryInvalid
-	}
 
-	return root, upstream, nil
+	return root, upstream, advanceGitOpsCheckout(ctx, root, before, upstream)
 }
 
 func registeredGitOpsCheckout(
@@ -46,6 +43,15 @@ func registeredGitOpsCheckout(
 }
 
 func fetchGitOpsCommit(ctx context.Context, root, branch string) (string, error) {
+	return fetchGitOpsCommitWithResolver(ctx, root, branch, resolveGitObject)
+}
+
+func fetchGitOpsCommitWithResolver(
+	ctx context.Context,
+	root string,
+	branch string,
+	resolve func(context.Context, string, string) (string, error),
+) (string, error) {
 	remoteBranch := gitOpsRemoteName + "/" + branch
 	refspec := "refs/heads/" + branch + ":refs/remotes/" + remoteBranch
 	remoteURL, err := gitRemoteURL(ctx, root, gitOpsRemoteName)
@@ -60,7 +66,7 @@ func fetchGitOpsCommit(ctx context.Context, root, branch string) (string, error)
 		return "", errGitOpsRepositoryInvalid
 	}
 
-	upstream, err := resolveGitObject(ctx, root, remoteBranch+"^{commit}")
+	upstream, err := resolve(ctx, root, remoteBranch+"^{commit}")
 	if err != nil {
 		return "", errGitOpsRepositoryInvalid
 	}

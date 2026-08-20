@@ -17,6 +17,19 @@ func loadTrackedComposeSource(
 	environment map[string]string,
 	runtimeBase string,
 ) (compose.Source, error) {
+	return loadTrackedComposeSourceWithFinalCheck(
+		ctx, path, workingDirectory, environment, runtimeBase, cleanGitTree,
+	)
+}
+
+func loadTrackedComposeSourceWithFinalCheck(
+	ctx context.Context,
+	path string,
+	workingDirectory string,
+	environment map[string]string,
+	runtimeBase string,
+	finalState func(context.Context, string) (gitTreeState, error),
+) (compose.Source, error) {
 	root, entry, state, err := locateCleanGitSource(ctx, path, workingDirectory)
 	if err != nil {
 		return compose.Source{}, compose.ErrInvalidSource
@@ -36,7 +49,7 @@ func loadTrackedComposeSource(
 	if err != nil {
 		return compose.Source{}, fmt.Errorf("capture committed Compose source: %w", err)
 	}
-	after, err := cleanGitTree(ctx, root)
+	after, err := finalState(ctx, root)
 	if err != nil || state != after {
 		return compose.Source{}, compose.ErrInvalidSource
 	}
@@ -49,7 +62,6 @@ func loadTrackedComposeSource(
 	return pinned, nil
 }
 
-//nolint:cyclop // Source location keeps path, repository configuration, and clean-tree proofs adjacent.
 func locateCleanGitSource(
 	ctx context.Context,
 	path string,
@@ -74,10 +86,9 @@ func locateCleanGitSource(
 	if err = validateGitProcessConfiguration(ctx, root); err != nil {
 		return "", "", gitTreeState{}, compose.ErrInvalidSource
 	}
-	relative, err := filepath.Rel(root, absolutePath)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", "", gitTreeState{}, compose.ErrInvalidSource
-	}
+	// rev-parse ran in the source file's parent and returned its containing worktree.
+	// On the supported Unix platforms, filepath.Rel cannot fail for these absolute paths.
+	relative, _ := filepath.Rel(root, absolutePath)
 	state, err := cleanGitTree(ctx, root)
 	if err != nil {
 		return "", "", gitTreeState{}, compose.ErrInvalidSource
