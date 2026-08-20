@@ -18,6 +18,7 @@ import (
 const (
 	maximumContainerNameBytes  = 63
 	maximumImageReferenceBytes = 2048
+	maximumNetworkModeBytes    = 256
 	maximumJSONErrorBytes      = 4096
 	containerIDHexBytes        = 64
 	dockerManifestMediaType    = "application/vnd.docker.distribution.manifest.v2+json"
@@ -48,6 +49,9 @@ type Container struct {
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
+	Entrypoint       []string
+	Command          []string
+	NetworkMode      string
 	State            ContainerState
 	Running          bool
 	Ownership        domain.WorkloadOwnership
@@ -61,6 +65,9 @@ type ContainerExpectation struct {
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
+	Entrypoint       []string
+	Command          []string
+	NetworkMode      string
 	Service          string
 	Transaction      string
 	DesiredState     domain.Digest
@@ -76,10 +83,7 @@ type ContainerProbe struct {
 
 // Matches reports whether an observed container proves the complete expected identity.
 func (probe ContainerProbe) Matches(expectation ContainerExpectation) bool {
-	if probe.State != ContainerProbeObserved || probe.Container.Name != expectation.Name ||
-		probe.Container.ImageReference != expectation.ImageReference ||
-		probe.Container.ImageConfig != expectation.ImageConfig ||
-		probe.Container.PlatformManifest != expectation.PlatformManifest ||
+	if probe.State != ContainerProbeObserved || !probe.Container.matchesConfiguration(expectation) ||
 		expectation.ID != "" && probe.Container.ID != expectation.ID ||
 		!slices.Contains(expectation.AllowedStates, probe.Container.State) {
 		return false
@@ -91,6 +95,19 @@ func (probe ContainerProbe) Matches(expectation ContainerExpectation) bool {
 		expectation.DesiredState,
 		expectation.Reference,
 	)
+}
+
+func (container Container) matchesConfiguration(expectation ContainerExpectation) bool {
+	return container.Name == expectation.Name && container.ImageReference == expectation.ImageReference &&
+		container.ImageConfig == expectation.ImageConfig &&
+		container.PlatformManifest == expectation.PlatformManifest &&
+		equalStringSlice(container.Entrypoint, expectation.Entrypoint) &&
+		equalStringSlice(container.Command, expectation.Command) &&
+		container.NetworkMode == expectation.NetworkMode
+}
+
+func equalStringSlice(left, right []string) bool {
+	return (left == nil) == (right == nil) && slices.Equal(left, right)
 }
 
 // ProbeContainer inspects one exact full ID or maniud-managed name. A valid 404
@@ -194,6 +211,9 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 		ImageReference:   payload.Config.Image,
 		ImageConfig:      imageConfig,
 		PlatformManifest: platformManifest,
+		Entrypoint:       slices.Clone(payload.Config.Entrypoint),
+		Command:          slices.Clone(payload.Config.Cmd),
+		NetworkMode:      string(payload.HostConfig.NetworkMode),
 		State:            state,
 		Running:          payload.State.Running,
 		Ownership:        ownership,
@@ -205,14 +225,17 @@ func validManifestDescriptor(mediaType string, size int64) bool {
 }
 
 func validContainerPayload(reference string, payload containertypes.InspectResponse) bool {
-	if payload.State == nil || payload.Config == nil || payload.ImageManifestDescriptor == nil {
+	if payload.State == nil || payload.Config == nil || payload.HostConfig == nil ||
+		payload.ImageManifestDescriptor == nil {
 		return false
 	}
 
 	name := strings.TrimPrefix(payload.Name, "/")
 
 	return validContainerID(payload.ID) && validContainerName(name) && payload.Name == "/"+name &&
-		matchesContainerReference(reference, payload) && validOpaqueValue(payload.Config.Image, maximumImageReferenceBytes)
+		matchesContainerReference(reference, payload) &&
+		validOpaqueValue(payload.Config.Image, maximumImageReferenceBytes) &&
+		validOpaqueValue(string(payload.HostConfig.NetworkMode), maximumNetworkModeBytes)
 }
 
 func validContainerReference(reference string) bool {

@@ -19,6 +19,7 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 	}{
 		{name: "state", mutate: func(value *containertypes.InspectResponse) { value.State = nil }},
 		{name: "config", mutate: func(value *containertypes.InspectResponse) { value.Config = nil }},
+		{name: "host config", mutate: func(value *containertypes.InspectResponse) { value.HostConfig = nil }},
 		{name: "descriptor absent", mutate: func(value *containertypes.InspectResponse) {
 			value.ImageManifestDescriptor = nil
 		}},
@@ -56,6 +57,7 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 			descriptor := *base.ImageManifestDescriptor
 			payload.State = cloneContainerState(base.State)
 			payload.Config = cloneContainerConfig(base.Config)
+			payload.HostConfig = cloneContainerHostConfig(base.HostConfig)
 			payload.ImageManifestDescriptor = &descriptor
 			test.mutate(&payload)
 
@@ -64,6 +66,20 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed, valid)
 			}
 		})
+	}
+}
+
+func TestDecodeContainerRejectsInvalidNetworkMode(t *testing.T) {
+	t.Parallel()
+
+	for _, networkMode := range []string{"", "bridge\n"} {
+		payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
+		payload.HostConfig.NetworkMode = containertypes.NetworkMode(networkMode)
+
+		observed, valid := decodeContainer(testContainerName, payload)
+		if valid || observed.ID != "" {
+			t.Fatalf("decodeContainer(network mode %q) = %#v, %t", networkMode, observed, valid)
+		}
 	}
 }
 
@@ -87,6 +103,19 @@ func TestDecodeContainerAcceptsDockerManifest(t *testing.T) {
 	container, valid := decodeContainer(testContainerName, payload)
 	if !valid || container.ID != testContainerID {
 		t.Fatalf("decodeContainer(Docker manifest) = %#v, %t", container, valid)
+	}
+}
+
+func TestDecodeContainerPreservesNilAndEmptyProcessValues(t *testing.T) {
+	t.Parallel()
+
+	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
+	payload.Config.Entrypoint = nil
+	payload.Config.Cmd = []string{}
+
+	container, valid := decodeContainer(testContainerName, payload)
+	if !valid || container.Entrypoint != nil || container.Command == nil || len(container.Command) != 0 {
+		t.Fatalf("decodeContainer(process values) = %#v, %t", container, valid)
 	}
 }
 
@@ -247,10 +276,13 @@ func TestContainerProbeMatchesRejectsIdentityDrift(t *testing.T) {
 		mutate func(*ContainerExpectation)
 	}{
 		{name: "ID", mutate: func(value *ContainerExpectation) { value.ID = strings.Repeat("f", containerIDHexBytes) }},
-		{name: "name", mutate: func(value *ContainerExpectation) { value.Name = "other" }},
-		{name: "image reference", mutate: func(value *ContainerExpectation) { value.ImageReference = "other" }},
+		{name: "name", mutate: func(value *ContainerExpectation) { value.Name = testOtherValue }},
+		{name: "image reference", mutate: func(value *ContainerExpectation) { value.ImageReference = testOtherValue }},
 		{name: "image", mutate: func(value *ContainerExpectation) { value.ImageConfig = domain.Hash(nil) }},
 		{name: "manifest", mutate: func(value *ContainerExpectation) { value.PlatformManifest = domain.Hash(nil) }},
+		{name: "entrypoint", mutate: func(value *ContainerExpectation) { value.Entrypoint = []string{testOtherValue} }},
+		{name: "command", mutate: func(value *ContainerExpectation) { value.Command = []string{testOtherValue} }},
+		{name: "network mode", mutate: func(value *ContainerExpectation) { value.NetworkMode = "host" }},
 		{name: "state", mutate: func(value *ContainerExpectation) {
 			value.AllowedStates = []ContainerState{ContainerExited}
 		}},
@@ -272,5 +304,29 @@ func TestContainerProbeMatchesRejectsIdentityDrift(t *testing.T) {
 	probe.State = ContainerProbeUnknown
 	if probe.Matches(base) {
 		t.Fatal("ContainerProbe.Matches(unknown) = true")
+	}
+
+	assertNilEmptyProcessDriftRejected(t)
+}
+
+func assertNilEmptyProcessDriftRejected(t *testing.T) {
+	t.Helper()
+
+	probe := observedContainerProbe(t)
+	probe.Container.Entrypoint = []string{}
+	base := matchingContainerExpectation(t)
+
+	base.Entrypoint = nil
+	if probe.Matches(base) {
+		t.Fatal("ContainerProbe.Matches(nil versus empty entrypoint) = true")
+	}
+
+	probe = observedContainerProbe(t)
+	probe.Container.Command = []string{}
+	base = matchingContainerExpectation(t)
+
+	base.Command = nil
+	if probe.Matches(base) {
+		t.Fatal("ContainerProbe.Matches(nil versus empty command) = true")
 	}
 }

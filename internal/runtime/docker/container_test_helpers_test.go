@@ -3,6 +3,8 @@ package docker
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
+	"slices"
 	"testing"
 
 	containertypes "github.com/moby/moby/api/types/container"
@@ -22,9 +24,19 @@ const (
 	testContainerImage    = "registry.example/api:1@" + testReferenceDigest
 	testContainerService  = "api"
 	testTransaction       = "550e8400-e29b-41d4-a716-446655440000"
+	testNetworkMode       = "bridge"
 	testManifestMediaType = ociManifestMediaType
 	testInvalidValue      = "bad"
+	testOtherValue        = "other"
 )
+
+func testContainerEntrypoint() []string {
+	return []string{"/usr/local/bin/api"}
+}
+
+func testContainerCommand() []string {
+	return []string{"serve", "--port", "8080"}
+}
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
 type containerStateFixture struct {
@@ -37,8 +49,15 @@ type containerStateFixture struct {
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
 type containerConfigFixture struct {
-	Image  string            `json:"Image"`
-	Labels map[string]string `json:"Labels"`
+	Image      string            `json:"Image"`
+	Labels     map[string]string `json:"Labels"`
+	Entrypoint []string          `json:"Entrypoint"`
+	Command    []string          `json:"Cmd"`
+}
+
+//nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
+type containerHostConfigFixture struct {
+	NetworkMode string `json:"NetworkMode"`
 }
 
 //nolint:tagliatelle // OCI descriptors use lower camel case on the wire.
@@ -50,12 +69,13 @@ type descriptorFixture struct {
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
 type containerInspectFixture struct {
-	ID                      string                  `json:"Id"`
-	Name                    string                  `json:"Name"`
-	State                   *containerStateFixture  `json:"State"`
-	Image                   string                  `json:"Image"`
-	Config                  *containerConfigFixture `json:"Config"`
-	ImageManifestDescriptor *descriptorFixture      `json:"ImageManifestDescriptor"`
+	ID                      string                      `json:"Id"`
+	Name                    string                      `json:"Name"`
+	State                   *containerStateFixture      `json:"State"`
+	Image                   string                      `json:"Image"`
+	Config                  *containerConfigFixture     `json:"Config"`
+	HostConfig              *containerHostConfigFixture `json:"HostConfig"`
+	ImageManifestDescriptor *descriptorFixture          `json:"ImageManifestDescriptor"`
 }
 
 func validContainerDocument(
@@ -71,9 +91,12 @@ func validContainerDocument(
 		State: state,
 		Image: testImageConfig,
 		Config: &containerConfigFixture{
-			Image:  testContainerImage,
-			Labels: labels,
+			Image:      testContainerImage,
+			Labels:     labels,
+			Entrypoint: testContainerEntrypoint(),
+			Command:    testContainerCommand(),
 		},
+		HostConfig: &containerHostConfigFixture{NetworkMode: testNetworkMode},
 		ImageManifestDescriptor: &descriptorFixture{
 			MediaType: testManifestMediaType,
 			Digest:    testPlatformManifest,
@@ -171,6 +194,14 @@ func cloneContainerConfig(config *containertypes.Config) *containertypes.Config 
 
 	cloned.Labels = make(map[string]string, len(config.Labels))
 	maps.Copy(cloned.Labels, config.Labels)
+	cloned.Entrypoint = slices.Clone(config.Entrypoint)
+	cloned.Cmd = slices.Clone(config.Cmd)
+
+	return &cloned
+}
+
+func cloneContainerHostConfig(config *containertypes.HostConfig) *containertypes.HostConfig {
+	cloned := *config
 
 	return &cloned
 }
@@ -202,6 +233,9 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 			ImageReference:   testContainerImage,
 			ImageConfig:      imageConfig,
 			PlatformManifest: manifest,
+			Entrypoint:       testContainerEntrypoint(),
+			Command:          testContainerCommand(),
+			NetworkMode:      testNetworkMode,
 			State:            ContainerRunning,
 			Running:          true,
 			Ownership: domain.WorkloadOwnership{
@@ -215,7 +249,7 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 			},
 		},
 	}
-	if probe != want {
+	if !reflect.DeepEqual(probe, want) {
 		t.Fatalf("ProbeContainer() = %#v, want %#v", probe, want)
 	}
 }
@@ -245,6 +279,9 @@ func matchingContainerExpectation(t *testing.T) ContainerExpectation {
 		ImageReference:   testContainerImage,
 		ImageConfig:      mustTestDigest(t, testImageConfig),
 		PlatformManifest: mustTestDigest(t, testPlatformManifest),
+		Entrypoint:       testContainerEntrypoint(),
+		Command:          testContainerCommand(),
+		NetworkMode:      testNetworkMode,
 		Service:          testContainerService,
 		Transaction:      testTransaction,
 		DesiredState:     mustTestDigest(t, testDesiredState),
