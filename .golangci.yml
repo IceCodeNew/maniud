@@ -50,6 +50,7 @@ linters:
             - "!**/internal/imageref/*.go"
             - "!**/internal/registry/*.go"
             - "!**/containerconfig/compose/*.go"
+            - "!**/internal/runtime/docker/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -118,6 +119,14 @@ linters:
             - github.com/IceCodeNew/maniud
             - golang.org/x/sys
             - golang.org/x/text
+        docker-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/runtime/docker/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/moby/moby/api
     # Public adapter modules use repository-relative replacements only while
     # this monorepo develops and tests a shared release version.
     gomoddirectives:
