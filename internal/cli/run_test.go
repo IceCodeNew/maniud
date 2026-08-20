@@ -12,7 +12,15 @@ import (
 )
 
 const (
-	invalidInputJSON = "{\"code\":\"invalid_input\",\"message\":" +
+	testArchitectureAMD64 = "amd64"
+	testDockerRuntime     = "docker"
+	testImageSource       = "image:1"
+	testInvalidValue      = "invalid"
+	testPlatformAMD64     = "linux/amd64"
+	testRegistrySource    = "example.invalid/api:1"
+	testServiceName       = "service"
+	testWorkingDirectory  = "/workspace"
+	invalidInputJSON      = "{\"code\":\"invalid_input\",\"message\":" +
 		"\"command arguments are invalid; run 'maniud --help' for supported syntax\",\"retryable\":false}\n"
 	internalErrorJSON = "{\"code\":\"internal_error\",\"message\":" +
 		"\"command is unavailable in this build\",\"retryable\":false}\n"
@@ -50,16 +58,17 @@ func TestRunPublicTransport(t *testing.T) {
 			wantOutput: "maniud dev\n",
 		},
 		{
-			name:       "invalid",
+			name:       testInvalidValue,
 			args:       []string{"prepare"},
 			wantStatus: 1,
 			wantOutput: invalidInputJSON,
 		},
 		{
-			name:       "valid skeleton",
+			name:       "missing apply source",
 			args:       []string{string(commandApply), composeFileValue},
 			wantStatus: 1,
-			wantOutput: internalErrorJSON,
+			wantOutput: "{\"code\":\"apply_failed\",\"message\":" +
+				"\"apply validation failed\",\"retryable\":false}\n",
 		},
 	}
 
@@ -125,6 +134,43 @@ func TestRunHelpPages(t *testing.T) {
 		if output.String() != test.want {
 			t.Fatalf("Run(%q) output = %q, want %q", test.args, output.String(), test.want)
 		}
+	}
+}
+
+func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		args  []string
+		getwd func() (string, error)
+	}{
+		{
+			name: "working directory failure",
+			args: []string{string(commandGen), imageValue},
+			getwd: func() (string, error) {
+				return "", errClosedOutput
+			},
+		},
+		{
+			name:  "generation failure",
+			args:  []string{string(commandGen), "\x00"},
+			getwd: func() (string, error) { return testWorkingDirectory, nil },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			output := new(bytes.Buffer)
+			status := runProduction(
+				context.Background(), test.args, output, io.Discard, map[string]string{}, test.getwd,
+			)
+			if status != 1 || !strings.Contains(output.String(), `"code":"generation_failed"`) {
+				t.Fatalf("runProduction() = %d, %q", status, output.String())
+			}
+		})
 	}
 }
 
