@@ -199,10 +199,7 @@ func (lock *ServiceLock) Close() error {
 
 	valid := lock.Valid()
 
-	releaseErr := ErrInvalidState
-	if lock.store != nil {
-		releaseErr = releaseWriterLease(context.Background(), lock.store.database, lock.lease)
-	}
+	releaseErr := releaseWriterLease(context.Background(), lock.store.database, lock.lease)
 
 	valid = valid && lock.Valid()
 
