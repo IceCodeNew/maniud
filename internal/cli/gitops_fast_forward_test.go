@@ -69,6 +69,50 @@ func TestFastForwardGitOpsCheckoutRejectsInvalidRegistration(t *testing.T) {
 	}
 }
 
+func TestGitOpsFastForwardRejectsInvalidLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
+	if _, _, err := registeredGitOpsCheckout(
+		t.Context(), filepath.Join(t.TempDir(), "missing"), gitOpsTestBranch, registered,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("registeredGitOpsCheckout(missing) = %v", err)
+	}
+	if _, err := fetchGitOpsCommit(t.Context(), checkout, "missing"); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("fetchGitOpsCommit(missing branch) = %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), checkout, "remote", "set-url", gitOpsRemoteName, "ssh://example.invalid/repo",
+	); err != nil {
+		t.Fatalf("git remote set-url error = %v", err)
+	}
+	if _, err := fetchGitOpsCommit(t.Context(), checkout, gitOpsTestBranch); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("fetchGitOpsCommit(invalid remote) = %v", err)
+	}
+	if err := advanceGitOpsCheckout(
+		t.Context(), checkout, registered, "invalid",
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("advanceGitOpsCheckout(invalid upstream) = %v", err)
+	}
+
+	writeGitOpsTestCommit(t, checkout, "second.txt", "second\n", "second")
+	if err := advanceGitOpsCheckout(
+		t.Context(), checkout, registered, registered,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("advanceGitOpsCheckout(head mismatch) = %v", err)
+	}
+
+	checkout, _, _ = initFastForwardGitOpsTestRepositories(t)
+	if _, err := fetchGitOpsCommitWithResolver(
+		t.Context(), checkout, gitOpsTestBranch,
+		func(context.Context, string, string) (string, error) {
+			return "", errClosedOutput
+		},
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("fetchGitOpsCommitWithResolver(resolve failure) = %v", err)
+	}
+}
+
 func initFastForwardGitOpsTestRepositories(t *testing.T) (string, string, string) {
 	t.Helper()
 

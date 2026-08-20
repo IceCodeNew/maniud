@@ -53,17 +53,26 @@ func writeGitOpsRegistration(path string, registration gitOpsRegistration) error
 		return err
 	}
 
-	raw, err := encodeGitOpsRegistration(registration)
-	if err != nil {
-		return err
-	}
+	// gitOpsRegistration contains only JSON-supported scalar fields.
+	raw, _ := json.Marshal(registration) //nolint:errchkjson // This fixed scalar struct cannot fail JSON encoding.
+	raw = append(raw, '\n')
 
+	return publishGitOpsRegistration(path, raw, os.WriteFile, os.Rename, os.Remove)
+}
+
+func publishGitOpsRegistration(
+	path string,
+	raw []byte,
+	writeFile func(string, []byte, os.FileMode) error,
+	rename func(string, string) error,
+	remove func(string) error,
+) error {
 	temporary := path + ".tmp"
-	if err = os.WriteFile(temporary, raw, gitOpsRegistrationMode); err != nil {
+	if err := writeFile(temporary, raw, gitOpsRegistrationMode); err != nil {
 		return fmt.Errorf("write gitops registration: %w", err)
 	}
-	if err = os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if err := rename(temporary, path); err != nil {
+		_ = remove(temporary)
 
 		return fmt.Errorf("publish gitops registration: %w", err)
 	}
@@ -119,16 +128,6 @@ func readGitOpsRegistration(path string) (gitOpsRegistration, error) {
 	}
 
 	return registration, nil
-}
-
-func encodeGitOpsRegistration(registration gitOpsRegistration) ([]byte, error) {
-	if !validGitOpsRegistration(registration) {
-		return nil, errGitOpsRepositoryInvalid
-	}
-
-	raw, err := json.Marshal(registration)
-
-	return append(raw, '\n'), err
 }
 
 func validGitOpsRegistration(registration gitOpsRegistration) bool {

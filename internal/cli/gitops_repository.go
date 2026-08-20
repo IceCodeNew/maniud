@@ -7,6 +7,15 @@ import (
 )
 
 func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, error) {
+	return proveGitOpsCheckoutWithFinalCheck(ctx, path, branch, cleanGitTree)
+}
+
+func proveGitOpsCheckoutWithFinalCheck(
+	ctx context.Context,
+	path string,
+	branch string,
+	finalState func(context.Context, string) (gitTreeState, error),
+) (string, string, error) {
 	root, state, err := inspectGitOpsCheckout(ctx, path, branch)
 	if err != nil {
 		return "", "", err
@@ -20,7 +29,7 @@ func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, stri
 		return "", "", err
 	}
 
-	after, err := cleanGitTree(ctx, root)
+	after, err := finalState(ctx, root)
 	if err != nil || after != state {
 		return "", "", errGitOpsRepositoryInvalid
 	}
