@@ -32,11 +32,11 @@ func TestNewRepositoryUsesExplicitCredentialsAndTLS(t *testing.T) {
 		t.Fatalf("ParseReference() error = %v", err)
 	}
 
-	wantCredential := credential{
-		username:     testUsername,
-		password:     testPassword,
-		refreshToken: testRefreshToken,
-		accessToken:  testAccessToken,
+	wantCredential := Credentials{
+		Username:     testUsername,
+		Password:     testPassword,
+		RefreshToken: testRefreshToken,
+		AccessToken:  testAccessToken,
 	}
 
 	value, err := newRepository(reference, wantCredential)
@@ -58,7 +58,7 @@ func assertRepositoryConfiguration(t *testing.T, repository *remote.Repository) 
 	}
 }
 
-func assertRepositoryCredential(t *testing.T, repository *remote.Repository, want credential) {
+func assertRepositoryCredential(t *testing.T, repository *remote.Repository, want Credentials) {
 	t.Helper()
 
 	authClient, valid := repository.Client.(*auth.Client)
@@ -67,8 +67,8 @@ func assertRepositoryCredential(t *testing.T, repository *remote.Repository, wan
 	}
 
 	got, err := authClient.Credential(context.Background(), "registry-1.docker.io")
-	if err != nil || got.Username != want.username || got.Password != want.password ||
-		got.RefreshToken != want.refreshToken || got.AccessToken != want.accessToken {
+	if err != nil || got.Username != want.Username || got.Password != want.Password ||
+		got.RefreshToken != want.RefreshToken || got.AccessToken != want.AccessToken {
 		t.Fatalf("credential = %#v, %v", got, err)
 	}
 }
@@ -78,7 +78,7 @@ func TestNewRepositoryRejectsInvalidReference(t *testing.T) {
 
 	_, err := newRepository(
 		registry.Reference{Registry: "bad host", Repository: testImageName},
-		credential{},
+		Credentials{},
 	)
 	if err == nil {
 		t.Fatal("newRepository() accepted invalid reference")
@@ -325,8 +325,8 @@ func testRepositoryFactory(t *testing.T, httpClient *http.Client) repositoryFact
 	return func(
 		_ context.Context,
 		reference registry.Reference,
-		value credential,
-	) (remoteRepository, error) {
+		value Credentials,
+	) (Repository, error) {
 		repository, err := remote.NewRepository(reference.Registry + "/" + reference.Repository)
 		if err != nil {
 			return nil, fmt.Errorf("create test registry repository: %w", err)
@@ -335,8 +335,8 @@ func testRepositoryFactory(t *testing.T, httpClient *http.Client) repositoryFact
 		repository.Client = &auth.Client{
 			Client: httpClient,
 			Credential: auth.StaticCredential(reference.Registry, auth.Credential{
-				Username: value.username,
-				Password: value.password,
+				Username: value.Username,
+				Password: value.Password,
 			}),
 			Cache: auth.NewCache(),
 		}

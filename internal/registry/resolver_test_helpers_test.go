@@ -100,9 +100,9 @@ func indexForTest(t *testing.T, manifests []descriptor) ([]byte, ocispec.Descrip
 	return raw, descriptorForTest(raw, ocispec.MediaTypeImageIndex)
 }
 
-func resolverForTest(repository remoteRepository) *Resolver {
+func resolverForTest(repository Repository) *Resolver {
 	return newResolver(
-		func(context.Context, registry.Reference, credential) (remoteRepository, error) {
+		func(context.Context, registry.Reference, Credentials) (Repository, error) {
 			return repository, nil
 		},
 		nil,

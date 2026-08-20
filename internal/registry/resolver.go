@@ -3,14 +3,37 @@ package registry
 import (
 	"context"
 	"io"
-	"slices"
+	"unicode/utf8"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/registry"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
+	credentialvalue "github.com/IceCodeNew/maniud/internal/registry/credential"
 )
+
+// Repository supplies immutable OCI metadata to the shared image-graph
+// verifier. Implementations may read a registry or a local content store.
+type Repository interface {
+	Fetch(ctx context.Context, target ocispec.Descriptor) (io.ReadCloser, error)
+	FetchReference(ctx context.Context, reference string) (ocispec.Descriptor, io.ReadCloser, error)
+}
+
+// LocalRepository additionally proves that every selected image layer exists
+// with the descriptor's exact size and digest.
+type LocalRepository interface {
+	Repository
+	Verify(ctx context.Context, target ocispec.Descriptor) error
+}
+
+// Credentials contains credentials for one registry.
+type Credentials = credentialvalue.Value
+
+// CredentialProvider returns explicit credentials for a normalized registry
+// authority. Supplying one replaces Docker configuration lookup. Results must
+// contain valid UTF-8 and no more than 16 KiB across all fields.
+type CredentialProvider func(context.Context, string) (Credentials, error)
 
 // Options configures a registry resolver.
 type Options struct {
@@ -37,8 +60,8 @@ func NewResolver(options Options) *Resolver {
 		repositories: func(
 			_ context.Context,
 			reference registry.Reference,
-			credentialValue credential,
-		) (remoteRepository, error) {
+			credentialValue Credentials,
+		) (Repository, error) {
 			return newRepository(reference, credentialValue)
 		},
 	}
@@ -46,6 +69,24 @@ func NewResolver(options Options) *Resolver {
 
 func newResolver(factory repositoryFactory, credentials CredentialProvider) *Resolver {
 	return &Resolver{credentials: credentials, repositories: factory}
+}
+
+// Credentials returns the ephemeral credential for one canonical image
+// reference. Callers must not persist or log the result.
+func (resolver *Resolver) Credentials(
+	ctx context.Context,
+	reference imageref.Reference,
+) (Credentials, error) {
+	if resolver == nil || reference.Registry() == "" {
+		return Credentials{}, ErrUnavailable
+	}
+
+	value, err := resolver.credential(ctx, reference.Registry())
+	if err != nil {
+		return Credentials{}, err
+	}
+
+	return value, nil
 }
 
 // Resolve resolves source for platform and verifies its manifest and image config.
@@ -70,22 +111,57 @@ func (resolver *Resolver) Resolve(
 		return empty, err
 	}
 
-	top, err := fetchReferenceManifest(ctx, repository, parsed.ReferenceOrDefault())
+	return resolveRepository(ctx, source, target, parsed.ReferenceOrDefault(), repository, nil)
+}
+
+// ResolveLocal verifies an image selected from a local content store. In
+// addition to the metadata graph, it streams every selected layer through the
+// repository's descriptor verifier before returning an identity.
+func ResolveLocal(
+	ctx context.Context,
+	source imageref.Source,
+	platform domain.Platform,
+	repository LocalRepository,
+) (domain.ImageIdentity, error) {
+	if repository == nil {
+		return domain.ImageIdentity{}, ErrUnavailable
+	}
+
+	parsed, target, err := resolveInput(source, platform)
 	if err != nil {
-		return empty, err
+		return domain.ImageIdentity{}, ErrInvalidSource
+	}
+
+	return resolveRepository(ctx, source, target, parsed.ReferenceOrDefault(), repository, repository)
+}
+
+func resolveRepository(
+	ctx context.Context,
+	source imageref.Source,
+	target imagePlatform,
+	referenceName string,
+	repository Repository,
+	local LocalRepository,
+) (domain.ImageIdentity, error) {
+	top, err := fetchReferenceManifest(ctx, repository, referenceName)
+	if err != nil {
+		return domain.ImageIdentity{}, err
 	}
 
 	reference, err := source.Pin(top.digest)
 	if err != nil {
-		return empty, ErrProtocol
+		return domain.ImageIdentity{}, ErrProtocol
 	}
 
 	selected, err := manifestForPlatform(ctx, repository, top, target)
 	if err != nil {
-		return empty, err
+		return domain.ImageIdentity{}, err
+	}
+	if err := verifyLocalLayers(ctx, local, selected.layers); err != nil {
+		return domain.ImageIdentity{}, err
 	}
 
-	return resolver.resolveImageConfig(ctx, repository, top, selected, target, reference)
+	return resolveImageConfig(ctx, repository, top, selected, target, reference)
 }
 
 func resolveInput(source imageref.Source, platform domain.Platform) (registry.Reference, imagePlatform, error) {
@@ -102,20 +178,20 @@ func resolveInput(source imageref.Source, platform domain.Platform) (registry.Re
 	return parsed, target, nil
 }
 
-func (resolver *Resolver) resolveImageConfig(
+func resolveImageConfig(
 	ctx context.Context,
-	repository remoteRepository,
+	repository Repository,
 	top manifestDocument,
 	selected manifestDocument,
 	target imagePlatform,
 	reference imageref.Reference,
 ) (domain.ImageIdentity, error) {
-	configPlatform, configDigest, err := resolver.readConfig(ctx, repository, *selected.config)
+	config, configDigest, err := readConfig(ctx, repository, *selected.config)
 	if err != nil {
 		return domain.ImageIdentity{}, err
 	}
 
-	if !exactPlatform(&configPlatform, target) {
+	if !exactPlatform(&config.platform, target) {
 		if top.config != nil {
 			return domain.ImageIdentity{}, ErrPlatformUnavailable
 		}
@@ -123,7 +199,8 @@ func (resolver *Resolver) resolveImageConfig(
 		return domain.ImageIdentity{}, ErrProtocol
 	}
 
-	return domain.ImageIdentity{
+	return config.configuration.Identity(domain.ImageIdentity{
+		Origin:          domain.ImageOriginRegistry,
 		Reference:       reference.String(),
 		ReferenceDigest: reference.Digest(),
 		Platform: domain.Platform{
@@ -133,7 +210,7 @@ func (resolver *Resolver) resolveImageConfig(
 		},
 		PlatformManifest: selected.digest,
 		ImageConfig:      configDigest,
-	}, nil
+	}), nil
 }
 
 //nolint:ireturn // The repository factory is the transport seam used by the resolver and its protocol tests.
@@ -141,7 +218,7 @@ func (resolver *Resolver) openRepository(
 	ctx context.Context,
 	registryName string,
 	reference registry.Reference,
-) (remoteRepository, error) {
+) (Repository, error) {
 	credentialValue, err := resolver.credential(ctx, registryName)
 	if err != nil {
 		return nil, err
@@ -157,7 +234,7 @@ func (resolver *Resolver) openRepository(
 
 func fetchReferenceManifest(
 	ctx context.Context,
-	repository remoteRepository,
+	repository Repository,
 	reference string,
 ) (manifestDocument, error) {
 	descriptorValue, reader, err := repository.FetchReference(ctx, reference)
@@ -170,7 +247,7 @@ func fetchReferenceManifest(
 
 func fetchManifest(
 	ctx context.Context,
-	repository remoteRepository,
+	repository Repository,
 	descriptorValue ocispec.Descriptor,
 ) (manifestDocument, error) {
 	reader, err := repository.Fetch(ctx, descriptorValue)
@@ -197,7 +274,7 @@ func decodeFetchedManifest(reader io.ReadCloser, descriptorValue ocispec.Descrip
 
 func manifestForPlatform(
 	ctx context.Context,
-	repository remoteRepository,
+	repository Repository,
 	top manifestDocument,
 	target imagePlatform,
 ) (manifestDocument, error) {
@@ -213,85 +290,38 @@ func manifestForPlatform(
 	return fetchManifest(ctx, repository, toOCIDescriptor(selected))
 }
 
-func exactPlatform(value *imagePlatform, target imagePlatform) bool {
-	return value != nil && value.OS == target.OS && value.Architecture == target.Architecture &&
-		value.OSVersion == target.OSVersion && value.Variant == target.Variant &&
-		slices.Equal(value.OSFeatures, target.OSFeatures) && slices.Equal(value.Features, target.Features)
-}
-
-func selectPlatform(values []descriptor, target imagePlatform) (descriptor, error) {
-	var selected descriptor
-
-	found := false
-
-	for _, value := range values {
-		if !slices.Contains(
-			[]string{dockerMediaTypeManifest, ocispec.MediaTypeImageManifest},
-			value.MediaType,
-		) {
-			continue
-		}
-
-		if !validDescriptor(
-			value,
-			maximumManifestBytes,
-			dockerMediaTypeManifest,
-			ocispec.MediaTypeImageManifest,
-		) {
-			return descriptor{}, ErrProtocol
-		}
-
-		if !exactPlatform(value.Platform, target) {
-			continue
-		}
-
-		if found {
-			return descriptor{}, ErrProtocol
-		}
-
-		selected = value
-		found = true
-	}
-
-	if !found {
-		return descriptor{}, ErrPlatformUnavailable
-	}
-
-	return selected, nil
-}
-
-func (resolver *Resolver) readConfig(
+func readConfig(
 	ctx context.Context,
-	repository remoteRepository,
+	repository Repository,
 	descriptorValue descriptor,
-) (imagePlatform, domain.Digest, error) {
+) (imageConfigEvidence, domain.Digest, error) {
 	if !validDescriptor(
 		descriptorValue,
 		maximumConfigBytes,
 		dockerMediaTypeImageConfig,
 		ocispec.MediaTypeImageConfig,
 	) {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
 	configDescriptor := toOCIDescriptor(descriptorValue)
 
 	reader, err := repository.Fetch(ctx, configDescriptor)
 	if err != nil {
-		return imagePlatform{}, domain.Digest{}, classifyRemoteError(err)
+		return imageConfigEvidence{}, domain.Digest{}, classifyRemoteError(err)
 	}
 
 	raw, err := readVerified(reader, configDescriptor, maximumConfigBytes)
 	if err != nil {
-		return imagePlatform{}, domain.Digest{}, classifyRemoteError(err)
+		return imageConfigEvidence{}, domain.Digest{}, classifyRemoteError(err)
 	}
 
 	return decodeImageConfig(raw, configDescriptor)
 }
 
-func (resolver *Resolver) credential(ctx context.Context, registry string) (credential, error) {
+func (resolver *Resolver) credential(ctx context.Context, registry string) (Credentials, error) {
 	if resolver.credentials == nil {
-		var empty credential
+		var empty Credentials
 
 		return empty, nil
 	}
@@ -299,18 +329,32 @@ func (resolver *Resolver) credential(ctx context.Context, registry string) (cred
 	value, err := resolver.credentials(ctx, registry)
 	if err != nil {
 		if ctx.Err() != nil {
-			return credential{}, classifyRemoteError(ctx.Err())
+			return Credentials{}, classifyRemoteError(ctx.Err())
 		}
 
-		return credential{}, ErrUnavailable
+		return Credentials{}, ErrUnavailable
 	}
 
-	return credential{
-		username:     value.Username,
-		password:     value.Password,
-		refreshToken: value.RefreshToken,
-		accessToken:  value.AccessToken,
-	}, nil
+	if !validCredentials(value) {
+		return Credentials{}, ErrUnavailable
+	}
+
+	return value, nil
+}
+
+func validCredentials(value Credentials) bool {
+	values := []string{value.Username, value.Password, value.RefreshToken, value.AccessToken}
+	total := 0
+
+	for _, item := range values {
+		if !utf8.ValidString(item) {
+			return false
+		}
+
+		total += len(item)
+	}
+
+	return total <= maximumCredentialBytes
 }
 
 func toOCIDescriptor(value descriptor) ocispec.Descriptor {

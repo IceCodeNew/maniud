@@ -34,8 +34,18 @@ func classifyRemoteError(err error) error {
 		return ErrCancelled
 	}
 
-	if errors.Is(err, ErrProtocol) {
-		return ErrProtocol
+	for _, classified := range []error{
+		ErrCancelled,
+		ErrNotFound,
+		ErrPlatformUnavailable,
+		ErrProtocol,
+		ErrRateLimited,
+		ErrUnauthorized,
+		ErrUnavailable,
+	} {
+		if errors.Is(err, classified) {
+			return classified
+		}
 	}
 
 	if errors.Is(err, errdef.ErrNotFound) {
