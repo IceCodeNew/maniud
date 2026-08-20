@@ -111,6 +111,10 @@ func testStrictImageSelection(t *testing.T) {
 	if _, err := selectImage(entries, "@0"); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("duplicate config error = %v", err)
 	}
+	entries[1] = manifestEntry{Config: "b", RepoTags: []string{"x/other:z"}}
+	if duplicateSelectedIdentity(entries, 0) {
+		t.Fatal("distinct identity reported as duplicate")
+	}
 	if _, err := selectedManifestIndex(entries, "@2"); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("out-of-range index error = %v", err)
 	}
@@ -696,6 +700,11 @@ func TestArchiveReaderAndRemainderFailures(t *testing.T) {
 	cancel()
 	if validTarRemainder(ctx, file, 0, tarRecordBytes) {
 		t.Fatal("validTarRemainder(cancelled) succeeded")
+	}
+	largeZeroFile := mustBytesFile(t, make([]byte, archiveReadBufferBytes+tarRecordBytes))
+	defer closeTestFile(t, largeZeroFile)
+	if !validTarRemainder(context.Background(), largeZeroFile, 0, archiveReadBufferBytes+tarRecordBytes) {
+		t.Fatal("validTarRemainder(large zero remainder) failed")
 	}
 
 	header := &tar.Header{Name: manifestName, Format: tar.FormatUSTAR, Typeflag: tar.TypeDir}
