@@ -78,19 +78,23 @@ func upgradeCreateOptions(sources []backedStorageSource) WorkloadCreateOptions {
 	return options
 }
 
-func replacementBindSources(sources []backedStorageSource, workload domain.DesiredWorkload) []backedStorageSource {
-	replacements := make([]backedStorageSource, 0, len(sources))
+func replacementBindIndexes(sources []backedStorageSource, workload domain.DesiredWorkload) []int {
+	replacements := make([]int, 0, len(sources))
 	for _, source := range sources {
 		if source.Mount.Kind != domain.MountBind {
 			continue
 		}
 
-		desired, found := desiredWritableBind(workload, source.Mount.Target)
-		if !found || desired.Source == "" || desired.Source == source.Mount.Source {
-			continue
-		}
+		for index, desired := range workload.Mounts {
+			if desired.Target != source.Mount.Target || desired.Kind != domain.MountBind || desired.ReadOnly ||
+				desired.Source == "" || desired.Source == source.Mount.Source {
+				continue
+			}
 
-		replacements = append(replacements, backedStorageSource{Mount: source.Mount})
+			replacements = append(replacements, index)
+
+			break
+		}
 	}
 
 	if len(replacements) == 0 {
@@ -98,16 +102,4 @@ func replacementBindSources(sources []backedStorageSource, workload domain.Desir
 	}
 
 	return replacements
-}
-
-func desiredWritableBind(workload domain.DesiredWorkload, target string) (domain.Mount, bool) {
-	for _, desired := range workload.Mounts {
-		if desired.Target != target || desired.Kind != domain.MountBind || desired.ReadOnly {
-			continue
-		}
-
-		return desired, true
-	}
-
-	return domain.Mount{}, false
 }

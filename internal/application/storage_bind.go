@@ -18,7 +18,7 @@ func prepareUpgradeReplacementBinds(execution *upgradeExecution) error {
 		return ErrInvalidRequest
 	}
 
-	replacements := replacementBindSources(execution.sources, execution.mutation.preparation.Workload)
+	replacements := replacementBindIndexes(execution.sources, execution.mutation.preparation.Workload)
 	if len(replacements) == 0 {
 		return nil
 	}
@@ -29,12 +29,8 @@ func prepareUpgradeReplacementBinds(execution *upgradeExecution) error {
 	}
 
 	transaction := execution.mutation.preparation.Transaction.ID.String()
-	for _, source := range replacements {
-		desired, found := desiredWritableBind(execution.mutation.preparation.Workload, source.Mount.Target)
-		if !found {
-			return ErrConflictingState
-		}
-
+	for _, index := range replacements {
+		desired := execution.mutation.preparation.Workload.Mounts[index]
 		path, err := replacementBindPath(root, transaction, desired)
 		if err != nil {
 			return err
@@ -43,9 +39,7 @@ func prepareUpgradeReplacementBinds(execution *upgradeExecution) error {
 			return err
 		}
 
-		if err = rewriteDesiredBindSource(&execution.mutation.preparation.Workload, desired.Target, path); err != nil {
-			return err
-		}
+		execution.mutation.preparation.Workload.Mounts[index].Source = path
 	}
 
 	return nil
@@ -94,22 +88,4 @@ func ensureEmptyReplacementBind(path string) error {
 	default:
 		return fmt.Errorf("stat replacement bind: %w", err)
 	}
-}
-
-func rewriteDesiredBindSource(workload *domain.DesiredWorkload, target, source string) error {
-	if workload == nil || target == "" || source == "" {
-		return ErrInvalidRequest
-	}
-
-	for index, mount := range workload.Mounts {
-		if mount.Target != target || mount.Kind != domain.MountBind || mount.ReadOnly {
-			continue
-		}
-
-		workload.Mounts[index].Source = source
-
-		return nil
-	}
-
-	return ErrConflictingState
 }
