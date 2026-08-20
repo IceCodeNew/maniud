@@ -101,6 +101,10 @@ func TestAnalyzeInventoryAndSemanticIdentity(t *testing.T) {
 func TestAnalyzeAcceptsTypeRegA(t *testing.T) {
 	t.Parallel()
 
+	kind, link, valid := new(archiveScan).entryIdentity(testFileName, &tar.Header{Typeflag: tarTypeRegularLegacy})
+	if !valid || kind != entryRegular || link != "" {
+		t.Fatalf("entryIdentity(TypeRegA) = %d, %q, %t", kind, link, valid)
+	}
 	archive := makeTar(t, tarMember{
 		header: tar.Header{Name: testFileName, Typeflag: tarTypeRegularLegacy}, body: "x",
 	})
