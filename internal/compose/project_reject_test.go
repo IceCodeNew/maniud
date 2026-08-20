@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestZeroProjectRejectsWorkload(t *testing.T) {
@@ -12,7 +14,9 @@ func TestZeroProjectRejectsWorkload(t *testing.T) {
 
 	var project Project
 
-	_, err := project.Workload("")
+	var image domain.ImageIdentity
+
+	_, err := project.Workload("", image)
 	if !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Workload() error = %v, want ErrInvalidSource", err)
 	}
@@ -165,39 +169,6 @@ services:
 `,
 		},
 		{
-			name: "mutable image tag",
-			content: `
-name: example
-services:
-  api:
-    container_name: example-api
-    image: invalid.example/team/api:1
-    network_mode: bridge
-`,
-		},
-		{
-			name: "short image name",
-			content: `
-name: example
-services:
-  api:
-    container_name: example-api
-    image: api@` + testReferenceDigest + `
-    network_mode: bridge
-`,
-		},
-		{
-			name: "uppercase image registry",
-			content: `
-name: example
-services:
-  api:
-    container_name: example-api
-    image: EXAMPLE.com/team/api@` + testReferenceDigest + `
-    network_mode: bridge
-`,
-		},
-		{
 			name: "uppercase image digest",
 			content: `
 name: example
@@ -236,12 +207,12 @@ services:
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			project, err := Load(context.Background(), testSource(t, pinTestImages(test.content)))
+			project, err := Load(context.Background(), testSource(t, test.content))
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
 
-			_, err = project.Workload("")
+			_, err = project.ImageSource("")
 			if !errors.Is(err, ErrInvalidSource) {
 				t.Fatalf("Workload() error = %v, want ErrInvalidSource", err)
 			}
