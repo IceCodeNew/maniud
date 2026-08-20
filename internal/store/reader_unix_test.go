@@ -261,6 +261,17 @@ func TestOpenReaderRejectsInvalidStateWithoutRepair(t *testing.T) {
 			},
 			want: ErrInvalidState,
 		},
+		{
+			name: "incomplete v1 schema",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				state := openJournalStore(t, path)
+				_, err := state.database.ExecContext(context.Background(), "DROP TABLE workload_backups")
+				requireNoError(t, err)
+				requireNoError(t, state.Close())
+			},
+			want: ErrInvalidState,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
