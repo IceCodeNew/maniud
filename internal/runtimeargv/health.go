@@ -33,7 +33,8 @@ func (parser *argvParser) setHealth(field, value string) error {
 		parser.health.StartInterval = canonical
 	case healthStartPeriod:
 		parser.health.StartPeriod = canonical
-	case healthTimeout:
+	default:
+		// canonicalHealthValue leaves timeout as the only remaining field.
 		parser.health.Timeout = canonical
 	}
 
