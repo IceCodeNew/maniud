@@ -169,6 +169,10 @@ func TestEvidenceIdentityClonesConfiguration(t *testing.T) {
 	if got := (imageconfig.Evidence{}).Identity(domain.ImageIdentity{}); got.Healthcheck != nil {
 		t.Fatalf("nil healthcheck became non-nil: %#v", got)
 	}
+	withoutRetries := imageconfig.Evidence{Healthcheck: &domain.Healthcheck{Test: []string{testHealthCMD, testTrueCommand}}}
+	if got := withoutRetries.Identity(domain.ImageIdentity{}); got.Healthcheck == nil || got.Healthcheck.Retries != nil {
+		t.Fatalf("healthcheck without retries = %#v", got.Healthcheck)
+	}
 }
 
 func TestDecodePortAndHealthcheckBoundaries(t *testing.T) {
@@ -185,6 +189,11 @@ func TestDecodePortAndHealthcheckBoundaries(t *testing.T) {
 		{TargetPort: 53, Protocol: "udp"}, {TargetPort: 65535, Protocol: "sctp"}}
 	if !reflect.DeepEqual(got.ExposedPorts, wantPorts) || got.Healthcheck == nil || !got.Healthcheck.Disabled {
 		t.Fatalf("Decode() = %#v", got)
+	}
+	raw = []byte(`{"config":{"Healthcheck":{"Test":["CMD","true"]}}}`)
+	got, err = imageconfig.Decode(raw, int64(len(raw)))
+	if err != nil || got.Healthcheck == nil || got.Healthcheck.Retries != nil {
+		t.Fatalf("Decode(healthcheck without retries) = %#v, %v", got, err)
 	}
 
 	invalid := []string{"0", "65536/tcp", "abc/tcp", "80/http", "80/tcp/extra", "a\\u0000b"}
