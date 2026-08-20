@@ -43,6 +43,7 @@ linters:
           files:
             - $all
             - "!**/imageref/*.go"
+            - "!**/internal/store/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -55,6 +56,15 @@ linters:
             - github.com/IceCodeNew/maniud
             - github.com/distribution/reference
             - github.com/opencontainers/go-digest
+        persistence-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/store/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/sys
+            - modernc.org/sqlite
     # Public adapter modules use repository-relative replacements only while
     # this monorepo develops and tests a shared release version.
     gomoddirectives:
