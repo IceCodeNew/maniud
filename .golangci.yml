@@ -1,0 +1,61 @@
+version: "2"
+
+linters:
+  # Run the broad suite, then document exclusions whose signal does not justify
+  # their maintenance cost. Prek invokes this suite instead of duplicating it.
+  default: all
+  disable:
+    # Slow analyzers for frameworks or generated APIs absent from this project.
+    - arangolint
+    - clickhouselint
+    - ginkgolinter
+    - protogetter
+    - spancheck
+    - testifylint
+
+    # First-party structured logging defaults to log/slog, which the enabled
+    # sloglint, loggercheck, and govet analyzers cover. This slow analyzer only
+    # checks whether zerolog events end with Send or Msg.
+    - zerologlint
+
+    # Slow blanket style rules with high false-positive or rewrite cost. Fast
+    # formatting, naming, complexity, and autofix rules remain enabled.
+    - exhaustruct
+    - noinlineerr
+    - nonamedreturns
+    - varnamelen
+    - wsl_v5
+
+    # White-box tests intentionally remain in-package.
+    - testpackage
+
+    # Deprecated rules have current replacements in the enabled all set.
+    - gomodguard
+    - wsl
+  settings:
+    # depguard owns source import boundaries. gomodguard_v2 stays enabled and
+    # fast, but has no exact-version allowlist: Renovate and go.mod/go.sum own
+    # versions until the project defines a block or replacement policy.
+    depguard:
+      rules:
+        project:
+          list-mode: strict
+          files:
+            - $all
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+
+formatters:
+  # `golangci-lint run` reports formatter drift, so prek does not duplicate
+  # gofmt/goimports hooks. Developers can apply both with golangci-lint fmt.
+  enable:
+    - gofmt
+    - goimports
