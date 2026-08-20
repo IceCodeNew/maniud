@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ const (
 	testInvalidValue      = "invalid"
 	testPlatformAMD64     = "linux/amd64"
 	testRegistrySource    = "example.invalid/api:1"
+	testRelativePath      = "relative"
 	testServiceName       = "service"
 	testWorkingDirectory  = "/workspace"
 	invalidInputJSON      = "{\"code\":\"invalid_input\",\"message\":" +
@@ -29,6 +31,12 @@ const (
 )
 
 var errClosedOutput = errors.New("closed output")
+
+type unavailableInvocation struct{}
+
+func (unavailableInvocation) kind() command {
+	return "unavailable"
+}
 
 func TestRunPublicTransport(t *testing.T) {
 	t.Parallel()
@@ -171,6 +179,57 @@ func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
 				t.Fatalf("runProduction() = %d, %q", status, output.String())
 			}
 		})
+	}
+}
+
+func TestRunProductionWiresLongRunningCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := [][]string{
+		{gitOpsCommand, initCommand, testRelativePath},
+		{string(commandDaemon), "--once"},
+		{string(commandDoctor), reindexBackupsOption},
+	}
+	for _, arguments := range commands {
+		var output bytes.Buffer
+		status := runProduction(
+			t.Context(), arguments, &output, io.Discard, map[string]string{}, os.Getwd,
+		)
+		if status != 1 {
+			t.Fatalf("runProduction(%v) = %d, %q", arguments, status, output.String())
+		}
+	}
+}
+
+func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
+	t.Parallel()
+
+	tests := []invocation{
+		{arguments: gitOpsInitInvocation{}},
+		{arguments: daemonInvocation{}},
+		{arguments: doctorInvocation{}},
+	}
+	for _, parsed := range tests {
+		var output bytes.Buffer
+		status := dispatchParsedCommand(
+			parsed, &output, nil,
+			func(genInvocation) error { return nil },
+			func(applyInvocation) error { return nil },
+			func(gitOpsInitInvocation) error { return nil },
+			func(daemonInvocation) error { return nil },
+			func(doctorInvocation) error { return nil },
+		)
+		if status != 0 || output.Len() != 0 {
+			t.Fatalf("dispatchParsedCommand(%T) = %d, %q", parsed.arguments, status, output.String())
+		}
+	}
+
+	var output bytes.Buffer
+	status := dispatchParsedCommand(
+		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil,
+	)
+	if status != 1 || output.String() != internalErrorJSON {
+		t.Fatalf("dispatchParsedCommand(unavailable) = %d, %q", status, output.String())
 	}
 }
 

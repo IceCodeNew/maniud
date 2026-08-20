@@ -115,6 +115,9 @@ func TestClassifyDoctorCommandFailure(t *testing.T) {
 	}{
 		{name: "context canceled", err: context.Canceled, code: domain.ErrorOperationCancelled},
 		{name: "invalid", err: errInvalidArguments, code: domain.ErrorInvalidInput},
+		{name: "missing state home", err: errStateHomeUnavailable, code: domain.ErrorInvalidInput},
+		{name: "invalid state home", err: errStateHomeInvalid, code: domain.ErrorInvalidInput},
+		{name: "invalid GitOps repository", err: errGitOpsRepositoryInvalid, code: domain.ErrorInvalidInput},
 		{name: "apply", err: errDoctorTest, code: domain.ErrorApplyFailed},
 	}
 
