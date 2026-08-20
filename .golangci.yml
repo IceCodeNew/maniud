@@ -43,6 +43,7 @@ linters:
           files:
             - $all
             - "!**/internal/store/*.go"
+            - "!**/internal/compose/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -55,6 +56,15 @@ linters:
             - github.com/IceCodeNew/maniud
             - golang.org/x/sys
             - modernc.org/sqlite
+        compose-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/compose/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/compose-spec/compose-go/v2
+            - go.yaml.in/yaml/v4
     nolintlint:
       require-explanation: true
       require-specific: true
