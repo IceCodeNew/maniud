@@ -42,9 +42,19 @@ linters:
           list-mode: strict
           files:
             - $all
+            - "!**/internal/store/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+        persistence-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/store/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/sys
+            - modernc.org/sqlite
     nolintlint:
       require-explanation: true
       require-specific: true
