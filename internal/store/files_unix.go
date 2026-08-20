@@ -301,6 +301,7 @@ func waitForFileLock(
 
 			return errors.Join(ErrUnavailable, ctx.Err())
 		case <-timer.C:
+			continue
 		}
 	}
 }
