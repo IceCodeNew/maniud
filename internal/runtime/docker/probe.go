@@ -3,12 +3,13 @@ package docker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
 
 	"github.com/moby/moby/api/types/system"
+
+	"github.com/IceCodeNew/maniud/internal/jsonstrict"
 )
 
 func (client *Client) negotiate(ctx context.Context) (Version, error) {
@@ -116,19 +117,7 @@ func (client *Client) serverVersion(
 }
 
 func decodeStrictJSON(reader io.Reader, target any) bool {
-	value, err := io.ReadAll(io.LimitReader(reader, maximumJSONBytes+1))
-	if err != nil || len(value) > maximumJSONBytes {
-		return false
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.DisallowUnknownFields()
-
-	if decoder.Decode(target) != nil {
-		return false
-	}
-
-	return decoder.Decode(&struct{}{}) == io.EOF
+	return jsonstrict.Decode(reader, maximumJSONBytes, target)
 }
 
 func isJSON(contentType string) bool {
