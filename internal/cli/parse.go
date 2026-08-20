@@ -24,6 +24,7 @@ const (
 	nameOption                   = "--name"
 	outputOption                 = "--output"
 	branchOption                 = "--branch"
+	defaultGitOpsBranch          = "main"
 	intervalOption               = "--interval"
 	dryRunOption                 = "--dry-run"
 	debugOption                  = "--debug"
@@ -236,7 +237,7 @@ func parseGitOps(args []string) (invocation, error) {
 	}
 
 	flags := newFlagSet("gitops init")
-	branch := flags.String(branchOption[2:], "main", "")
+	branch := flags.String(branchOption[2:], defaultGitOpsBranch, "")
 
 	if flags.Parse(ordered) != nil || flags.NArg() != 1 {
 		return invocation{}, errInvalidArguments
