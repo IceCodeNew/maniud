@@ -13,28 +13,35 @@ import (
 
 const effectiveWorkloadVersion = 1
 
-// Workload projects one active service into runtime-neutral desired state.
-func (project Project) Workload(serviceName string) (domain.DesiredWorkload, error) {
-	if project.value == nil || projectUsesUnsupportedFields(project.value) {
-		return domain.DesiredWorkload{}, ErrInvalidSource
-	}
-
-	selected, serviceFound := selectedService(project.value, serviceName)
-	if !serviceFound || serviceUsesUnsupportedFields(selected) || !validContainerName(selected.ContainerName) ||
-		selected.NetworkMode != "bridge" {
-		return domain.DesiredWorkload{}, ErrInvalidSource
-	}
-
-	reference, err := imageref.Parse(selected.Image)
+// ImageSource returns the normalized registry source for one active service.
+func (project Project) ImageSource(serviceName string) (imageref.Source, error) {
+	selected, err := project.service(serviceName)
 	if err != nil {
+		return imageref.Source{}, err
+	}
+
+	source, err := imageref.Normalize(selected.Image)
+	if err != nil {
+		return imageref.Source{}, ErrInvalidSource
+	}
+
+	return source, nil
+}
+
+// Workload projects one active service into runtime-neutral desired state.
+func (project Project) Workload(
+	serviceName string,
+	image domain.ImageIdentity,
+) (domain.DesiredWorkload, error) {
+	selected, err := project.service(serviceName)
+	if err != nil || !imageResolvesSource(selected.Image, image) {
 		return domain.DesiredWorkload{}, ErrInvalidSource
 	}
 
 	workload := domain.DesiredWorkload{
 		ServiceName:     selected.Name,
 		ContainerName:   selected.ContainerName,
-		Image:           selected.Image,
-		ReferenceDigest: reference.Digest(),
+		Image:           image,
 		Entrypoint:      slices.Clone(selected.Entrypoint),
 		Command:         slices.Clone(selected.Command),
 		SourceDigest:    project.sourceDigest,
@@ -43,6 +50,34 @@ func (project Project) Workload(serviceName string) (domain.DesiredWorkload, err
 	workload.EffectiveDigest = domain.Hash(effectiveWorkloadBytes(workload))
 
 	return workload, nil
+}
+
+func (project Project) service(serviceName string) (composetypes.ServiceConfig, error) {
+	if project.value == nil || projectUsesUnsupportedFields(project.value) {
+		return composetypes.ServiceConfig{}, ErrInvalidSource
+	}
+
+	selected, serviceFound := selectedService(project.value, serviceName)
+	if !serviceFound || serviceUsesUnsupportedFields(selected) || !validContainerName(selected.ContainerName) ||
+		selected.NetworkMode != "bridge" {
+		return composetypes.ServiceConfig{}, ErrInvalidSource
+	}
+
+	return selected, nil
+}
+
+func imageResolvesSource(value string, image domain.ImageIdentity) bool {
+	source, err := imageref.Normalize(value)
+	if err != nil {
+		return false
+	}
+
+	expected, err := source.Pin(image.ReferenceDigest)
+	if err != nil {
+		return false
+	}
+
+	return expected.String() == image.Reference
 }
 
 func selectedService(project *composetypes.Project, requested string) (composetypes.ServiceConfig, bool) {
@@ -115,8 +150,13 @@ func effectiveWorkloadBytes(workload domain.DesiredWorkload) []byte {
 	encoded := []byte{effectiveWorkloadVersion}
 	encoded = appendString(encoded, workload.ServiceName)
 	encoded = appendString(encoded, workload.ContainerName)
-	encoded = appendString(encoded, workload.Image)
-	encoded = append(encoded, workload.ReferenceDigest[:]...)
+	encoded = appendString(encoded, workload.Image.Reference)
+	encoded = append(encoded, workload.Image.ReferenceDigest[:]...)
+	encoded = appendString(encoded, workload.Image.Platform.OS)
+	encoded = appendString(encoded, workload.Image.Platform.Architecture)
+	encoded = appendString(encoded, workload.Image.Platform.Variant)
+	encoded = append(encoded, workload.Image.PlatformManifest[:]...)
+	encoded = append(encoded, workload.Image.ImageConfig[:]...)
 	encoded = appendStringSlice(encoded, workload.Entrypoint)
 	encoded = appendStringSlice(encoded, workload.Command)
 
