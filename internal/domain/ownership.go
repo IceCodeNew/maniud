@@ -15,6 +15,17 @@ const (
 	LabelPlatformManifestDigest = "io.maniud.platform-manifest-digest"
 )
 
+// IsOwnershipLabel reports whether a key is reserved for maniud evidence.
+func IsOwnershipLabel(value string) bool {
+	switch value {
+	case LabelService, LabelTransaction, LabelDesiredStateDigest, LabelReferenceDigest,
+		LabelImageConfigDigest, LabelPlatformManifestDigest:
+		return true
+	default:
+		return false
+	}
+}
+
 // OwnershipStatus classifies the complete maniud ownership label set.
 type OwnershipStatus uint8
 
