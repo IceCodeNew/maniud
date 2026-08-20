@@ -43,10 +43,13 @@ linters:
           files:
             - $all
             - "!**/internal/store/*.go"
+            - "!**/internal/backup/*.go"
             - "!**/internal/compose/*.go"
             - "!**/internal/imageref/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/internal/runtime/containerd/*.go"
             - "!**/internal/runtime/docker/*.go"
+            - "!**/internal/runtime/podman/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -59,6 +62,19 @@ linters:
             - github.com/IceCodeNew/maniud
             - golang.org/x/sys
             - modernc.org/sqlite
+        backup:
+          list-mode: strict
+          files:
+            - "**/internal/backup/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            # Durable publication needs anchored no-follow filesystem calls
+            # and exclusive no-replace rename on Linux and macOS.
+            - golang.org/x/sys
+            # Archive member identity checks require Unicode normalization
+            # and full case folding.
+            - golang.org/x/text
         compose-adapter:
           list-mode: strict
           files:
@@ -87,6 +103,19 @@ linters:
             - github.com/opencontainers/image-spec
             - golang.org/x/sys
             - oras.land/oras-go/v2
+        containerd-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/runtime/containerd/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/containerd/containerd/api
+            - github.com/opencontainers/go-digest
+            - github.com/opencontainers/image-spec
+            - golang.org/x/sys
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
         docker-adapter:
           list-mode: strict
           files:
@@ -96,6 +125,16 @@ linters:
             - github.com/IceCodeNew/maniud
             - github.com/moby/moby/api
             - golang.org/x/crypto
+        podman-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/runtime/podman/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            # Darwin and Linux socket identity reads need unix.Stat_t fields
+            # and LOCAL_PEERCRED / LOCAL_PEERPID.
+            - golang.org/x/sys
     nolintlint:
       require-explanation: true
       require-specific: true

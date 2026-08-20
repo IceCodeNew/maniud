@@ -36,5 +36,12 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	os.Exit(run())
+}
+
+func run() int {
+	ctx, stop := cli.CommandContext(context.Background())
+	defer stop()
+
+	return cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 }
