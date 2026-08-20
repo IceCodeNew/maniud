@@ -112,6 +112,19 @@ func TestPullImageSupportsAnonymousVariantPulls(t *testing.T) {
 	}
 }
 
+func TestImagePullRequestOmitsEmptyAuthentication(t *testing.T) {
+	t.Parallel()
+
+	client := connectedTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	request, err := client.imagePullRequest(context.Background(), "/images/create", nil, "")
+	if err != nil {
+		t.Fatalf("imagePullRequest() error = %v", err)
+	}
+	if request.Header.Get(dockerRegistryAuthHeader) != "" {
+		t.Fatal("imagePullRequest() set empty registry authentication")
+	}
+}
+
 func TestPullImageRejectsInvalidInputAndAuthentication(t *testing.T) {
 	t.Parallel()
 
