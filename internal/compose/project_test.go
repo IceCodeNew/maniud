@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -15,6 +16,54 @@ const (
 	testPlatformManifestDigest = "sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
 	testImageConfigDigest      = "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
 )
+
+func TestProjectSelectsRuntimeFromValidatedServiceMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		maniud  string
+		want    domain.RuntimeKind
+		wantErr bool
+	}{
+		{name: "plain Compose", maniud: "", want: domain.RuntimeDocker},
+		{name: "explicit Docker", maniud: "docker", want: domain.RuntimeDocker},
+		{name: "Podman", maniud: composePodmanRuntime, want: domain.RuntimePodman},
+		{name: "nerdctl image runtime", maniud: composeNerdctlRuntime, want: domain.RuntimeContainerd},
+		{name: "metadata for another service", maniud: "other", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			extension := ""
+			if test.maniud == "other" {
+				extension = "x-maniud:\n  services:\n    worker:\n      runtime: podman\n"
+			} else if test.maniud != "" {
+				extension = "x-maniud:\n  services:\n    api:\n      runtime: " + test.maniud + "\n"
+			}
+			project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+`+extension))
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got, err := project.Runtime("")
+			if (err != nil) != test.wantErr || got != test.want {
+				t.Fatalf("Runtime() = %q, %v", got, err)
+			}
+		})
+	}
+
+	if _, err := (Project{}).Runtime(""); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("Runtime(zero project) error = %v", err)
+	}
+}
 
 func TestWorkloadProjectsCoreService(t *testing.T) {
 	t.Parallel()
@@ -43,11 +92,15 @@ services:
 	}
 
 	want := domain.DesiredWorkload{
-		ServiceName:     "api",
-		ContainerName:   "example-api",
+		WorkloadSpec: domain.WorkloadSpec{
+			ServiceName:   apiService,
+			ContainerName: "example-api",
+			Platform:      image.Platform,
+			Entrypoint:    []string{"/bin/api"},
+			Command:       []string{"serve", "--port", "8080"},
+			NetworkMode:   composeBridgeNetwork,
+		},
 		Image:           image,
-		Entrypoint:      []string{"/bin/api"},
-		Command:         []string{"serve", "--port", "8080"},
 		SourceDigest:    domain.Hash(source.Content),
 		EffectiveDigest: workload.EffectiveDigest,
 	}
@@ -57,6 +110,55 @@ services:
 
 	if workload.EffectiveDigest == (domain.Digest{}) {
 		t.Fatal("EffectiveDigest is empty")
+	}
+}
+
+func TestWorkloadValidatesRegistryPlatformAndOrigin(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    platform: linux/amd64
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	image := resolvedImageForService(t, project, "api")
+	if _, err = project.Workload("api", image); err != nil {
+		t.Fatalf("Workload() error = %v", err)
+	}
+
+	archive := image
+	archive.Origin = domain.ImageOriginDockerArchive
+	unknown := image
+	unknown.Origin = domain.ImageOriginUnknown
+	mismatch := image
+	mismatch.Platform = domain.Platform{OS: archiveLinuxOS, Architecture: archiveARM64, Variant: archiveARM64Variant}
+	for _, value := range []domain.ImageIdentity{archive, unknown, mismatch} {
+		if _, err = project.Workload("api", value); !errors.Is(err, ErrInvalidSource) {
+			t.Fatalf("Workload(%#v) error = %v", value, err)
+		}
+	}
+
+	invalidPlatform, err := Load(context.Background(), testSource(t, strings.Replace(
+		`name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    platform: linux/amd64
+`, "linux/amd64", "linux/386", 1)))
+	if err != nil {
+		t.Fatalf("Load(invalid platform syntax) error = %v", err)
+	}
+	if _, err = invalidPlatform.Workload("api", image); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("Workload(unsupported platform) error = %v", err)
 	}
 }
 
@@ -109,7 +211,8 @@ services:
     command: []
 `)
 
-	if inherited.Entrypoint != nil || inherited.Command != nil {
+	if !reflect.DeepEqual(inherited.Entrypoint, []string{testImageEntrypoint}) ||
+		!reflect.DeepEqual(inherited.Command, []string{testImageCommand}) {
 		t.Fatalf("inherited process = %#v", inherited)
 	}
 
@@ -119,6 +222,103 @@ services:
 
 	if inherited.EffectiveDigest == cleared.EffectiveDigest {
 		t.Fatal("EffectiveDigest ignored explicit process clearing")
+	}
+}
+
+func TestWorkloadPreservesAbsentImageProcessDefaults(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	image := resolvedImageForService(t, project, "api")
+	image.Entrypoint = nil
+	image.Command = nil
+
+	workload, err := project.Workload("api", image)
+	if err != nil || workload.Entrypoint != nil || workload.Command != nil ||
+		workload.EffectiveDigest == (domain.Digest{}) {
+		t.Fatalf("Workload(absent image process) = %#v, %v", workload, err)
+	}
+}
+
+func TestWorkloadEntrypointOverrideClearsImageCommand(t *testing.T) {
+	t.Parallel()
+
+	workload := loadWorkload(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    entrypoint: ["/override-entrypoint"]
+`)
+
+	if !reflect.DeepEqual(workload.Entrypoint, []string{"/override-entrypoint"}) ||
+		workload.Command == nil || len(workload.Command) != 0 {
+		t.Fatalf("overridden process = %#v", workload)
+	}
+}
+
+func TestWorkloadCanonicalizesInheritedHealthRetries(t *testing.T) {
+	t.Parallel()
+
+	workload := loadWorkload(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    healthcheck:
+      test: ["CMD", "true"]
+      retries: 0
+`)
+
+	if workload.Healthcheck == nil || workload.Healthcheck.Retries != nil {
+		t.Fatalf("healthcheck = %#v", workload.Healthcheck)
+	}
+}
+
+func TestWorkloadClonesResolvedImageProcessEvidence(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	image := resolvedImageForService(t, project, "api")
+
+	workload, err := project.Workload("api", image)
+	if err != nil {
+		t.Fatalf("Workload() error = %v", err)
+	}
+
+	image.Entrypoint[0] = "mutated-entrypoint"
+	image.Command[0] = "mutated-command"
+
+	if reflect.DeepEqual(workload.Image.Entrypoint, image.Entrypoint) ||
+		reflect.DeepEqual(workload.Image.Command, image.Command) ||
+		reflect.DeepEqual(workload.Entrypoint, image.Entrypoint) || reflect.DeepEqual(workload.Command, image.Command) {
+		t.Fatalf("Workload() retained caller-owned process slices: %#v", workload)
 	}
 }
 
@@ -141,7 +341,7 @@ services:
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	_, err = project.ImageSource("")
+	_, err = project.ImageInput("")
 	if !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Workload(empty) error = %v, want ErrInvalidSource", err)
 	}
@@ -157,7 +357,7 @@ services:
 		t.Fatalf("Workload(worker) = %#v", workload)
 	}
 
-	_, err = project.ImageSource("missing")
+	_, err = project.ImageInput("missing")
 	if !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Workload(missing) error = %v, want ErrInvalidSource", err)
 	}
@@ -184,7 +384,7 @@ services:
 	}
 }
 
-func TestImageSourceNormalizesDockerCompatibleInput(t *testing.T) {
+func TestImageInputNormalizesDockerCompatibleInput(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -218,9 +418,10 @@ services:
 				t.Fatalf("Load() error = %v", err)
 			}
 
-			source, err := project.ImageSource("")
-			if err != nil || source.String() != test.want {
-				t.Fatalf("ImageSource() = %q, %v, want %q", source.String(), err, test.want)
+			input, err := project.ImageInput("")
+			source, registry := input.RegistrySource()
+			if err != nil || !registry || source.String() != test.want {
+				t.Fatalf("ImageInput() = %q, %t, %v, want %q", source.String(), registry, err, test.want)
 			}
 		})
 	}
@@ -257,12 +458,14 @@ func TestImageResolvesSourceRejectsInvalidProof(t *testing.T) {
 		Reference:       "example.com/team/api:1@" + testImageConfigDigest,
 		ReferenceDigest: mustTestDigest(t, testImageConfigDigest),
 		Platform: domain.Platform{
-			OS:           "linux",
-			Architecture: "amd64",
+			OS:           archiveLinuxOS,
+			Architecture: archiveAMD64,
 			Variant:      "",
 		},
 		PlatformManifest: mustTestDigest(t, testPlatformManifestDigest),
 		ImageConfig:      mustTestDigest(t, testImageConfigDigest),
+		Entrypoint:       nil,
+		Command:          nil,
 	}
 
 	if imageResolvesSource("https://example.com/team/api:1", image) {
@@ -288,28 +491,7 @@ services:
 
 	baseline := loadWorkload(t, source)
 
-	tests := []struct {
-		name   string
-		mutate func(*domain.ImageIdentity)
-	}{
-		{name: "platform OS", mutate: func(value *domain.ImageIdentity) { value.Platform.OS = "darwin" }},
-		{name: "platform architecture", mutate: func(value *domain.ImageIdentity) { value.Platform.Architecture = "arm64" }},
-		{name: "platform variant", mutate: func(value *domain.ImageIdentity) { value.Platform.Variant = "v8" }},
-		{
-			name: "platform manifest",
-			mutate: func(value *domain.ImageIdentity) {
-				value.PlatformManifest = domain.Hash([]byte("other platform manifest"))
-			},
-		},
-		{
-			name: "image config",
-			mutate: func(value *domain.ImageIdentity) {
-				value.ImageConfig = domain.Hash([]byte("other image config"))
-			},
-		},
-	}
-
-	for _, test := range tests {
+	for _, test := range resolvedImageProofMutations() {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -330,6 +512,37 @@ services:
 				t.Fatal("resolved image proof did not change EffectiveDigest")
 			}
 		})
+	}
+}
+
+type resolvedImageProofMutation struct {
+	name   string
+	mutate func(*domain.ImageIdentity)
+}
+
+func resolvedImageProofMutations() []resolvedImageProofMutation {
+	return []resolvedImageProofMutation{
+		{name: "platform OS", mutate: func(value *domain.ImageIdentity) { value.Platform.OS = "darwin" }},
+		{name: "platform architecture", mutate: func(value *domain.ImageIdentity) { value.Platform.Architecture = "arm64" }},
+		{name: "platform variant", mutate: func(value *domain.ImageIdentity) { value.Platform.Variant = "v8" }},
+		{
+			name: "platform manifest",
+			mutate: func(value *domain.ImageIdentity) {
+				value.PlatformManifest = domain.Hash([]byte("other platform manifest"))
+			},
+		},
+		{
+			name: "image config",
+			mutate: func(value *domain.ImageIdentity) {
+				value.ImageConfig = domain.Hash([]byte("other image config"))
+			},
+		},
+		{name: "image entrypoint", mutate: func(value *domain.ImageIdentity) {
+			value.Entrypoint = []string{testOtherValue}
+		}},
+		{name: "image command", mutate: func(value *domain.ImageIdentity) {
+			value.Command = []string{testOtherValue}
+		}},
 	}
 }
 
@@ -391,9 +604,10 @@ func loadSelectedWorkload(t *testing.T, serviceName string, content string) doma
 func resolvedImageForService(t *testing.T, project Project, serviceName string) domain.ImageIdentity {
 	t.Helper()
 
-	source, err := project.ImageSource(serviceName)
-	if err != nil {
-		t.Fatalf("ImageSource(%q) error = %v", serviceName, err)
+	input, err := project.ImageInput(serviceName)
+	source, registry := input.RegistrySource()
+	if err != nil || !registry {
+		t.Fatalf("ImageInput(%q) = %t, %v", serviceName, registry, err)
 	}
 
 	referenceDigest := mustTestDigest(t, testReferenceDigest)
@@ -404,15 +618,18 @@ func resolvedImageForService(t *testing.T, project Project, serviceName string) 
 	}
 
 	return domain.ImageIdentity{
+		Origin:          domain.ImageOriginRegistry,
 		Reference:       reference.String(),
 		ReferenceDigest: referenceDigest,
 		Platform: domain.Platform{
-			OS:           "linux",
-			Architecture: "amd64",
+			OS:           archiveLinuxOS,
+			Architecture: archiveAMD64,
 			Variant:      "",
 		},
 		PlatformManifest: mustTestDigest(t, testPlatformManifestDigest),
 		ImageConfig:      mustTestDigest(t, testImageConfigDigest),
+		Entrypoint:       []string{testImageEntrypoint},
+		Command:          []string{testImageCommand},
 	}
 }
 
