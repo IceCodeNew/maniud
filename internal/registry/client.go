@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"time"
@@ -14,6 +13,8 @@ import (
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/retry"
+
+	credentialvalue "github.com/IceCodeNew/maniud/internal/registry/credential"
 )
 
 const (
@@ -25,19 +26,7 @@ const (
 	tlsHandshakeTimeout        = 10 * time.Second
 )
 
-type credential struct {
-	username     string
-	password     string
-	refreshToken string
-	accessToken  string
-}
-
-type remoteRepository interface {
-	Fetch(ctx context.Context, target ocispec.Descriptor) (io.ReadCloser, error)
-	FetchReference(ctx context.Context, reference string) (ocispec.Descriptor, io.ReadCloser, error)
-}
-
-type repositoryFactory func(context.Context, registry.Reference, credential) (remoteRepository, error)
+type repositoryFactory func(context.Context, registry.Reference, credentialvalue.Value) (Repository, error)
 
 func acceptedManifestMediaTypes() []string {
 	return []string{
@@ -50,7 +39,7 @@ func acceptedManifestMediaTypes() []string {
 
 func newRepository(
 	reference registry.Reference,
-	credentialValue credential,
+	credentialValue credentialvalue.Value,
 ) (*remote.Repository, error) {
 	repository, err := remote.NewRepository(reference.Registry + "/" + reference.Repository)
 	if err != nil {
@@ -59,10 +48,10 @@ func newRepository(
 
 	httpClient := newHTTPClient()
 	authCredential := new(auth.Credential)
-	authCredential.Username = credentialValue.username
-	authCredential.Password = credentialValue.password
-	authCredential.RefreshToken = credentialValue.refreshToken
-	authCredential.AccessToken = credentialValue.accessToken
+	authCredential.Username = credentialValue.Username
+	authCredential.Password = credentialValue.Password
+	authCredential.RefreshToken = credentialValue.RefreshToken
+	authCredential.AccessToken = credentialValue.AccessToken
 
 	authClient := new(auth.Client)
 	authClient.Client = httpClient
