@@ -51,6 +51,19 @@ func TestOpenRejectsUnsafeFilesystemObjects(t *testing.T) {
 	}
 }
 
+func TestEnsureStateDirectoryRejectsUnwritableParent(t *testing.T) {
+	t.Parallel()
+
+	directory := privateTempDir(t)
+	requireNoError(t, unix.Chmod(directory, 0o500))
+	t.Cleanup(func() { requireNoError(t, unix.Chmod(directory, 0o700)) })
+
+	err := ensureStateDirectory(context.Background(), filepath.Join(directory, "missing", "state.db"))
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("ensureStateDirectory(unwritable parent) = %v", err)
+	}
+}
+
 func unsafeFilesystemCases() []struct {
 	name  string
 	setup func(*testing.T, string, string)
