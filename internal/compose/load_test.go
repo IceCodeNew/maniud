@@ -121,6 +121,34 @@ services:
 	}
 }
 
+func TestApprovedYAMLTags(t *testing.T) {
+	t.Parallel()
+
+	for _, tag := range []string{
+		"!override", "!reset", "!!binary", "!!bool", "!!float", "!!int",
+		"!!map", "!!null", "!!seq", "!!str", "!!timestamp",
+	} {
+		if !isApprovedYAMLTag(tag) {
+			t.Fatalf("isApprovedYAMLTag(%q) = false", tag)
+		}
+	}
+
+	if isApprovedYAMLTag("!custom") {
+		t.Fatal("isApprovedYAMLTag(!custom) = true")
+	}
+}
+
+func TestResourceWithoutFileStaysInProcess(t *testing.T) {
+	t.Parallel()
+
+	resources := map[string]any{
+		"settings": map[string]any{"external": true},
+	}
+	if resourceUsesFile(resources) {
+		t.Fatal("resourceUsesFile(external resource) = true")
+	}
+}
+
 func TestLoadAcceptsMaximumSource(t *testing.T) {
 	t.Parallel()
 
