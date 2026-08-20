@@ -37,8 +37,6 @@ func PinRepositoryRuntime(source Source, base string) (Source, error) {
 // MaterializeRuntime atomically publishes the committed bind-mount files at
 // the path already represented by the desired workload. Existing content must
 // match the captured source exactly.
-//
-//nolint:cyclop // Publication keeps validation, atomic rename, and cleanup in one ordered boundary.
 func (source Source) MaterializeRuntime() error {
 	if source.Repository == nil || len(source.Repository.RuntimePaths) == 0 {
 		return nil
@@ -55,11 +53,19 @@ func (source Source) MaterializeRuntime() error {
 		_ = root.Close()
 	}()
 
+	return source.materializeRuntime(root, root.Lstat)
+}
+
+//nolint:cyclop // Publication keeps validation, atomic rename, and cleanup in one ordered boundary.
+func (source Source) materializeRuntime(
+	root *os.Root,
+	lstat func(string) (fs.FileInfo, error),
+) error {
 	if err := ensureRuntimeParent(root); err != nil {
 		return err
 	}
 	final := filepath.Join(repositoryRuntimeDirectory, repositoryRuntimeName(source.Repository.Digest))
-	if _, err := root.Lstat(final); err == nil {
+	if _, err := lstat(final); err == nil {
 		if validMaterializedRuntime(root, final, source.Repository) {
 			return nil
 		}
