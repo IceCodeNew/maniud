@@ -218,12 +218,9 @@ func dockerNanoCPUs(value string) (int64, bool) {
 		fraction = ""
 	}
 	padded := fraction + strings.Repeat("0", dockerCPUFractionDigits-len(fraction))
-	partial := uint64(0)
-	if padded != "" {
-		partial, err = strconv.ParseUint(padded, 10, 32)
-		if err != nil {
-			return 0, false
-		}
+	partial, err := strconv.ParseUint(padded, 10, 32)
+	if err != nil {
+		return 0, false
 	}
 	result := whole*uint64(dockerNanoCPUsPerCPU) + partial
 	if result == 0 || result > uint64(math.MaxInt64) {

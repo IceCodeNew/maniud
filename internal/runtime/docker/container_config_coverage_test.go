@@ -46,6 +46,9 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 	if got, valid := dockerNanoCPUs("1"); !valid || got != dockerNanoCPUsPerCPU {
 		t.Fatalf("dockerNanoCPUs(1) = %d, %v", got, valid)
 	}
+	if policy, valid := dockerRestartPolicy("always"); !valid || policy.Name != containertypes.RestartPolicyAlways {
+		t.Fatalf("dockerRestartPolicy(always) = %#v, %v", policy, valid)
+	}
 	badWeight := 9
 	if _, valid := dockerBlkioWeight(&badWeight); valid {
 		t.Fatal("dockerBlkioWeight(9) accepted")
@@ -111,6 +114,9 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 	if !valid || volumes != nil {
 		t.Fatal("bind-only mounts rejected")
 	}
+	if mounts := appendNoCopyVolumes(nil, nil); mounts != nil {
+		t.Fatalf("appendNoCopyVolumes(nil) = %#v", mounts)
+	}
 	workload := validApplicationWorkload(t)
 	workload.Mounts = []domain.Mount{{Kind: domain.MountVolume, Target: "/data"}}
 	request, valid := dockerCreateConfiguration(
@@ -136,6 +142,10 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 	if !valid || disabledHealthcheck == nil || len(disabledHealthcheck.Test) != 1 ||
 		disabledHealthcheck.Test[0] != dockerHealthcheckNone {
 		t.Fatal("disabled healthcheck rejected")
+	}
+	healthcheck, valid := dockerHealthcheck(&domain.Healthcheck{Test: []string{"CMD", "true"}})
+	if !valid || healthcheck == nil || healthcheck.Retries != 0 {
+		t.Fatalf("healthcheck without retries = %#v, %v", healthcheck, valid)
 	}
 	if _, valid := dockerDuration("0s"); valid {
 		t.Fatal("zero duration accepted")
