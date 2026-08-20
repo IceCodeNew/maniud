@@ -35,14 +35,14 @@ func openBackupRoot(root string) (*directoryAnchor, error) {
 	return openBackupRootWithSync(root, unix.Fsync)
 }
 
-func openExistingBackupRoot(root string) (*directoryAnchor, error) {
+func openExistingBackupRoot(root string) (*directoryAnchor, bool) {
 	if !validRootPath(root) {
-		return nil, ErrInvalidBackupRoot
+		return nil, false
 	}
 
 	descriptor, err := unix.Open(root, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, ErrInvalidBackupRoot
+		return nil, false
 	}
 
 	identity, valid := descriptorIdentity(descriptor)
@@ -50,10 +50,10 @@ func openExistingBackupRoot(root string) (*directoryAnchor, error) {
 	if !valid || !privateDirectory(identity) || !anchor.valid() {
 		_ = anchor.close()
 
-		return nil, ErrInvalidBackupRoot
+		return nil, false
 	}
 
-	return anchor, nil
+	return anchor, true
 }
 
 func openBackupRootWithSync(root string, syncDirectory func(int) error) (*directoryAnchor, error) {
