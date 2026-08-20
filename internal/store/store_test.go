@@ -32,6 +32,16 @@ func TestOpenAnchorsPrivateSQLite(t *testing.T) {
 		t.Fatalf("state anchor = %#v", state.anchor)
 	}
 
+	root, err := state.BackupRoot()
+	if err != nil || root != filepath.Join(directory, "backups") {
+		t.Fatalf("BackupRoot() = %q, %v", root, err)
+	}
+
+	var missing *Store
+	if _, err = missing.BackupRoot(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("BackupRoot(nil) = %v", err)
+	}
+
 	requireNoError(t, state.Close())
 }
 
