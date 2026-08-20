@@ -75,6 +75,7 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/moby/moby/api
+            - golang.org/x/crypto
     nolintlint:
       require-explanation: true
       require-specific: true
