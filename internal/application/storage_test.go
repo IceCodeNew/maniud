@@ -107,16 +107,16 @@ func TestReplacementBindSourcesSelectsProvenanceChange(t *testing.T) {
 		},
 	}}
 
-	got := replacementBindSources(sources, workload)
-	if len(got) != 1 || got[0].Mount.Source != testBindSourceOld {
-		t.Fatalf("replacementBindSources() = %#v", got)
+	got := replacementBindIndexes(sources, workload)
+	if len(got) != 1 || got[0] != 0 {
+		t.Fatalf("replacementBindIndexes() = %#v", got)
 	}
 
 	same := workload
 	same.Mounts = []domain.Mount{{
 		Kind: domain.MountBind, Source: testBindSourceOld, Target: testVolumeTarget,
 	}}
-	if replacementBindSources(sources, same) != nil {
+	if replacementBindIndexes(sources, same) != nil {
 		t.Fatal("same bind source selected a replacement")
 	}
 }
