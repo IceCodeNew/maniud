@@ -369,6 +369,7 @@ func TestPodmanInspectMappingRejectsMalformedWireValues(t *testing.T) {
 		{state: &podmanInspectState{Status: podmanStatePaused, Paused: true}, want: ContainerPaused, valid: true},
 		{state: &podmanInspectState{Status: "stopped"}, want: ContainerExited, valid: true},
 		{state: &podmanInspectState{Status: podmanStateRemoving}, want: ContainerRemoving, valid: true},
+		{state: &podmanInspectState{Status: "stopping"}, want: ContainerRemoving, valid: true},
 		{state: &podmanInspectState{Status: podmanStateUnknown}, want: ContainerStateUnknown, valid: true},
 		{state: &podmanInspectState{Status: podmanTestInvalid}, want: ContainerStateUnknown, valid: false},
 		{state: &podmanInspectState{Status: podmanStateRunning, Restarting: true}, valid: false},
@@ -396,8 +397,10 @@ func podmanAssertMalformedInspectScalars(t *testing.T) {
 		}
 	}
 	for _, restart := range []podmanInspectRestart{
+		{},
 		{Name: "no", MaximumRetryCount: 1},
 		{Name: podmanRestartAlways, MaximumRetryCount: 1},
+		{Name: podmanRestartUnlessStopped},
 		{Name: podmanRestartOnFailure},
 		{Name: podmanRestartOnFailure, MaximumRetryCount: 2},
 		{Name: podmanTestInvalid},
@@ -429,6 +432,9 @@ func podmanAssertMalformedInspectResources(t *testing.T) {
 	}
 	if _, valid := podmanObservedTmpfs(map[string]string{"": "rw"}); valid {
 		t.Fatal("podmanObservedTmpfs(invalid) = true")
+	}
+	if tmpfs, valid := podmanObservedTmpfs(map[string]string{"/run": ""}); !valid || len(tmpfs) != 1 || tmpfs[0].Options != nil {
+		t.Fatalf("podmanObservedTmpfs(no options) = %#v, %t", tmpfs, valid)
 	}
 	if _, valid := podmanObservedUlimits([]podmanInspectUlimit{{Name: "NOFILE", Soft: 1, Hard: 2}}); valid {
 		t.Fatal("podmanObservedUlimits(invalid) = true")
@@ -537,6 +543,10 @@ func podmanAssertMalformedInspectHealth(t *testing.T) {
 	if _, valid := podmanObservedSecurity([]string{"seccomp=unconfined"}); valid {
 		t.Fatal("podmanObservedSecurity(invalid) = true")
 	}
+	health, valid := podmanObservedHealthcheck(&podmanHealthConfig{Test: []string{podmanTestHealthCMD, "true"}})
+	if !valid || health == nil || health.Retries != nil {
+		t.Fatalf("podmanObservedHealthcheck(no retries) = %#v, %t", health, valid)
+	}
 }
 
 func TestPodmanConfigurationMappingCoversRemainingValidationBranches(t *testing.T) {
@@ -560,6 +570,19 @@ func TestPodmanConfigurationMappingCoversRemainingValidationBranches(t *testing.
 	}
 	if _, valid := podmanNanoCPUs("1.bad"); valid {
 		t.Fatal("podmanNanoCPUs(invalid fraction) = true")
+	}
+	if _, ports, valid := podmanObservedPorts(nil, map[string][]podmanInspectPortBinding{
+		podmanTestPort80TCP: {{HostPort: "8080"}},
+	}); !valid || len(ports) != 1 || ports[0].HostIP != "" {
+		t.Fatalf("podmanObservedPorts(any host) = %#v, %t", ports, valid)
+	}
+	if _, ports, valid := podmanCreatePorts(nil, []domain.PortBinding{{
+		HostIP: "127.0.0.1", PublishedPort: 8080, TargetPort: 80, Protocol: podmanProtocolTCP,
+	}}); !valid || len(ports) != 1 {
+		t.Fatalf("podmanCreatePorts(host IP) = %#v, %t", ports, valid)
+	}
+	if health, valid := podmanCreateHealthcheck(&domain.Healthcheck{Test: []string{podmanTestHealthCMD, "true"}}); !valid || health == nil || health.Retries != 0 {
+		t.Fatalf("podmanCreateHealthcheck(no retries) = %#v, %t", health, valid)
 	}
 	if _, _, valid := podmanCreateMounts([]domain.Mount{
 		{Kind: domain.MountBind, Source: "/a", Target: podmanTestSamePath},

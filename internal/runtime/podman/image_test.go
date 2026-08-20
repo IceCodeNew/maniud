@@ -274,6 +274,10 @@ func TestPodmanImageEvidenceHelpers(t *testing.T) {
 	) {
 		t.Fatal("validRepoDigests(other repository) rejected")
 	}
+	platformReference := "registry.example/team/app@" + expected.PlatformManifest.String()
+	if !validRepoDigests([]string{platformReference, podmanImageReference}, reference, expected.PlatformManifest) {
+		t.Fatal("validRepoDigests(platform manifest) rejected")
+	}
 	unexpected := "registry.example/team/app@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	if validRepoDigests([]string{podmanImageReference, unexpected}, reference, expected.PlatformManifest) {
 		t.Fatal("validRepoDigests(unexpected manifest) accepted")
