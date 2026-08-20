@@ -45,6 +45,7 @@ linters:
             - "!**/internal/store/*.go"
             - "!**/internal/compose/*.go"
             - "!**/internal/imageref/*.go"
+            - "!**/internal/registry/*.go"
             - "!**/internal/runtime/docker/*.go"
           allow:
             - $gostd
@@ -74,6 +75,17 @@ linters:
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+            - oras.land/oras-go/v2
+        registry:
+          list-mode: strict
+          files:
+            - "**/internal/registry/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/opencontainers/go-digest
+            - github.com/opencontainers/image-spec
+            - golang.org/x/sys
             - oras.land/oras-go/v2
         docker-adapter:
           list-mode: strict
