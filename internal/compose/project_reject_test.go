@@ -106,31 +106,6 @@ services:
 `,
 		},
 		{
-			name: "environment before privacy projection",
-			content: `
-name: example
-services:
-  api:
-    container_name: example-api
-    image: example.com/team/api:1
-    network_mode: bridge
-    environment:
-      TOKEN: private
-`,
-		},
-		{
-			name: "published port before port projection",
-			content: `
-name: example
-services:
-  api:
-    container_name: example-api
-    image: example.com/team/api:1
-    network_mode: bridge
-    ports: ["8080:80"]
-`,
-		},
-		{
 			name: "project volume before storage projection",
 			content: `
 name: example
@@ -208,11 +183,14 @@ services:
 			t.Parallel()
 
 			project, err := Load(context.Background(), testSource(t, test.content))
+			if errors.Is(err, ErrInvalidSource) {
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
 
-			_, err = project.ImageSource("")
+			_, err = project.ImageInput("")
 			if !errors.Is(err, ErrInvalidSource) {
 				t.Fatalf("Workload() error = %v, want ErrInvalidSource", err)
 			}

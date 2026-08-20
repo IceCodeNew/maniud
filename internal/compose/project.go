@@ -1,7 +1,6 @@
 package compose
 
 import (
-	"encoding/binary"
 	"reflect"
 	"slices"
 
@@ -11,21 +10,22 @@ import (
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
-const effectiveWorkloadVersion = 1
-
-// ImageSource returns the normalized registry source for one active service.
-func (project Project) ImageSource(serviceName string) (imageref.Source, error) {
+// Runtime returns the runtime provenance for one active service. Plain
+// Compose and archive-only metadata use Docker unless x-maniud says otherwise.
+func (project Project) Runtime(serviceName string) (domain.RuntimeKind, error) {
 	selected, err := project.service(serviceName)
 	if err != nil {
-		return imageref.Source{}, err
+		return "", err
+	}
+	if !project.maniud {
+		return domain.RuntimeDocker, nil
+	}
+	runtimeKind, found := project.runtimes[selected.Name]
+	if !found {
+		return "", ErrInvalidSource
 	}
 
-	source, err := imageref.Normalize(selected.Image)
-	if err != nil {
-		return imageref.Source{}, ErrInvalidSource
-	}
-
-	return source, nil
+	return runtimeKind, nil
 }
 
 // Workload projects one active service into runtime-neutral desired state.
@@ -34,36 +34,86 @@ func (project Project) Workload(
 	image domain.ImageIdentity,
 ) (domain.DesiredWorkload, error) {
 	selected, err := project.service(serviceName)
-	if err != nil || !imageResolvesSource(selected.Image, image) {
+	if err != nil || !project.imageResolvesSource(selected, image) {
 		return domain.DesiredWorkload{}, ErrInvalidSource
 	}
 
+	image = image.Clone()
+
+	spec, err := workloadSpecFromService(selected, image.Platform, project.pathFrom, project.pathTo)
+	if err != nil {
+		return domain.DesiredWorkload{}, err
+	}
+	spec.Entrypoint = effectiveProcessArguments(selected.Entrypoint, image.Entrypoint)
+	spec.Command = effectiveCommandArguments(selected, image.Command)
+	spec = domain.ResolveWorkloadSpec(spec, image)
 	workload := domain.DesiredWorkload{
-		ServiceName:     selected.Name,
-		ContainerName:   selected.ContainerName,
+		WorkloadSpec:    spec,
 		Image:           image,
-		Entrypoint:      slices.Clone(selected.Entrypoint),
-		Command:         slices.Clone(selected.Command),
 		SourceDigest:    project.sourceDigest,
 		EffectiveDigest: domain.Digest{},
 	}
-	workload.EffectiveDigest = domain.Hash(effectiveWorkloadBytes(workload))
+	workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
 
 	return workload, nil
 }
 
+func effectiveProcessArguments(override, imageDefault []string) []string {
+	if override == nil {
+		return slices.Clone(imageDefault)
+	}
+
+	return slices.Clone(override)
+}
+
+func effectiveCommandArguments(service composetypes.ServiceConfig, imageDefault []string) []string {
+	if service.Command != nil {
+		return slices.Clone(service.Command)
+	}
+
+	if service.Entrypoint != nil {
+		return []string{}
+	}
+
+	return slices.Clone(imageDefault)
+}
+
 func (project Project) service(serviceName string) (composetypes.ServiceConfig, error) {
-	if project.value == nil || projectUsesUnsupportedFields(project.value) {
+	if project.value == nil || projectUsesUnsupportedFields(project.value, project.maniud) {
 		return composetypes.ServiceConfig{}, ErrInvalidSource
 	}
 
 	selected, serviceFound := selectedService(project.value, serviceName)
-	if !serviceFound || serviceUsesUnsupportedFields(selected) || !validContainerName(selected.ContainerName) ||
-		selected.NetworkMode != "bridge" {
+	archive, isArchive := project.archives[selected.Name]
+	if !serviceFound || serviceUsesUnsupportedFields(selected, isArchive) ||
+		!validContainerName(selected.ContainerName) ||
+		selected.NetworkMode != composeBridgeNetwork {
+		return composetypes.ServiceConfig{}, ErrInvalidSource
+	}
+	if isArchive && !validArchiveService(selected.Image, selected.Platform, selected.PullPolicy, archive) {
 		return composetypes.ServiceConfig{}, ErrInvalidSource
 	}
 
 	return selected, nil
+}
+
+func (project Project) imageResolvesSource(service composetypes.ServiceConfig, image domain.ImageIdentity) bool {
+	if archive, found := project.archives[service.Name]; found {
+		expected, valid := archiveIdentity(service.Image, service.Platform, service.PullPolicy, archive)
+
+		return valid && sameArchiveIdentity(image, expected)
+	}
+	if image.Origin != domain.ImageOriginRegistry {
+		return false
+	}
+	if service.Platform != "" {
+		platform, valid := archivePlatform(service.Platform)
+		if !valid || platform != image.Platform {
+			return false
+		}
+	}
+
+	return imageResolvesSource(service.Image, image)
 }
 
 func imageResolvesSource(value string, image domain.ImageIdentity) bool {
@@ -97,17 +147,26 @@ func selectedService(project *composetypes.Project, requested string) (composety
 	return service, err == nil
 }
 
-func projectUsesUnsupportedFields(project *composetypes.Project) bool {
+func projectUsesUnsupportedFields(
+	project *composetypes.Project,
+	maniud bool,
+) bool {
+	extensionsValid := len(project.Extensions) == 0 && !maniud
+	if maniud {
+		_, extensionFound := project.Extensions[archiveExtensionKey]
+		extensionsValid = len(project.Extensions) == 1 && extensionFound
+	}
+
 	return len(project.Networks) != 0 || len(project.Volumes) != 0 || len(project.Secrets) != 0 ||
-		len(project.Configs) != 0 || len(project.Models) != 0 || len(project.Extensions) != 0
+		len(project.Configs) != 0 || len(project.Models) != 0 || !extensionsValid
 }
 
-func serviceUsesUnsupportedFields(service composetypes.ServiceConfig) bool {
+func serviceUsesUnsupportedFields(service composetypes.ServiceConfig, archive bool) bool {
 	value := reflect.ValueOf(service)
 	valueType := value.Type()
 
 	for index := range valueType.NumField() {
-		if supportedServiceField(valueType.Field(index).Name) {
+		if supportedServiceField(valueType.Field(index).Name, archive) {
 			continue
 		}
 
@@ -119,10 +178,17 @@ func serviceUsesUnsupportedFields(service composetypes.ServiceConfig) bool {
 	return false
 }
 
-func supportedServiceField(name string) bool {
+func supportedServiceField(name string, archive bool) bool {
 	switch name {
-	case "Command", "ContainerName", "Entrypoint", "Image", "Name", "NetworkMode", "Profiles":
+	case "BlkioConfig", "CapAdd", "CapDrop", "CgroupParent", "Cgroup", "CPUS", "Command",
+		"ContainerName", "Devices", "DNS", "DNSOpts", "DNSSearch", "Entrypoint", "Environment",
+		"Expose", "ExtraHosts", "GroupAdd", "HealthCheck", "Hostname", "Image", "Init", "Labels", "MemLimit",
+		"Name", "NetworkMode", "OomKillDisable", "OomScoreAdj", "PidsLimit", "Platform", "Ports",
+		"Profiles", "ReadOnly", "Restart", "SecurityOpt", "ShmSize", "StdinOpen", "StopGracePeriod",
+		"StopSignal", "Sysctls", "Tmpfs", "Tty", "Ulimits", "User", "Volumes", "WorkingDir":
 		return true
+	case "PullPolicy":
+		return archive
 	default:
 		return false
 	}
@@ -144,42 +210,4 @@ func validContainerName(name string) bool {
 
 func lowerAlphaNumeric(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
-}
-
-func effectiveWorkloadBytes(workload domain.DesiredWorkload) []byte {
-	encoded := []byte{effectiveWorkloadVersion}
-	encoded = appendString(encoded, workload.ServiceName)
-	encoded = appendString(encoded, workload.ContainerName)
-	encoded = appendString(encoded, workload.Image.Reference)
-	encoded = append(encoded, workload.Image.ReferenceDigest[:]...)
-	encoded = appendString(encoded, workload.Image.Platform.OS)
-	encoded = appendString(encoded, workload.Image.Platform.Architecture)
-	encoded = appendString(encoded, workload.Image.Platform.Variant)
-	encoded = append(encoded, workload.Image.PlatformManifest[:]...)
-	encoded = append(encoded, workload.Image.ImageConfig[:]...)
-	encoded = appendStringSlice(encoded, workload.Entrypoint)
-	encoded = appendStringSlice(encoded, workload.Command)
-
-	return encoded
-}
-
-func appendString(encoded []byte, value string) []byte {
-	encoded = binary.AppendUvarint(encoded, uint64(len(value)))
-
-	return append(encoded, value...)
-}
-
-func appendStringSlice(encoded []byte, values []string) []byte {
-	if values == nil {
-		return append(encoded, 0)
-	}
-
-	encoded = append(encoded, 1)
-
-	encoded = binary.AppendUvarint(encoded, uint64(len(values)))
-	for _, value := range values {
-		encoded = appendString(encoded, value)
-	}
-
-	return encoded
 }
