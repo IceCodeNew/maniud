@@ -19,6 +19,8 @@ const (
 	composeTestWorkingDirectory = "/work"
 )
 
+var errMaterializeTest = errors.New("materialize test failure")
+
 //nolint:cyclop,funlen // Each branch verifies one independent exact-snapshot invariant.
 func TestMaterializeRuntimeExactSnapshotAndFailClosed(t *testing.T) {
 	t.Parallel()
@@ -40,6 +42,20 @@ func TestMaterializeRuntimeExactSnapshotAndFailClosed(t *testing.T) {
 	}
 	if err := pinned.MaterializeRuntime(); err != nil {
 		t.Fatalf("MaterializeRuntime() error = %v", err)
+	}
+	baseRoot, err := os.OpenRoot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := baseRoot.Close(); closeErr != nil {
+			t.Errorf("close base root: %v", closeErr)
+		}
+	})
+	if err := pinned.materializeRuntime(baseRoot, func(string) (os.FileInfo, error) {
+		return nil, errMaterializeTest
+	}); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("materialize lstat failure = %v", err)
 	}
 	root := repositoryRuntimeRoot(base, snapshot.Digest)
 	for name, want := range files {
@@ -154,7 +170,7 @@ func TestWorkloadAdapterHelperSuccessAndFailureBoundaries(t *testing.T) {
 			t.Fatalf("permission %q", p)
 		}
 	}
-	if !addTmpfs(&spec, composetypes.StringList{"/tmp:ro,size=1m"}) ||
+	if !addTmpfs(&spec, composetypes.StringList{"/run", "/tmp:ro,size=1m"}) ||
 		addTmpfs(&spec, composetypes.StringList{"relative"}) {
 		t.Fatal("tmpfs")
 	}
@@ -238,9 +254,15 @@ func TestRuntimeWriterHelperCompleteShapes(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []string{"a.env"}) {
 		t.Fatal(got, err)
 	}
-	ports := runtimePorts([]domain.PortBinding{{HostIP: "::1", PublishedPort: 80, TargetPort: 81, Protocol: "udp"}})
-	if !reflect.DeepEqual(ports, []string{"[::1]:80:81/udp"}) {
+	ports := runtimePorts([]domain.PortBinding{
+		{PublishedPort: 79, TargetPort: 80, Protocol: composeProtocolTCP},
+		{HostIP: "::1", PublishedPort: 80, TargetPort: 81, Protocol: "udp"},
+	})
+	if !reflect.DeepEqual(ports, []string{"79:80", "[::1]:80:81/udp"}) {
 		t.Fatal(ports)
+	}
+	if got := runtimeTmpfs([]domain.TmpfsMount{{Target: "/run"}, {Target: "/tmp", Options: []string{"ro"}}}); !reflect.DeepEqual(got, []string{"/run", "/tmp:ro"}) {
+		t.Fatal(got)
 	}
 	if runtimeUlimits(nil) != nil || len(runtimeMounts([]domain.Mount{{Kind: domain.MountVolume, Target: "/v"}})) != 1 {
 		t.Fatal("runtime helpers")
@@ -285,6 +307,9 @@ func TestRepositoryCollectorMalformedShapes(t *testing.T) {
 	}
 	if _, ok := repositoryDefaultEnvironment(".", map[string]string{composeDisableEnvFile: "maybe"}); ok {
 		t.Fatal("bad bool")
+	}
+	if value, ok := repositoryDefaultEnvironment(".", map[string]string{composeDisableEnvFile: "false"}); !ok || value == "" {
+		t.Fatalf("false disable flag = %q, %t", value, ok)
 	}
 	if strings.TrimSpace(resolveRepositoryDefaultEnv(".")) == "" {
 		t.Fatal("default env")

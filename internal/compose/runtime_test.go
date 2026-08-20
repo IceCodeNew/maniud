@@ -174,6 +174,13 @@ func TestRenderArchiveRejectsInvalidInputs(t *testing.T) {
 	); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("RenderArchive(nonrepresentable image configuration) error = %v", err)
 	}
+	invalidHealthcheck := analysis
+	invalidHealthcheck.Identity.Healthcheck = &domain.Healthcheck{Test: []string{"INVALID"}}
+	if _, _, err := RenderArchive(
+		context.Background(), invalidHealthcheck, "", t.TempDir(),
+	); err == nil {
+		t.Fatal("RenderArchive(invalid healthcheck) succeeded")
+	}
 	if _, _, err := RenderArchive(
 		context.Background(), analysis, "", string([]byte{0}),
 	); err == nil {
