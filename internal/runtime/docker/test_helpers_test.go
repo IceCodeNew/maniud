@@ -33,7 +33,7 @@ func testClient(roundTripper http.RoundTripper) *Client {
 		},
 		baseURL: url.URL{ //nolint:exhaustruct // A request base intentionally omits URL resource fields.
 			Scheme: httpScheme,
-			Host:   "docker.invalid",
+			Host:   dummyDockerHost,
 		},
 		version: emptyVersion,
 	}
