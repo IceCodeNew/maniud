@@ -49,16 +49,7 @@ func OpenReader(ctx context.Context, path string) (*Reader, error) {
 		}, nil
 	}
 
-	reader, err := finishOpenReader(ctx, anchor)
-	if err != nil {
-		if anchor != nil {
-			_ = anchor.close()
-		}
-
-		return nil, err
-	}
-
-	return reader, nil
+	return finishOpenReader(ctx, anchor)
 }
 
 func openReaderAnchor(ctx context.Context, path string) (*stateAnchor, bool, error) {
@@ -176,6 +167,7 @@ func finishOpenReader(ctx context.Context, anchor *stateAnchor) (*Reader, error)
 	})
 	if err != nil {
 		_ = database.Close()
+		_ = anchor.close()
 
 		return nil, classifySQLiteProbe(ctx, err)
 	}
@@ -192,6 +184,7 @@ func finishOpenReader(ctx context.Context, anchor *stateAnchor) (*Reader, error)
 	if err != nil {
 		_ = transaction.Rollback()
 		_ = database.Close()
+		_ = anchor.close()
 
 		return nil, err
 	}
