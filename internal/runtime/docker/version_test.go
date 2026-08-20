@@ -42,7 +42,7 @@ func TestCompatibleAPIVersion(t *testing.T) {
 		want   string
 		valid  bool
 	}{
-		{server: "1.53", want: "", valid: false},
+		{server: testUnsupportedAPIVersion, want: "", valid: false},
 		{server: minimumAPIVersion, want: minimumAPIVersion, valid: true},
 		{server: maximumAPIVersion, want: maximumAPIVersion, valid: true},
 		{server: "1.56", want: maximumAPIVersion, valid: true},
