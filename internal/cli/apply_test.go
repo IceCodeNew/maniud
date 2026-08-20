@@ -848,7 +848,7 @@ func TestPodmanSocketPathUsesOnlyLocalUnixEndpoints(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "relative", environment: map[string]string{containerHostEnvironment: "unix://podman.sock"},
+			name: testRelativePath, environment: map[string]string{containerHostEnvironment: "unix://podman.sock"},
 			wantErr: true,
 		},
 		{name: "unclean", environment: map[string]string{"XDG_RUNTIME_DIR": "/run/../tmp"}, wantErr: true},

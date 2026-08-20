@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"os/signal"
 	"slices"
 	"syscall"
 	"testing"
@@ -92,4 +93,39 @@ func TestWatchInterruptExitsOnSecondSignal(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second interrupt did not exit")
 	}
+}
+
+func TestWatchInterruptReturnsWhenParentEndsAfterSignal(t *testing.T) {
+	t.Parallel()
+
+	parent, cancel := context.WithCancel(context.Background())
+	ctx, stop := watchInterruptWithExit(parent, func(destination chan<- os.Signal, _ ...os.Signal) {
+		destination <- os.Interrupt
+	}, func(int) {
+		t.Error("exit called after parent cancellation")
+	})
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("interrupt did not cancel context")
+	}
+	cancel()
+}
+
+func TestPublicInterruptHelpers(t *testing.T) {
+	t.Parallel()
+
+	ctx, stop := CommandContext(context.Background())
+	stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("CommandContext stop did not cancel context")
+	}
+
+	destination := make(chan os.Signal, 1)
+	signalNotify(destination, os.Interrupt)
+	signal.Stop(destination)
 }
