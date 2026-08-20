@@ -50,9 +50,9 @@ func TestConnectNegotiatesSupportedVersions(t *testing.T) {
 				Protocol:     test.wantProtocol,
 				Minimum:      "1.40",
 				Maximum:      test.serverMaximum,
-				Product:      "29.7.2",
-				OS:           "linux",
-				Architecture: "amd64",
+				Product:      testProduct,
+				OS:           testOS,
+				Architecture: testArchitecture,
 			}
 			if got != want || client.Version() != want || requests.Load() != 2 ||
 				client.httpClient.Timeout != requestTimeout {
