@@ -72,8 +72,16 @@ func TestValueGrammarBoundaries(t *testing.T) {
 			t.Errorf("validSysctlValue(%q) = true", value)
 		}
 	}
-	if !namespacedSysctl("kernel.sem") || !namespacedSysctl("fs.mqueue.msg_max") {
-		t.Fatal("documented namespaced sysctls rejected")
+	for _, value := range []string{
+		"kernel.msgmax", "kernel.msgmnb", "kernel.msgmni", "kernel.sem", "kernel.shmall",
+		"kernel.shmmax", "kernel.shmmni", "kernel.shm_rmid_forced", "fs.mqueue.msg_max", "net.ipv4.ip_forward",
+	} {
+		if !namespacedSysctl(value) {
+			t.Errorf("namespacedSysctl(%q) rejected", value)
+		}
+	}
+	if namespacedSysctl("kernel.hostname") {
+		t.Fatal("namespacedSysctl(kernel.hostname) accepted")
 	}
 }
 
@@ -309,6 +317,37 @@ func TestHealthAndParserInternalFailureBoundaries(t *testing.T) {
 	}
 	if err := parser.addRepeated(repeatedDNSSearch, "bad value"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("addRepeated(invalid DNS search) error = %v", err)
+	}
+	parser.setBoolean("unknown", true)
+	for field, value := range map[string]string{
+		nameField: "Bad Name", entrypointField: "bad\x00value", fieldCgroup: "unknown", fieldCgroupParent: "bad value",
+	} {
+		if _, err := canonicalScalar(field, value); !errors.Is(err, ErrInvalid) {
+			t.Errorf("canonicalScalar(%q, %q) error = %v", field, value, err)
+		}
+	}
+	if field, found := scalarOption("-u"); !found || field != fieldUser {
+		t.Fatalf("scalarOption(-u) = %q, %t", field, found)
+	}
+	if field, found := scalarOption("--user"); !found || field != fieldUser {
+		t.Fatalf("scalarOption(--user) = %q, %t", field, found)
+	}
+	if platformString(domain.Platform{OS: linuxOS, Architecture: amd64Architecture}) != "linux/amd64" {
+		t.Fatal("platformString omitted architecture")
+	}
+	if defaultServiceName("example.test/team/image") != "image" {
+		t.Fatal("defaultServiceName without tag")
+	}
+	parser.service.ExtraHosts = []string{"first=127.0.0.1"}
+	if err := parser.addExtraHost("second=127.0.0.2"); err != nil {
+		t.Fatalf("addExtraHost(second) error = %v", err)
+	}
+	parser.service.Ports = nil
+	if err := parser.addPort("127.0.0.1:8080:80"); err != nil {
+		t.Fatal(err)
+	}
+	if err := parser.addPort("127.0.0.1:8080:80"); err != nil || len(parser.service.Ports) != 1 {
+		t.Fatalf("addPort(duplicate) = %#v, %v", parser.service.Ports, err)
 	}
 	parser.service.Mounts = []domain.Mount{{Target: "/dev/x"}}
 	if err := parser.addDevice("/dev/a:/dev/x"); !errors.Is(err, ErrInvalid) {
