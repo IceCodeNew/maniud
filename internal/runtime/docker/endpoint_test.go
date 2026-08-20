@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const testTLSEngineAddress = "https://engine.example:2376"
+const (
+	testEngineHostname   = "engine.example"
+	testTLSEngineAddress = "https://" + testEngineHostname + ":2376"
+)
 
 func TestUnixEndpointValidation(t *testing.T) {
 	t.Parallel()
@@ -92,7 +95,7 @@ func TestTLSEndpointClonesSecureConfig(t *testing.T) {
 
 	config := &tls.Config{ //nolint:exhaustruct // Optional TLS fields retain Go's secure defaults.
 		MinVersion: tls.VersionTLS13,
-		ServerName: "engine.example",
+		ServerName: testEngineHostname,
 	}
 
 	endpoint, err := TLSEndpoint(testTLSEngineAddress, config)

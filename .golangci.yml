@@ -127,6 +127,7 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/moby/moby/api
+            - golang.org/x/crypto
     # Public adapter modules use repository-relative replacements only while
     # this monorepo develops and tests a shared release version.
     gomoddirectives:
