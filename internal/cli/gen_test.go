@@ -384,7 +384,7 @@ func TestDefaultGenDependencies(t *testing.T) {
 
 	for _, getWorkingDirectory := range []func() (string, error){
 		func() (string, error) { return "", io.ErrClosedPipe },
-		func() (string, error) { return "relative", nil },
+		func() (string, error) { return testRelativePath, nil },
 	} {
 		if _, err := defaultGenDependencies(nil, getWorkingDirectory); err == nil {
 			t.Fatal("defaultGenDependencies(invalid cwd) succeeded")
@@ -763,6 +763,12 @@ func TestRenderGenRejectsInvalidOutputPath(t *testing.T) {
 	_, _, err = generatedComposePath(invalidPathValue, testServiceName, testWorkingDirectory)
 	if !errors.Is(err, runtimeargv.ErrInvalid) {
 		t.Fatalf("generatedComposePath(invalid output) error = %v", err)
+	}
+
+	absolute := filepath.Join(testWorkingDirectory, "compose.yaml")
+	selected, resolved, err := generatedComposePath(absolute, testServiceName, testWorkingDirectory)
+	if err != nil || selected != absolute || resolved != absolute {
+		t.Fatalf("generatedComposePath(absolute) = %q, %q, %v", selected, resolved, err)
 	}
 }
 
