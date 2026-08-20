@@ -18,7 +18,7 @@ func statIdentity(metadata unix.Stat_t) fileIdentity {
 		inode:  metadata.Ino,
 		mode:   metadata.Mode,
 		owner:  metadata.Uid,
-		links:  uint64(metadata.Nlink),
+		links:  uint64(metadata.Nlink), //nolint:unconvert // Nlink is uint32 on linux/arm64.
 	}
 }
 
