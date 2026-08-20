@@ -30,9 +30,6 @@ func (execution *upgradeExecution) inventory(ctx context.Context) error {
 	if err != nil {
 		return resolveEffectFailure(ctx, execution.mutation, postcondition, err)
 	}
-	if !postcondition.Satisfied {
-		return resolveEffectFailure(ctx, execution.mutation, postcondition, ErrConflictingState)
-	}
 
 	execution.sequence++
 
