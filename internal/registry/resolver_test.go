@@ -638,6 +638,22 @@ func TestResolveLocalRejectsInvalidInputsAndLayers(t *testing.T) {
 func TestValidLayerMediaTypeRejectsUnknownType(t *testing.T) {
 	t.Parallel()
 
+	for _, mediaType := range []string{
+		"application/vnd.oci.image.layer.v1.tar",
+		"application/vnd.oci.image.layer.v1.tar+gzip",
+		"application/vnd.oci.image.layer.v1.tar+zstd",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+		"application/vnd.docker.image.rootfs.diff.tar",
+		"application/vnd.docker.image.rootfs.diff.tar.gzip",
+		"application/vnd.docker.image.rootfs.foreign.diff.tar",
+		"application/vnd.docker.image.rootfs.foreign.diff.tar.gzip",
+	} {
+		if !validLayerMediaType(mediaType) {
+			t.Errorf("validLayerMediaType(%q) rejected", mediaType)
+		}
+	}
 	if validLayerMediaType(testInvalidMediaType) {
 		t.Fatal("validLayerMediaType(unknown) accepted")
 	}
