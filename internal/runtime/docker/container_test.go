@@ -27,7 +27,7 @@ func TestProbeContainerObservesManagedIdentity(t *testing.T) {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, document)
 	}))
 
@@ -44,9 +44,7 @@ func TestProbeContainerObservesManagedIdentity(t *testing.T) {
 		ImageReference:   testContainerImage,
 		ImageConfig:      mustTestDigest(t, testImageConfig),
 		PlatformManifest: mustTestDigest(t, testPlatformManifest),
-		Entrypoint:       testContainerEntrypoint(),
-		Command:          testContainerCommand(),
-		NetworkMode:      testNetworkMode,
+		WorkloadSpec:     expectedTestContainerWorkloadSpec(),
 		Service:          testContainerService,
 		Transaction:      testTransaction,
 		DesiredState:     mustTestDigest(t, testDesiredState),
@@ -68,7 +66,7 @@ func TestProbeContainerObservesUnmanagedID(t *testing.T) {
 
 	document := validContainerDocument(
 		t,
-		map[string]string{"com.example.owner": testContainerOwner},
+		map[string]string{testForeignOwnerLabel: testContainerOwner},
 		createdContainerState(),
 	)
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -76,7 +74,7 @@ func TestProbeContainerObservesUnmanagedID(t *testing.T) {
 			t.Errorf("path = %s", request.URL.Path)
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, document)
 	}))
 
@@ -91,7 +89,7 @@ func TestProbeContainerProvesMissing(t *testing.T) {
 	t.Parallel()
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		response.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(response, `{"message":"No such container: example-api"}`)
 	}))
@@ -161,7 +159,7 @@ func assertContainerResponsesRejected(t *testing.T, tests []containerResponseTes
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", test.contentType)
+				response.Header().Set(contentTypeHeader, test.contentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, test.body)
 			}))
@@ -182,7 +180,7 @@ func TestProbeContainerContainsInputAndTransportFailures(t *testing.T) {
 	}))
 	client.version = testVersion()
 
-	for _, reference := range []string{"invalid_name", strings.Repeat("g", containerIDHexBytes), "example-"} {
+	for _, reference := range []string{testInvalidContainerName, strings.Repeat("g", containerIDHexBytes), "example-"} {
 		probe, err := client.ProbeContainer(context.Background(), reference)
 		if probe.State != ContainerProbeUnknown || !errors.Is(err, ErrInvalidContainerReference) {
 			t.Fatalf("ProbeContainer(%q) = %#v, %v", reference, probe, err)

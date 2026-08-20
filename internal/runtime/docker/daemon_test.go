@@ -18,7 +18,7 @@ func TestInspectDaemon(t *testing.T) {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 
-		response.Header().Set("Content-Type", jsonContentType)
+		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, daemonDocument("engine-id", "overlay2", testOS, testArchitecture, testProduct, true))
 	}))
 
@@ -51,7 +51,7 @@ func TestInspectDaemonRejectsUnknownEvidence(t *testing.T) {
 	}{
 		{name: "failure status", status: http.StatusInternalServerError, contentType: jsonContentType, body: `{}`},
 		{name: "wrong content type", status: http.StatusOK, contentType: "text/plain", body: `{}`},
-		{name: "malformed", status: http.StatusOK, contentType: jsonContentType, body: `{"ID":`},
+		{name: testMalformedCase, status: http.StatusOK, contentType: jsonContentType, body: `{"ID":`},
 		{
 			name:        "duplicate field",
 			status:      http.StatusOK,
@@ -65,7 +65,7 @@ func TestInspectDaemonRejectsUnknownEvidence(t *testing.T) {
 			body:        `{"Unknown":true}`,
 		},
 		{
-			name:        "oversized",
+			name:        testOversizedCase,
 			status:      http.StatusOK,
 			contentType: jsonContentType,
 			body:        `{"ID":"` + strings.Repeat("x", maximumJSONBytes) + `"}`,
@@ -113,7 +113,7 @@ func TestInspectDaemonRejectsUnknownEvidence(t *testing.T) {
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-				response.Header().Set("Content-Type", test.contentType)
+				response.Header().Set(contentTypeHeader, test.contentType)
 				response.WriteHeader(test.status)
 				_, _ = io.WriteString(response, test.body)
 			}))

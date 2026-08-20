@@ -23,6 +23,7 @@ const (
 	containerIDHexBytes        = 64
 	dockerManifestMediaType    = "application/vnd.docker.distribution.manifest.v2+json"
 	ociManifestMediaType       = "application/vnd.oci.image.manifest.v1+json"
+	containerNameQueryKey      = "name"
 )
 
 var (
@@ -49,9 +50,8 @@ type Container struct {
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
-	Entrypoint       []string
-	Command          []string
-	NetworkMode      string
+	WorkloadSpec     domain.WorkloadSpec
+	RuntimeMounts    []domain.RuntimeMount
 	State            ContainerState
 	Running          bool
 	Ownership        domain.WorkloadOwnership
@@ -65,9 +65,7 @@ type ContainerExpectation struct {
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
-	Entrypoint       []string
-	Command          []string
-	NetworkMode      string
+	WorkloadSpec     domain.WorkloadSpec
 	Service          string
 	Transaction      string
 	DesiredState     domain.Digest
@@ -98,16 +96,15 @@ func (probe ContainerProbe) Matches(expectation ContainerExpectation) bool {
 }
 
 func (container Container) matchesConfiguration(expectation ContainerExpectation) bool {
-	return container.Name == expectation.Name && container.ImageReference == expectation.ImageReference &&
+	baseMatches := container.Name == expectation.Name && container.ImageReference == expectation.ImageReference &&
 		container.ImageConfig == expectation.ImageConfig &&
-		container.PlatformManifest == expectation.PlatformManifest &&
-		equalStringSlice(container.Entrypoint, expectation.Entrypoint) &&
-		equalStringSlice(container.Command, expectation.Command) &&
-		container.NetworkMode == expectation.NetworkMode
-}
+		container.PlatformManifest == expectation.PlatformManifest
+	if !baseMatches {
+		return false
+	}
 
-func equalStringSlice(left, right []string) bool {
-	return (left == nil) == (right == nil) && slices.Equal(left, right)
+	return expectation.WorkloadSpec.ContainerName != "" &&
+		dockerConfigurationMatches(container.WorkloadSpec, expectation.WorkloadSpec)
 }
 
 // ProbeContainer inspects one exact full ID or maniud-managed name. A valid 404
@@ -131,7 +128,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	defer closeResponse(response)
 
 	if response.StatusCode == http.StatusNotFound {
-		if !validNotFoundResponse(response) {
+		if !validErrorResponse(response) {
 			return unknown, ErrProtocol
 		}
 
@@ -140,7 +137,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 		return ContainerProbe{State: ContainerProbeMissing, Container: emptyContainer}, nil
 	}
 
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		return unknown, ErrProtocol
 	}
 
@@ -157,8 +154,8 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	return ContainerProbe{State: ContainerProbeObserved, Container: observed}, nil
 }
 
-func validNotFoundResponse(response *http.Response) bool {
-	if !isJSON(response.Header.Get("Content-Type")) {
+func validErrorResponse(response *http.Response) bool {
+	if !isJSON(response.Header.Get(contentTypeHeader)) {
 		return false
 	}
 
@@ -192,9 +189,15 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 	platformManifest, manifestErr := domain.ParseDigest(payload.ImageManifestDescriptor.Digest.String())
 
 	state, stateValid := decodeContainerState(payload.State)
+	workloadSpec, workloadValid := dockerWorkloadFromInspect(
+		strings.TrimPrefix(payload.Name, "/"),
+		payload.Config,
+		payload.HostConfig,
+	)
+	runtimeMounts, runtimeMountsValid := dockerRuntimeMounts(payload.Mounts, workloadSpec)
 	if imageErr != nil || manifestErr != nil ||
 		!validManifestDescriptor(payload.ImageManifestDescriptor.MediaType, payload.ImageManifestDescriptor.Size) ||
-		!stateValid {
+		!stateValid || !workloadValid || !runtimeMountsValid {
 		return emptyContainer, false
 	}
 
@@ -206,9 +209,8 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 		ImageReference:   payload.Config.Image,
 		ImageConfig:      imageConfig,
 		PlatformManifest: platformManifest,
-		Entrypoint:       slices.Clone(payload.Config.Entrypoint),
-		Command:          slices.Clone(payload.Config.Cmd),
-		NetworkMode:      string(payload.HostConfig.NetworkMode),
+		WorkloadSpec:     workloadSpec,
+		RuntimeMounts:    runtimeMounts,
 		State:            state,
 		Running:          payload.State.Running,
 		Ownership:        ownership,
@@ -230,7 +232,27 @@ func validContainerPayload(reference string, payload containertypes.InspectRespo
 	return validContainerID(payload.ID) && validContainerName(name) && payload.Name == "/"+name &&
 		matchesContainerReference(reference, payload) &&
 		validOpaqueValue(payload.Config.Image, maximumImageReferenceBytes) &&
-		validOpaqueValue(string(payload.HostConfig.NetworkMode), maximumNetworkModeBytes)
+		validContainerHostConfig(payload.HostConfig)
+}
+
+func validContainerHostConfig(config *containertypes.HostConfig) bool {
+	return validOpaqueValue(string(config.NetworkMode), maximumNetworkModeBytes) &&
+		validRestartPolicy(config.RestartPolicy)
+}
+
+func validRestartPolicy(policy containertypes.RestartPolicy) bool {
+	return containertypes.ValidateRestartPolicy(policy) == nil
+}
+
+func normalizeRestartPolicy(policy containertypes.RestartPolicy) containertypes.RestartPolicy {
+	if policy.Name == "" {
+		return containertypes.RestartPolicy{
+			Name:              containertypes.RestartPolicyDisabled,
+			MaximumRetryCount: 0,
+		}
+	}
+
+	return policy
 }
 
 func validContainerReference(reference string) bool {
