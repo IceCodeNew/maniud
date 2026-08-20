@@ -633,8 +633,6 @@ func TestReaderInternalFaultBoundaries(t *testing.T) {
 		t.Fatalf("readerDirectoryHasNoState() = %v", err)
 	}
 
-	requireNoError(t, anchor.close())
-
 	settingsReader := requireOpenReader(t, path)
 	_, err = settingsReader.transaction.ExecContext(context.Background(), "PRAGMA query_only = OFF")
 	requireNoError(t, err)
