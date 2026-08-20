@@ -25,11 +25,39 @@ func TestWorkloadOwnershipMatches(t *testing.T) {
 	conflicting := ownership
 
 	conflicting.Status = OwnershipConflicting
-	if conflicting.Matches("api", "tx-1", desired, reference) ||
-		ownership.Matches("worker", "tx-1", desired, reference) ||
-		ownership.Matches("api", "tx-2", desired, reference) ||
-		ownership.Matches("api", "tx-1", Hash(nil), reference) ||
-		ownership.Matches("api", "tx-1", desired, Hash(nil)) {
-		t.Fatal("WorkloadOwnership.Matches(conflict) = true")
+	conflicts := []struct {
+		name        string
+		ownership   WorkloadOwnership
+		service     string
+		transaction string
+		desired     Digest
+		reference   Digest
+	}{
+		{name: "status", ownership: conflicting, service: "api", transaction: "tx-1", desired: desired, reference: reference},
+		{name: "service", ownership: ownership, service: "worker", transaction: "tx-1", desired: desired, reference: reference},
+		{name: "transaction", ownership: ownership, service: "api", transaction: "tx-2", desired: desired, reference: reference},
+		{name: "desired state", ownership: ownership, service: "api", transaction: "tx-1", desired: Hash(nil), reference: reference},
+		{name: "reference", ownership: ownership, service: "api", transaction: "tx-1", desired: desired, reference: Hash(nil)},
+	}
+	for _, conflict := range conflicts {
+		if conflict.ownership.Matches(conflict.service, conflict.transaction, conflict.desired, conflict.reference) {
+			t.Errorf("WorkloadOwnership.Matches(%s conflict) = true", conflict.name)
+		}
+	}
+}
+
+func TestIsOwnershipLabel(t *testing.T) {
+	t.Parallel()
+
+	for _, label := range []string{
+		LabelService, LabelTransaction, LabelDesiredStateDigest, LabelReferenceDigest,
+		LabelImageConfigDigest, LabelPlatformManifestDigest,
+	} {
+		if !IsOwnershipLabel(label) {
+			t.Errorf("IsOwnershipLabel(%q) = false", label)
+		}
+	}
+	if IsOwnershipLabel("io.maniud.unknown") {
+		t.Fatal("IsOwnershipLabel(unknown) = true")
 	}
 }
