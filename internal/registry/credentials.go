@@ -24,18 +24,6 @@ const (
 
 var errDockerCredentials = errors.New("docker registry credential configuration is invalid")
 
-// Credentials contains credentials for one registry.
-type Credentials struct {
-	Username     string
-	Password     string
-	RefreshToken string
-	AccessToken  string
-}
-
-// CredentialProvider returns explicit credentials for a normalized registry
-// authority. Supplying one replaces Docker configuration lookup.
-type CredentialProvider func(context.Context, string) (Credentials, error)
-
 type credentialRouting struct {
 	Helpers map[string]string `json:"credHelpers"` //nolint:tagliatelle // Docker defines this field name.
 	Store   *string           `json:"credsStore"`  //nolint:tagliatelle // Docker defines this field name.
