@@ -86,7 +86,7 @@ func (client *Client) serverVersion(
 	}
 	defer closeResponse(response)
 
-	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get("Content-Type")) {
+	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
 		return emptyVersion, ErrProtocol
 	}
 
@@ -127,7 +127,9 @@ func isJSON(contentType string) bool {
 }
 
 func closeResponse(response *http.Response) {
-	_ = response.Body.Close()
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
 }
 
 func validServerRange(

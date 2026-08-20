@@ -41,7 +41,7 @@ func TestConnectRejectsProtocolViolations(t *testing.T) {
 		{
 			name: "old API",
 			mutate: func(fixture *engineFixture) {
-				fixture.maximum = "1.53"
+				fixture.maximum = testUnsupportedAPIVersion
 			},
 		},
 		{

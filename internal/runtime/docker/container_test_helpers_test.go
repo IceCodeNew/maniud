@@ -8,26 +8,38 @@ import (
 	"testing"
 
 	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const (
-	plainTextContentType  = "text/plain"
-	testContainerID       = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	testImageConfig       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testPlatformManifest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	testDesiredState      = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	testReferenceDigest   = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	testContainerName     = "example-api"
-	testContainerOwner    = "test-owner"
-	testContainerImage    = "registry.example/api:1@" + testReferenceDigest
-	testContainerService  = "api"
-	testTransaction       = "550e8400-e29b-41d4-a716-446655440000"
-	testNetworkMode       = "bridge"
-	testManifestMediaType = ociManifestMediaType
-	testInvalidValue      = "bad"
-	testOtherValue        = "other"
+	plainTextContentType     = "text/plain"
+	testContainerID          = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testImageConfig          = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testPlatformManifest     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	testDesiredState         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	testReferenceDigest      = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	testContainerName        = "example-api"
+	testContainerOwner       = "test-owner"
+	testInvalidContainerName = "invalid_name"
+	testContainerImage       = "registry.example/api:1@" + testReferenceDigest
+	testContainerService     = "api"
+	testTransaction          = "550e8400-e29b-41d4-a716-446655440000"
+	testNetworkMode          = "bridge"
+	testManifestMediaType    = ociManifestMediaType
+	testInvalidValue         = "bad"
+	testMalformedCase        = "malformed"
+	testContentTypeCase      = "content type"
+	testStatusCase           = "status"
+	testMissingValue         = "missing"
+	testUnknownValue         = "unknown"
+	testInvalidLiteral       = "invalid"
+	testForeignOwnerLabel    = "com.example.owner"
+	testContainerListPath    = "/v1.54/containers/json"
+	testOtherValue           = "other"
+	testProcessCommand       = "serve"
+	testOversizedCase        = "oversized"
 )
 
 func testContainerEntrypoint() []string {
@@ -35,7 +47,7 @@ func testContainerEntrypoint() []string {
 }
 
 func testContainerCommand() []string {
-	return []string{"serve", "--port", "8080"}
+	return []string{testProcessCommand, "--port", "8080"}
 }
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
@@ -57,7 +69,8 @@ type containerConfigFixture struct {
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
 type containerHostConfigFixture struct {
-	NetworkMode string `json:"NetworkMode"`
+	NetworkMode   string                       `json:"NetworkMode"`
+	RestartPolicy containertypes.RestartPolicy `json:"RestartPolicy"`
 }
 
 //nolint:tagliatelle // OCI descriptors use lower camel case on the wire.
@@ -85,9 +98,42 @@ func validContainerDocument(
 ) string {
 	t.Helper()
 
+	return namedContainerDocument(t, testContainerName, labels, state)
+}
+
+func volumeContainerDocument(
+	t *testing.T,
+	labels map[string]string,
+	state *containerStateFixture,
+) string {
+	t.Helper()
+
+	payload := inspectPayload(t, validContainerDocument(t, labels, state))
+	payload.Config.Volumes = map[string]struct{}{dockerTestStateTarget: {}}
+	payload.Mounts = []containertypes.MountPoint{{
+		Type: mount.TypeVolume, Name: dockerTestVolumeName,
+		Source: dockerTestVolumeSource, Destination: dockerTestStateTarget,
+		Driver: dockerVolumeDriverLocal, RW: true,
+	}}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal(volume container fixture) error = %v", err)
+	}
+
+	return string(encoded)
+}
+
+func namedContainerDocument(
+	t *testing.T,
+	name string,
+	labels map[string]string,
+	state *containerStateFixture,
+) string {
+	t.Helper()
+
 	document := containerInspectFixture{
 		ID:    testContainerID,
-		Name:  "/" + testContainerName,
+		Name:  "/" + name,
 		State: state,
 		Image: testImageConfig,
 		Config: &containerConfigFixture{
@@ -96,7 +142,13 @@ func validContainerDocument(
 			Entrypoint: testContainerEntrypoint(),
 			Command:    testContainerCommand(),
 		},
-		HostConfig: &containerHostConfigFixture{NetworkMode: testNetworkMode},
+		HostConfig: &containerHostConfigFixture{
+			NetworkMode: testNetworkMode,
+			RestartPolicy: containertypes.RestartPolicy{
+				Name:              containertypes.RestartPolicyDisabled,
+				MaximumRetryCount: 0,
+			},
+		},
 		ImageManifestDescriptor: &descriptorFixture{
 			MediaType: testManifestMediaType,
 			Digest:    testPlatformManifest,
@@ -149,6 +201,16 @@ func runningContainerState() *containerStateFixture {
 func createdContainerState() *containerStateFixture {
 	return &containerStateFixture{
 		Status:     string(ContainerCreated),
+		Running:    false,
+		Paused:     false,
+		Restarting: false,
+		Dead:       false,
+	}
+}
+
+func exitedContainerState() *containerStateFixture {
+	return &containerStateFixture{
+		Status:     string(ContainerExited),
 		Running:    false,
 		Paused:     false,
 		Restarting: false,
@@ -233,9 +295,7 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 			ImageReference:   testContainerImage,
 			ImageConfig:      imageConfig,
 			PlatformManifest: manifest,
-			Entrypoint:       testContainerEntrypoint(),
-			Command:          testContainerCommand(),
-			NetworkMode:      testNetworkMode,
+			WorkloadSpec:     observedTestContainerWorkloadSpec(),
 			State:            ContainerRunning,
 			Running:          true,
 			Ownership: domain.WorkloadOwnership{
@@ -257,13 +317,13 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 func assertOwnershipBaseline(t *testing.T, imageConfig, manifest domain.Digest) {
 	t.Helper()
 
-	unmanaged := decodeOwnership(map[string]string{"com.example.owner": testContainerOwner}, imageConfig, manifest)
+	unmanaged := decodeOwnership(map[string]string{testForeignOwnerLabel: testContainerOwner}, imageConfig, manifest)
 	if unmanaged.Status != domain.OwnershipUnmanaged {
 		t.Fatalf("decodeOwnership(unmanaged) = %#v", unmanaged)
 	}
 
 	managedLabels := managedContainerLabels()
-	managedLabels["com.example.owner"] = testContainerOwner
+	managedLabels[testForeignOwnerLabel] = testContainerOwner
 	managed := decodeOwnership(managedLabels, imageConfig, manifest)
 	if managed.Status != domain.OwnershipManaged || managed.PlatformManifest != manifest {
 		t.Fatalf("decodeOwnership(managed) = %#v", managed)
@@ -279,13 +339,29 @@ func matchingContainerExpectation(t *testing.T) ContainerExpectation {
 		ImageReference:   testContainerImage,
 		ImageConfig:      mustTestDigest(t, testImageConfig),
 		PlatformManifest: mustTestDigest(t, testPlatformManifest),
-		Entrypoint:       testContainerEntrypoint(),
-		Command:          testContainerCommand(),
-		NetworkMode:      testNetworkMode,
+		WorkloadSpec:     expectedTestContainerWorkloadSpec(),
 		Service:          testContainerService,
 		Transaction:      testTransaction,
 		DesiredState:     mustTestDigest(t, testDesiredState),
 		Reference:        mustTestDigest(t, testReferenceDigest),
 		AllowedStates:    []ContainerState{ContainerRunning},
 	}
+}
+
+func observedTestContainerWorkloadSpec() domain.WorkloadSpec {
+	return domain.WorkloadSpec{
+		ContainerName: testContainerName,
+		Entrypoint:    testContainerEntrypoint(),
+		Command:       testContainerCommand(),
+		NetworkMode:   testNetworkMode,
+		Restart:       string(containertypes.RestartPolicyDisabled),
+	}
+}
+
+func expectedTestContainerWorkloadSpec() domain.WorkloadSpec {
+	result := observedTestContainerWorkloadSpec()
+	result.ServiceName = testContainerService
+	result.Platform = domain.Platform{OS: testOS, Architecture: testArchitecture}
+
+	return result
 }

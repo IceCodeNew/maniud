@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -271,6 +272,11 @@ func (server *sshTestServer) serveChannel(channel ssh.Channel, requests <-chan *
 
 		if len(server.stderr) > 0 {
 			_, _ = channel.Stderr().Write(server.stderr)
+			if len(server.stderr) > maximumSSHStderr {
+				_, _ = io.Copy(io.Discard, channel)
+
+				return
+			}
 		}
 
 		server.serveHTTP(channel)
