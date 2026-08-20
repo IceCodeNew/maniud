@@ -7,10 +7,12 @@ import (
 )
 
 const (
+	applyServiceValue  = "api"
 	composeFileValue   = "compose.yaml"
 	generatedFileValue = "service.yaml"
 	imageValue         = "image"
 	repositoryValue    = "repo"
+	createOperation    = "create"
 	runOperation       = "run"
 	unknownValue       = "unknown"
 	unknownOption      = "--unknown"
@@ -27,12 +29,14 @@ func TestParseAcceptedCommands(t *testing.T) {
 	}{
 		{
 			name: "generate",
-			args: []string{string(commandGen), imageValue, nameOption, "service", "--output=" + generatedFileValue},
+			args: []string{
+				string(commandGen), imageValue, nameOption, testServiceName, "--output=" + generatedFileValue,
+			},
 			want: invocation{
 				arguments: genInvocation{
 					source:      imageValue,
 					runtimeArgs: nil,
-					name:        "service",
+					name:        testServiceName,
 					output:      generatedFileValue,
 				},
 				debug: false,
@@ -53,9 +57,9 @@ func TestParseAcceptedCommands(t *testing.T) {
 		},
 		{
 			name: "apply one service",
-			args: []string{string(commandApply), composeFileValue, "api", dryRunOption},
+			args: []string{string(commandApply), composeFileValue, applyServiceValue, dryRunOption},
 			want: invocation{
-				arguments: applyInvocation{compose: composeFileValue, service: "api", dryRun: true},
+				arguments: applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: true},
 				debug:     false,
 			},
 		},
@@ -79,7 +83,7 @@ func TestParseAcceptedCommands(t *testing.T) {
 			name: "gitops default branch",
 			args: []string{gitOpsCommand, initCommand, repositoryValue},
 			want: invocation{
-				arguments: gitOpsInitInvocation{repository: repositoryValue, branch: "main"},
+				arguments: gitOpsInitInvocation{repository: repositoryValue, branch: defaultGitOpsBranch},
 				debug:     false,
 			},
 		},
@@ -157,7 +161,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandGen)},
 		{string(commandGen), "one", "two"},
 		{string(commandGen), imageValue, "--"},
-		{string(commandGen), imageValue, "--", "docker", runOperation, imageValue},
+		{string(commandGen), imageValue, "--", testDockerRuntime, runOperation, imageValue},
 		{string(commandGen), "--"},
 		{string(commandGen), imageValue, nameOption},
 		{string(commandGen), imageValue, unknownOption, "value"},
@@ -171,7 +175,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{gitOpsCommand, initCommand, repositoryValue, unknownOption},
 		{string(commandDaemon), "extra"},
 		{string(commandDaemon), unknownOption},
-		{string(commandDaemon), intervalOption, "invalid"},
+		{string(commandDaemon), intervalOption, testInvalidValue},
 		{string(commandDaemon), intervalOption, "NaN"},
 		{string(commandDaemon), intervalOption, "+Inf"},
 		{string(commandDaemon), intervalOption, "0"},
