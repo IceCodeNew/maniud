@@ -258,6 +258,36 @@ services:
 	}
 }
 
+func TestCaptureRepositorySourceReusesTrackedDefaultEnvironment(t *testing.T) {
+	t.Parallel()
+
+	files := map[string][]byte{
+		testRootRepositoryEntry: []byte("services:\n  api:\n    image: example.com/api:1\n    env_file: .env\n"),
+		composeDefaultEnvFile:   []byte("SELECTED=1\n"),
+	}
+	reads := 0
+	source, err := CaptureRepositorySource(
+		t.TempDir(),
+		testRootRepositoryEntry,
+		nil,
+		func(path string) (RepositoryFile, bool, error) {
+			reads++
+			content, found := files[path]
+
+			return RepositoryFile{Content: content}, found, nil
+		},
+		func(string) (RepositoryPathSnapshot, error) {
+			return RepositoryPathSnapshot{}, errRepositoryFixture
+		},
+	)
+	if err != nil {
+		t.Fatalf("CaptureRepositorySource() error = %v", err)
+	}
+	if reads != len(files) || source.Environment["SELECTED"] != "1" {
+		t.Fatalf("CaptureRepositorySource() reads = %d, source = %#v", reads, source)
+	}
+}
+
 func TestCaptureRepositorySourceRequiresTrackedBindSource(t *testing.T) {
 	t.Parallel()
 
