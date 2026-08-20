@@ -358,9 +358,14 @@ func TestDockerTransitionReportsMutationFailures(t *testing.T) {
 func TestDockerTransitionRequestRejectsUnexpectedKind(t *testing.T) {
 	t.Parallel()
 
-	method, path, query := workloadTransitionRequest(application.WorkloadTransition{})
-	if method != "" || path != "" || query != nil {
-		t.Fatalf("workloadTransitionRequest(invalid) = %q, %q, %#v", method, path, query)
+	for _, kind := range []application.WorkloadTransitionKind{
+		application.WorkloadTransitionUnknown,
+		application.WorkloadTransitionKind(99),
+	} {
+		method, path, query := workloadTransitionRequest(application.WorkloadTransition{Kind: kind})
+		if method != "" || path != "" || query != nil {
+			t.Fatalf("workloadTransitionRequest(%d) = %q, %q, %#v", kind, method, path, query)
+		}
 	}
 }
 
