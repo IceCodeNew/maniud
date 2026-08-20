@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -110,6 +111,15 @@ func retryableSQLiteError(err error) bool {
 	code := result.Code() & sqliteResultMask
 
 	return code == sqliteResultBusy || code == sqliteResultLocked
+}
+
+// BackupRoot returns the private backup directory beside the state database.
+func (store *Store) BackupRoot() (string, error) {
+	if store == nil || store.anchor == nil || !store.anchor.valid() {
+		return "", ErrInvalidState
+	}
+
+	return filepath.Join(store.anchor.directoryPath, "backups"), nil
 }
 
 // Close releases SQLite before closing its anchored directory descriptor.
