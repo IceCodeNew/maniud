@@ -102,10 +102,6 @@ func readGitOpsRegistration(path string) (gitOpsRegistration, error) {
 	var empty gitOpsRegistration
 	file, err := os.Open(path) //nolint:gosec // Path is an absolute, caller-validated private state file.
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return empty, fmt.Errorf("open gitops registration: %w", err)
-		}
-
 		return empty, fmt.Errorf("open gitops registration: %w", err)
 	}
 	defer func() {
@@ -131,11 +127,8 @@ func encodeGitOpsRegistration(registration gitOpsRegistration) ([]byte, error) {
 	}
 
 	raw, err := json.Marshal(registration)
-	if err != nil {
-		return nil, fmt.Errorf("encode gitops registration: %w", err)
-	}
 
-	return append(raw, '\n'), nil
+	return append(raw, '\n'), err
 }
 
 func validGitOpsRegistration(registration gitOpsRegistration) bool {

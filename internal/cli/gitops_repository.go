@@ -2,11 +2,8 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
-
-	"github.com/IceCodeNew/maniud/internal/compose"
 )
 
 func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, error) {
@@ -114,17 +111,4 @@ func requireFastForward(ctx context.Context, root, ancestor, descendant string) 
 	}
 
 	return nil
-}
-
-func classifyGitOpsFailure(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, compose.ErrInvalidSource),
-		errors.Is(err, errGitOpsRepositoryInvalid),
-		errors.Is(err, errGitOpsRegistrationExists):
-		return err
-	default:
-		return err
-	}
 }

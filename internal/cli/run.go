@@ -160,23 +160,10 @@ func runGen(
 	environment map[string]string,
 	execute func(genInvocation) error,
 ) int {
-	arguments, valid := parsed.arguments.(genInvocation)
-	if !valid || execute == nil {
-		return emitCommandFailure(
-			stdout,
-			domain.CommandUnavailable(),
-			parsed.debug,
-			internalDiagnosticError("generation application service is unavailable"),
-			environment,
-		)
-	}
-
-	err := execute(arguments)
-	if err != nil {
-		return emitCommandFailure(stdout, classifyGenFailure(err), parsed.debug, err, environment)
-	}
-
-	return 0
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyGenFailure,
+		"generation application service is unavailable",
+	)
 }
 
 func runApply(
@@ -185,23 +172,10 @@ func runApply(
 	environment map[string]string,
 	execute func(applyInvocation) error,
 ) int {
-	arguments, valid := parsed.arguments.(applyInvocation)
-	if !valid || execute == nil {
-		return emitCommandFailure(
-			stdout,
-			domain.CommandUnavailable(),
-			parsed.debug,
-			internalDiagnosticError("apply application service is unavailable"),
-			environment,
-		)
-	}
-
-	err := execute(arguments)
-	if err != nil {
-		return emitCommandFailure(stdout, classifyApplyFailure(err), parsed.debug, err, environment)
-	}
-
-	return 0
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyApplyFailure,
+		"apply application service is unavailable",
+	)
 }
 
 func runGitOpsInit(
@@ -210,23 +184,10 @@ func runGitOpsInit(
 	environment map[string]string,
 	execute func(gitOpsInitInvocation) error,
 ) int {
-	arguments, valid := parsed.arguments.(gitOpsInitInvocation)
-	if !valid || execute == nil {
-		return emitCommandFailure(
-			stdout,
-			domain.CommandUnavailable(),
-			parsed.debug,
-			internalDiagnosticError("gitops application service is unavailable"),
-			environment,
-		)
-	}
-
-	err := execute(arguments)
-	if err != nil {
-		return emitCommandFailure(stdout, classifyGitOpsCommandFailure(err), parsed.debug, err, environment)
-	}
-
-	return 0
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyGitOpsCommandFailure,
+		"gitops application service is unavailable",
+	)
 }
 
 func runDaemon(
@@ -235,23 +196,10 @@ func runDaemon(
 	environment map[string]string,
 	execute func(daemonInvocation) error,
 ) int {
-	arguments, valid := parsed.arguments.(daemonInvocation)
-	if !valid || execute == nil {
-		return emitCommandFailure(
-			stdout,
-			domain.CommandUnavailable(),
-			parsed.debug,
-			internalDiagnosticError("daemon application service is unavailable"),
-			environment,
-		)
-	}
-
-	err := execute(arguments)
-	if err != nil {
-		return emitCommandFailure(stdout, classifyDaemonCommandFailure(err), parsed.debug, err, environment)
-	}
-
-	return 0
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyDaemonCommandFailure,
+		"daemon application service is unavailable",
+	)
 }
 
 func runDoctor(
@@ -260,20 +208,34 @@ func runDoctor(
 	environment map[string]string,
 	execute func(doctorInvocation) error,
 ) int {
-	arguments, valid := parsed.arguments.(doctorInvocation)
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyDoctorCommandFailure,
+		"doctor application service is unavailable",
+	)
+}
+
+func runApplicationCommand[T any](
+	parsed invocation,
+	stdout io.Writer,
+	environment map[string]string,
+	execute func(T) error,
+	classify func(error) *domain.FailureError,
+	unavailable string,
+) int {
+	arguments, valid := parsed.arguments.(T)
 	if !valid || execute == nil {
 		return emitCommandFailure(
 			stdout,
 			domain.CommandUnavailable(),
 			parsed.debug,
-			internalDiagnosticError("doctor application service is unavailable"),
+			internalDiagnosticError(unavailable),
 			environment,
 		)
 	}
 
 	err := execute(arguments)
 	if err != nil {
-		return emitCommandFailure(stdout, classifyDoctorCommandFailure(err), parsed.debug, err, environment)
+		return emitCommandFailure(stdout, classify(err), parsed.debug, err, environment)
 	}
 
 	return 0
