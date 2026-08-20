@@ -8,8 +8,13 @@ import (
 )
 
 const (
-	apiService   = "api"
-	debugProfile = "debug"
+	apiService          = "api"
+	debugProfile        = "debug"
+	testImageEntrypoint = "/image-entrypoint"
+	testImageCommand    = "image-command"
+	testInitEntrypoint  = "/init"
+	testServeCommand    = "serve"
+	testOtherValue      = "other"
 )
 
 func TestLoadUsesExplicitEnvironment(t *testing.T) {
