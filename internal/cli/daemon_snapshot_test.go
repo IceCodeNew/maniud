@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -88,6 +89,129 @@ func TestReconcileGitOpsSnapshotMutatesValidatedServices(t *testing.T) {
 	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
 	if err != nil || mutations != 2 {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+	}
+}
+
+func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 16)
+	dependencies := validApplyDependencies(
+		t, &events,
+		&applyReaderFixture{events: &events},
+		&applyRuntimeFixture{events: &events},
+	)
+	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
+		return testComposeSource(t), nil
+	}
+	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
+		return store.Open(ctx, statePath)
+	}
+	dependencies.mutate = func(
+		context.Context,
+		application.Request,
+		*store.Store,
+		applyRuntime,
+	) (application.Plan, error) {
+		return application.Plan{}, errApplyTest
+	}
+
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+	if err = reconcileGitOpsSnapshot(
+		t.Context(), root, state.head, io.Discard, dependencies,
+	); !errors.Is(err, errApplyTest) {
+		t.Fatalf("reconcileGitOpsSnapshot() error = %v", err)
+	}
+}
+
+func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 16)
+	dependencies := validApplyDependencies(
+		t, &events,
+		&applyReaderFixture{events: &events},
+		&applyRuntimeFixture{events: &events},
+	)
+	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
+		return store.Open(ctx, statePath)
+	}
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+
+	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
+		return compose.Source{}, compose.ErrInvalidSource
+	}
+	if _, err = captureGitOpsSnapshot(
+		t.Context(), root, state.head, dependencies,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("captureGitOpsSnapshot(load failure) = %v", err)
+	}
+
+	modified := false
+	dependencies.loadSource = func(_ context.Context, path string) (compose.Source, error) {
+		if !modified {
+			modified = true
+			if writeErr := os.WriteFile(path, []byte("services: {changed: {}}\n"), 0o600); writeErr != nil {
+				return compose.Source{}, fmt.Errorf("write checkout drift: %w", writeErr)
+			}
+		}
+
+		return testComposeSource(t), nil
+	}
+	if _, err = captureGitOpsSnapshot(
+		t.Context(), root, state.head, dependencies,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("captureGitOpsSnapshot(checkout drift) = %v", err)
+	}
+}
+
+func TestCaptureGitOpsSnapshotRejectsInvalidServiceDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsTestRepository(t)
+	if err := os.WriteFile(filepath.Join(root, gitOpsServicesDirectory), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile(services) error = %v", err)
+	}
+	if _, err := runGit(t.Context(), root, "add", "--", gitOpsServicesDirectory); err != nil {
+		t.Fatalf("git add error = %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), root,
+		"-c", "user.name=Maniud Tests", "-c", "user.email=maniud@example.invalid",
+		"-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "block services directory",
+	); err != nil {
+		t.Fatalf("git commit error = %v", err)
+	}
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+	if _, err = captureGitOpsSnapshot(t.Context(), root, state.head, applyDependencies{}); err == nil {
+		t.Fatal("captureGitOpsSnapshot(service directory file) succeeded")
+	}
+
+	if err = os.WriteFile(filepath.Join(root, "dirty"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile(dirty) error = %v", err)
+	}
+	if _, err = captureGitOpsSnapshot(
+		t.Context(), root, state.head, applyDependencies{},
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("captureGitOpsSnapshot(dirty) = %v", err)
+	}
+	if err = recoverGitOpsSnapshot(
+		t.Context(), root, state.head, io.Discard, applyDependencies{},
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("recoverGitOpsSnapshot(dirty) = %v", err)
 	}
 }
 
