@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -38,6 +39,24 @@ services:
 		len(source.Repository.RuntimePaths) != 1 ||
 		!source.Repository.Files["data/run.sh"].Executable {
 		t.Fatalf("loadTrackedComposeSource() = %#v", source.Repository)
+	}
+}
+
+func TestLoadTrackedComposeSourceRejectsFinalCheckoutDrift(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeGitSourceTestFile(t, root, "compose.yaml", []byte("services: {}\n"), 0o600)
+	commitApplyTestRepository(t, root, "compose.yaml")
+
+	_, err := loadTrackedComposeSourceWithFinalCheck(
+		t.Context(), "compose.yaml", root, nil, t.TempDir(),
+		func(context.Context, string) (gitTreeState, error) {
+			return gitTreeState{}, compose.ErrInvalidSource
+		},
+	)
+	if !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("loadTrackedComposeSourceWithFinalCheck() error = %v", err)
 	}
 }
 
