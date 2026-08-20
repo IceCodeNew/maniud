@@ -116,6 +116,24 @@ type BackupIndex struct {
 	CreatedUnix    int64
 }
 
+// BackupIndexCandidate is one complete manifest identity proposed by a
+// maintenance scan. Rebuilding the index accepts it only when every field
+// matches an existing successful upgrade transaction.
+type BackupIndexCandidate struct {
+	TransactionID         TransactionID
+	Project               string
+	Service               string
+	Runtime               domain.RuntimeKind
+	SourceDigest          domain.Digest
+	EffectiveDigest       domain.Digest
+	ExecutionDigest       domain.Digest
+	BaseTransactionID     TransactionID
+	PredecessorWorkloadID string
+	ManifestPath          string
+	ManifestDigest        domain.Digest
+	CreatedUnix           int64
+}
+
 // ActionState describes the durable boundary around one external effect.
 type ActionState string
 
