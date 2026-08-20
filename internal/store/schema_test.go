@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestOpenInitializesStrictSchemaVersion(t *testing.T) {
@@ -114,6 +116,81 @@ func TestOpenRejectsInvalidWriterLeaseRows(t *testing.T) {
 	if state != nil || !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("Open(invalid lease) = %#v, %v", state, err)
 	}
+}
+
+func TestValidateJournalRowsRejectsRelationalCorruption(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(privateTempDir(t), "state.db")
+
+	state, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	lock, err := state.TryLockService("project", "service")
+	if err != nil {
+		t.Fatalf("TryLockService() error = %v", err)
+	}
+
+	requireNoError(t, lock.Close())
+
+	transactionID := make([]byte, 16)
+	digest := make([]byte, 32)
+	digest[0] = 1
+
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"INSERT INTO journal_transactions "+
+			"(transaction_id, service_id, kind, state, runtime, source_digest, effective_digest, execution_digest) "+
+			"VALUES (?, ?, 'bootstrap', 'failed', 'docker', ?, ?, ?)",
+		transactionID,
+		lock.lease.serviceID[:],
+		digest,
+		digest,
+		digest,
+	)
+	requireNoError(t, err)
+	_, err = state.database.ExecContext(
+		context.Background(),
+		"INSERT INTO journal_actions "+
+			"(transaction_id, sequence, kind, state, intent_digest, postcondition_digest) "+
+			"VALUES (?, 1, 'create', 'intent', ?, NULL)",
+		transactionID,
+		digest,
+	)
+	requireNoError(t, err)
+
+	if !errors.Is(validateJournalRows(context.Background(), state.database), ErrInvalidState) {
+		t.Fatal("validateJournalRows() accepted a pending action in a terminal transaction")
+	}
+
+	requireNoError(t, state.Close())
+
+	state, err = Open(context.Background(), path)
+	if state != nil || !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Open(corrupt journal) = %#v, %v", state, err)
+	}
+}
+
+func TestValidateJournalRowsRequiresAppliedSuccessfulGeneration(t *testing.T) {
+	t.Parallel()
+
+	state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	transaction, err := lock.BeginTransaction(context.Background(), testTransactionIntent(domain.RuntimeDocker))
+	requireNoError(t, err)
+	_, err = lock.CommitAppliedService(context.Background(), transaction.ID, testAppliedServiceIntent())
+	requireNoError(t, err)
+
+	_, err = state.database.ExecContext(context.Background(), "DELETE FROM applied_services")
+	requireNoError(t, err)
+
+	if !errors.Is(validateJournalRows(context.Background(), state.database), ErrInvalidState) {
+		t.Fatal("validateJournalRows() accepted a successful generation without an applied baseline")
+	}
+
+	requireNoError(t, lock.Close())
+	requireNoError(t, state.Close())
 }
 
 func TestValidateJournalRowsContainsSQLiteFailure(t *testing.T) {
