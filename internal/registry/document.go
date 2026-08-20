@@ -3,13 +3,15 @@ package registry
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
+	"math"
 	"slices"
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/imageconfig"
 	"github.com/IceCodeNew/maniud/internal/jsonstrict"
 )
 
@@ -19,6 +21,7 @@ const (
 	dockerMediaTypeImageConfig  = "application/vnd.docker.container.image.v1+json"
 	dockerMediaTypeManifest     = "application/vnd.docker.distribution.manifest.v2+json"
 	dockerMediaTypeManifestList = "application/vnd.docker.distribution.manifest.list.v2+json"
+	maximumImageLayers          = 4096
 )
 
 //nolint:tagliatelle // OCI and Docker define these wire-field names.
@@ -69,23 +72,12 @@ type manifestDocument struct {
 	digest     domain.Digest
 	manifests  []descriptor
 	config     *descriptor
+	layers     []descriptor
 }
 
-//nolint:tagliatelle // OCI and Docker define these wire-field names.
-type imageConfig struct {
-	Architecture    string          `json:"architecture"`
-	Author          string          `json:"author,omitempty"`
-	Config          json.RawMessage `json:"config,omitempty"`
-	Container       string          `json:"container,omitempty"`
-	ContainerConfig json.RawMessage `json:"container_config,omitempty"`
-	Created         json.RawMessage `json:"created,omitempty"`
-	DockerVersion   string          `json:"docker_version,omitempty"`
-	History         json.RawMessage `json:"history,omitempty"`
-	OS              string          `json:"os"`
-	OSFeatures      []string        `json:"os.features,omitempty"`
-	OSVersion       string          `json:"os.version,omitempty"`
-	RootFS          json.RawMessage `json:"rootfs"`
-	Variant         string          `json:"variant,omitempty"`
+type imageConfigEvidence struct {
+	platform      imagePlatform
+	configuration imageconfig.Evidence
 }
 
 func decodeManifest(raw []byte, descriptorValue ocispec.Descriptor) (manifestDocument, error) {
@@ -111,7 +103,7 @@ func decodeManifest(raw []byte, descriptorValue ocispec.Descriptor) (manifestDoc
 
 		return document, nil
 	case dockerMediaTypeManifest, ocispec.MediaTypeImageManifest:
-		config, err := decodeImageManifest(raw, descriptorValue.MediaType)
+		config, layers, err := decodeImageManifest(raw, descriptorValue.MediaType)
 		if err != nil {
 			return empty, ErrProtocol
 		}
@@ -121,6 +113,7 @@ func decodeManifest(raw []byte, descriptorValue ocispec.Descriptor) (manifestDoc
 		document.descriptor = descriptorValue
 		document.digest = digest
 		document.config = &config
+		document.layers = layers
 
 		return document, nil
 	default:
@@ -138,14 +131,58 @@ func decodeIndex(raw []byte, mediaType string) ([]descriptor, error) {
 	return parsed.Manifests, nil
 }
 
-func decodeImageManifest(raw []byte, mediaType string) (descriptor, error) {
+func decodeImageManifest(raw []byte, mediaType string) (descriptor, []descriptor, error) {
 	var parsed imageManifestDocument
 	if !jsonstrict.Decode(bytes.NewReader(raw), maximumManifestBytes, &parsed) || parsed.SchemaVersion != 2 ||
-		parsed.MediaType != "" && parsed.MediaType != mediaType || parsed.ArtifactType != "" || parsed.Subject != nil {
-		return descriptor{}, ErrProtocol
+		parsed.MediaType != "" && parsed.MediaType != mediaType || parsed.ArtifactType != "" || parsed.Subject != nil ||
+		len(parsed.Layers) > maximumImageLayers {
+		return descriptor{}, nil, ErrProtocol
 	}
 
-	return parsed.Config, nil
+	return parsed.Config, parsed.Layers, nil
+}
+
+func verifyLocalLayers(ctx context.Context, repository LocalRepository, layers []descriptor) error {
+	if repository == nil {
+		return nil
+	}
+
+	for _, layer := range layers {
+		if layer.Platform != nil || !validLayerDescriptor(layer) {
+			return ErrProtocol
+		}
+		if err := repository.Verify(ctx, toOCIDescriptor(layer)); err != nil {
+			return classifyRemoteError(err)
+		}
+	}
+
+	return nil
+}
+
+func validLayerDescriptor(value descriptor) bool {
+	if !validLayerMediaType(value.MediaType) {
+		return false
+	}
+
+	return validDescriptor(value, math.MaxInt64, value.MediaType)
+}
+
+func validLayerMediaType(value string) bool {
+	switch value {
+	case "application/vnd.oci.image.layer.v1.tar",
+		"application/vnd.oci.image.layer.v1.tar+gzip",
+		"application/vnd.oci.image.layer.v1.tar+zstd",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+		"application/vnd.docker.image.rootfs.diff.tar",
+		"application/vnd.docker.image.rootfs.diff.tar.gzip",
+		"application/vnd.docker.image.rootfs.foreign.diff.tar",
+		"application/vnd.docker.image.rootfs.foreign.diff.tar.gzip":
+		return true
+	default:
+		return false
+	}
 }
 
 func validRawDescriptor(value ocispec.Descriptor, raw []byte, maximum int64) (domain.Digest, bool) {
@@ -168,25 +205,80 @@ func validDescriptor(value descriptor, maximum int64, mediaTypes ...string) bool
 	return true
 }
 
-func decodeImageConfig(raw []byte, descriptorValue ocispec.Descriptor) (imagePlatform, domain.Digest, error) {
-	var parsed imageConfig
+func exactPlatform(value *imagePlatform, target imagePlatform) bool {
+	return value != nil && value.OS == target.OS && value.Architecture == target.Architecture &&
+		value.OSVersion == target.OSVersion && value.Variant == target.Variant &&
+		slices.Equal(value.OSFeatures, target.OSFeatures) && slices.Equal(value.Features, target.Features)
+}
 
+func selectPlatform(values []descriptor, target imagePlatform) (descriptor, error) {
+	var selected descriptor
+
+	found := false
+
+	for _, value := range values {
+		if !slices.Contains(
+			[]string{dockerMediaTypeManifest, ocispec.MediaTypeImageManifest},
+			value.MediaType,
+		) {
+			continue
+		}
+
+		if !validDescriptor(
+			value,
+			maximumManifestBytes,
+			dockerMediaTypeManifest,
+			ocispec.MediaTypeImageManifest,
+		) {
+			return descriptor{}, ErrProtocol
+		}
+
+		if !exactPlatform(value.Platform, target) {
+			continue
+		}
+
+		if found {
+			return descriptor{}, ErrProtocol
+		}
+
+		selected = value
+		found = true
+	}
+
+	if !found {
+		return descriptor{}, ErrPlatformUnavailable
+	}
+
+	return selected, nil
+}
+
+func decodeImageConfig(
+	raw []byte,
+	descriptorValue ocispec.Descriptor,
+) (imageConfigEvidence, domain.Digest, error) {
 	digest, valid := validRawDescriptor(descriptorValue, raw, maximumConfigBytes)
 	if !valid || !slices.Contains(
 		[]string{dockerMediaTypeImageConfig, ocispec.MediaTypeImageConfig},
 		descriptorValue.MediaType,
-	) || !jsonstrict.Decode(bytes.NewReader(raw), maximumConfigBytes, &parsed) {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+	) {
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
+	}
+
+	parsed, err := imageconfig.Decode(raw, maximumConfigBytes)
+	if err != nil {
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
 	platform, err := normalizePlatform(domain.Platform{
-		OS:           parsed.OS,
-		Architecture: parsed.Architecture,
-		Variant:      parsed.Variant,
+		OS:           parsed.Platform.OS,
+		Architecture: parsed.Platform.Architecture,
+		Variant:      parsed.Platform.Variant,
 	})
 	if err != nil || platform.OSVersion != parsed.OSVersion || len(parsed.OSFeatures) != 0 {
-		return imagePlatform{}, domain.Digest{}, ErrProtocol
+		return imageConfigEvidence{}, domain.Digest{}, ErrProtocol
 	}
 
-	return platform, digest, nil
+	return imageConfigEvidence{
+		platform: platform, configuration: parsed,
+	}, digest, nil
 }

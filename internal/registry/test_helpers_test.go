@@ -14,10 +14,12 @@ const (
 	testArchitectureAMD64 = "amd64"
 	testArchitectureARM64 = "arm64"
 	testImageName         = "api"
+	testInvalidMediaType  = "application/example"
 	testOSLinux           = "linux"
 	testPassword          = "password"
 	testRefreshToken      = "refresh"
 	testAccessToken       = "access"
+	testInvalidDescriptor = "invalid descriptor"
 	testRegistrySecret    = "secret"
 	testRegistryUsername  = "robot"
 	testUsername          = "user"
@@ -41,11 +43,34 @@ func internalDescriptorForTest(raw []byte, mediaType string) descriptor {
 	}
 }
 
+//nolint:tagliatelle // OCI defines these wire-field names.
+type testImageProcessConfig struct {
+	Entrypoint []string `json:"Entrypoint,omitempty"`
+	Command    []string `json:"Cmd,omitempty"`
+}
+
+type testImageConfig struct {
+	Architecture string          `json:"architecture"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	OS           string          `json:"os"`
+	RootFS       json.RawMessage `json:"rootfs"`
+	Variant      string          `json:"variant,omitempty"`
+}
+
 func configForTest(t *testing.T, platform domain.Platform) ([]byte, descriptor) {
 	t.Helper()
 
-	raw, err := json.Marshal(imageConfig{
+	process, err := json.Marshal(testImageProcessConfig{
+		Entrypoint: []string{"/usr/local/bin/api"},
+		Command:    []string{"serve"},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(image process config) error = %v", err)
+	}
+
+	raw, err := json.Marshal(testImageConfig{
 		Architecture: platform.Architecture,
+		Config:       process,
 		OS:           platform.OS,
 		RootFS:       json.RawMessage(`{"type":"layers","diff_ids":[]}`),
 		Variant:      platform.Variant,

@@ -37,7 +37,7 @@ func TestNewResolver(t *testing.T) {
 		t.Fatalf("ParseReference() error = %v", err)
 	}
 
-	repository, err := resolver.repositories(context.Background(), reference, credential{})
+	repository, err := resolver.repositories(context.Background(), reference, Credentials{})
 	if err != nil || repository == nil {
 		t.Fatalf("default repository factory = %T, %v", repository, err)
 	}
@@ -58,7 +58,7 @@ func TestResolveRejectsInvalidTopLevelContent(t *testing.T) {
 		want       error
 	}{
 		{
-			name:       "invalid descriptor",
+			name:       testInvalidDescriptor,
 			source:     testImageName,
 			descriptor: ocispec.Descriptor{Size: -1},
 			raw:        manifestRaw,
@@ -176,7 +176,7 @@ func TestResolveRejectsInvalidConfig(t *testing.T) {
 		want          error
 	}{
 		{
-			name:          "invalid descriptor",
+			name:          testInvalidDescriptor,
 			config:        descriptor{MediaType: ocispec.MediaTypeImageConfig},
 			configContent: fakeContent{raw: validConfigRaw},
 			want:          ErrProtocol,
