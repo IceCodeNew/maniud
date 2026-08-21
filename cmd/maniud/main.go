@@ -22,7 +22,7 @@ Command syntax:
 	maniud apply [--dry-run] COMPOSE [SERVICE]
 	maniud gitops init [--branch BRANCH] REPOSITORY
 	maniud daemon [--once] [--interval SECONDS]
-	maniud doctor --reindex-backups [--confirm] [--config PATH] [--state PATH]
+	maniud doctor --reindex-backups [--confirm] [--state PATH]
 
 Run maniud COMMAND --help for command-specific behavior.
 */
