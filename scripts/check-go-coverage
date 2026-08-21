@@ -15,7 +15,10 @@ if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
 fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-mapfile -t module_names < <("$repository_root/scripts/list-go-modules")
+module_names=()
+while IFS= read -r module_name; do
+	module_names+=("$module_name")
+done < <("$repository_root/scripts/list-go-modules")
 module_profiles=()
 for module_number in "${!module_names[@]}"; do
 	module_name="${module_names[$module_number]}"
@@ -24,7 +27,10 @@ for module_number in "${!module_names[@]}"; do
 	if [[ "$module_name" == "." ]]; then
 		coverage_patterns=(./internal/...)
 	fi
-	mapfile -t coverage_packages < <(
+	coverage_packages=()
+	while IFS= read -r coverage_package; do
+		coverage_packages+=("$coverage_package")
+	done < <(
 		cd "$module_directory"
 		GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
 	)
