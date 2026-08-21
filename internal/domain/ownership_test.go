@@ -2,6 +2,11 @@ package domain
 
 import "testing"
 
+const (
+	domainTestService     = "api"
+	domainTestTransaction = "tx-1"
+)
+
 func TestWorkloadOwnershipMatches(t *testing.T) {
 	t.Parallel()
 
@@ -10,15 +15,15 @@ func TestWorkloadOwnershipMatches(t *testing.T) {
 	imageConfig := Hash([]byte("image config"))
 	ownership := WorkloadOwnership{
 		Status:           OwnershipManaged,
-		Service:          "api",
-		Transaction:      "tx-1",
+		Service:          domainTestService,
+		Transaction:      domainTestTransaction,
 		DesiredState:     desired,
 		Reference:        reference,
 		ImageConfig:      imageConfig,
 		PlatformManifest: Hash([]byte("platform manifest")),
 	}
 
-	if !ownership.Matches("api", "tx-1", desired, reference) {
+	if !ownership.Matches(domainTestService, domainTestTransaction, desired, reference) {
 		t.Fatal("WorkloadOwnership.Matches(exact) = false")
 	}
 
@@ -33,11 +38,26 @@ func TestWorkloadOwnershipMatches(t *testing.T) {
 		desired     Digest
 		reference   Digest
 	}{
-		{name: "status", ownership: conflicting, service: "api", transaction: "tx-1", desired: desired, reference: reference},
-		{name: "service", ownership: ownership, service: "worker", transaction: "tx-1", desired: desired, reference: reference},
-		{name: "transaction", ownership: ownership, service: "api", transaction: "tx-2", desired: desired, reference: reference},
-		{name: "desired state", ownership: ownership, service: "api", transaction: "tx-1", desired: Hash(nil), reference: reference},
-		{name: "reference", ownership: ownership, service: "api", transaction: "tx-1", desired: desired, reference: Hash(nil)},
+		{
+			name: "status", ownership: conflicting, service: domainTestService,
+			transaction: domainTestTransaction, desired: desired, reference: reference,
+		},
+		{
+			name: "service", ownership: ownership, service: "worker",
+			transaction: domainTestTransaction, desired: desired, reference: reference,
+		},
+		{
+			name: "transaction", ownership: ownership, service: domainTestService,
+			transaction: "tx-2", desired: desired, reference: reference,
+		},
+		{
+			name: "desired state", ownership: ownership, service: domainTestService,
+			transaction: domainTestTransaction, desired: Hash(nil), reference: reference,
+		},
+		{
+			name: "reference", ownership: ownership, service: domainTestService,
+			transaction: domainTestTransaction, desired: desired, reference: Hash(nil),
+		},
 	}
 	for _, conflict := range conflicts {
 		if conflict.ownership.Matches(conflict.service, conflict.transaction, conflict.desired, conflict.reference) {

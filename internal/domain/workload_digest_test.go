@@ -37,7 +37,7 @@ func TestWorkloadDigestsPreserveVersionedIdentitySemantics(t *testing.T) {
 	zero := WorkloadSpec{}
 	baseline := ComputeWorkloadSpecDigest(zero)
 	ignored := zero
-	ignored.ServiceName = "api"
+	ignored.ServiceName = domainTestService
 	ignored.ContainerName = "api-1"
 	ignored.Platform = Platform{OS: digestTestOS, Architecture: digestTestArchitecture}
 	if ComputeWorkloadSpecDigest(ignored) != baseline {
