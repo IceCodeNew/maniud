@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 //nolint:funlen // The table keeps publication content failures in one audit surface.
@@ -96,7 +94,6 @@ func TestOpenPublicationRejectsContentBoundaries(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // Each assertion covers one independent descriptor-lifetime boundary.
 func TestOpenPublicationDescriptorBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -134,16 +131,9 @@ func TestOpenPublicationDescriptorBoundaries(t *testing.T) {
 		rootPath, manifest := publishedOpenFixture(t)
 		root, directory := openPublicationDescriptors(t, rootPath, manifest)
 		operations := defaultPublicationOperations()
-		baseClose := operations.closeFile
-		remaining := len(manifest.Artifacts) + 2
-		operations.closeFile = func(file *os.File) error {
-			remaining--
-			err := baseClose(file)
-			if remaining == 0 {
-				err = errors.Join(err, unix.Close(directory))
-			}
-
-			return err
+		baseClose := operations.closeDescriptor
+		operations.closeDescriptor = func(descriptor int) error {
+			return errors.Join(baseClose(descriptor), errPublicationTest)
 		}
 		if _, found, err := readPublication(
 			context.Background(), root, directory, manifest.TransactionID, operations,

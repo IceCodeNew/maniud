@@ -39,15 +39,16 @@ type publicationEntry struct {
 }
 
 type publicationOperations struct {
-	mkdir         func(int, string, uint32) error
-	openDirectory func(int, string, int, uint32) (int, error)
-	openFile      func(int, string, int, uint32) (int, error)
-	unlink        func(int, string, int) error
-	writeFile     func(*os.File, []byte) (int, error)
-	syncFile      func(*os.File) error
-	closeFile     func(*os.File) error
-	syncDirectory func(int) error
-	rename        func(int, string, string) error
+	mkdir           func(int, string, uint32) error
+	openDirectory   func(int, string, int, uint32) (int, error)
+	openFile        func(int, string, int, uint32) (int, error)
+	unlink          func(int, string, int) error
+	writeFile       func(*os.File, []byte) (int, error)
+	syncFile        func(*os.File) error
+	closeFile       func(*os.File) error
+	closeDescriptor func(int) error
+	syncDirectory   func(int) error
+	rename          func(int, string, string) error
 }
 
 type partialPublication struct {
@@ -61,15 +62,16 @@ type partialPublication struct {
 
 func defaultPublicationOperations() publicationOperations {
 	return publicationOperations{
-		mkdir:         unix.Mkdirat,
-		openDirectory: unix.Openat,
-		openFile:      unix.Openat,
-		unlink:        unix.Unlinkat,
-		writeFile:     (*os.File).Write,
-		syncFile:      (*os.File).Sync,
-		closeFile:     (*os.File).Close,
-		syncDirectory: unix.Fsync,
-		rename:        renameNoReplace,
+		mkdir:           unix.Mkdirat,
+		openDirectory:   unix.Openat,
+		openFile:        unix.Openat,
+		unlink:          unix.Unlinkat,
+		writeFile:       (*os.File).Write,
+		syncFile:        (*os.File).Sync,
+		closeFile:       (*os.File).Close,
+		closeDescriptor: unix.Close,
+		syncDirectory:   unix.Fsync,
+		rename:          renameNoReplace,
 	}
 }
 

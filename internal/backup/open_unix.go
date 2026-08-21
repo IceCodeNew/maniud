@@ -74,27 +74,27 @@ func readPublication(
 ) (Publication, bool, error) {
 	raw, readable := readPrivateFile(ctx, directory, manifestName, maximumManifestBytes, operations)
 	if !readable {
-		_ = unix.Close(directory)
+		_ = operations.closeDescriptor(directory)
 
 		return Publication{}, false, errors.Join(ErrInvalidArchive, root.close())
 	}
 
 	manifest, digest, decodeErr := DecodeManifest(bytes.NewReader(raw))
 	if decodeErr != nil || manifest.TransactionID != transaction {
-		_ = unix.Close(directory)
+		_ = operations.closeDescriptor(directory)
 
 		return Publication{}, false, errors.Join(ErrInvalidManifest, root.close())
 	}
 	if !publicationNamesMatch(directory, manifest) ||
 		!publicationContentsMatch(ctx, directory, raw, manifest, operations) ||
 		!root.valid() {
-		_ = unix.Close(directory)
+		_ = operations.closeDescriptor(directory)
 
 		return Publication{}, false, errors.Join(ErrInvalidArchive, root.close())
 	}
 
 	path, _ := ManifestPath(transaction)
-	closeErr := errors.Join(unix.Close(directory), root.close())
+	closeErr := errors.Join(operations.closeDescriptor(directory), root.close())
 	if closeErr != nil {
 		return Publication{}, false, closeErr
 	}
@@ -115,7 +115,7 @@ func verifyExistingPublication(
 		return false
 	}
 	defer func() {
-		_ = unix.Close(directory)
+		_ = operations.closeDescriptor(directory)
 	}()
 
 	if !publicationNamesMatch(directory, manifest) ||

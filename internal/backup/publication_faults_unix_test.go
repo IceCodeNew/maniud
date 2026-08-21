@@ -739,6 +739,7 @@ func TestCleanupRejectsInvalidPartialDescriptor(t *testing.T) {
 	if err = unix.Close(partial.descriptor); err != nil {
 		t.Fatal(err)
 	}
+	partial.descriptor = 1 << 30
 	if err = partial.cleanup(); !errors.Is(err, ErrInvalidBackupRoot) {
 		t.Fatalf("invalid partial cleanup = %v", err)
 	}
