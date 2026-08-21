@@ -8,8 +8,12 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
-func addHostDevices(*specs.Spec, []domain.DeviceMapping) error {
-	return ErrUnsupportedWorkload
+func addHostDevices(_ *specs.Spec, devices []domain.DeviceMapping) error {
+	if len(devices) != 0 {
+		return ErrUnsupportedWorkload
+	}
+
+	return nil
 }
 
 func ensureNetworkNamespace(string) error {

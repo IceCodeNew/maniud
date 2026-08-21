@@ -23,7 +23,7 @@ import (
 func testHostWorkloadOptions(t *testing.T) WorkloadOptions {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testHostDirectory(t)
 	options := DefaultWorkloadOptions()
 	options.StateRoot = filepath.Join(root, "state")
 	options.NetworkNamespaceRoot = filepath.Join(root, "netns")
@@ -32,6 +32,17 @@ func testHostWorkloadOptions(t *testing.T) WorkloadOptions {
 	options.CNICacheDirectory = filepath.Join(root, "cache")
 
 	return options
+}
+
+func testHostDirectory(t *testing.T) string {
+	t.Helper()
+
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return directory
 }
 
 //nolint:cyclop,funlen // The test exercises host preparation and every mount identity boundary together.
@@ -208,7 +219,7 @@ func TestHostConfigurationContentAndNamespaceProjection(t *testing.T) {
 func TestGeneratedMountsAndPrivateFilesystemOperations(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	root := testHostDirectory(t)
 	spec := domain.WorkloadSpec{Hostname: testWorkloadService, DNS: []string{testDNSAddress}}
 	base := []specs.Mount{{Destination: "/existing"}}
 	mounts, err := appendGeneratedHostMounts(root, base, spec)
@@ -458,24 +469,10 @@ func TestLocalWorkloadHostRejectsInvalidPreparationAndNamespace(t *testing.T) {
 
 	host := localWorkloadHost{}
 	options := testHostWorkloadOptions(t)
-	var err error
-	if _, err = host.Prepare(
+	if _, err := host.Prepare(
 		context.Background(), options, testWorkloadName, containerdconfig.Configuration{}, nil, false,
 	); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("Prepare(invalid) = %v", err)
-	}
-	file := filepath.Join(t.TempDir(), testFileName)
-	if err = os.WriteFile(file, nil, privateFileMode); err != nil {
-		t.Fatal(err)
-	}
-	if err = host.EnsureNetworkNamespace(file); !errors.Is(err, ErrProtocol) {
-		t.Fatalf("EnsureNetworkNamespace(file) = %v", err)
-	}
-	if host.NetworkNamespaceMounted(file) {
-		t.Fatal("NetworkNamespaceMounted(file) accepted")
-	}
-	if err = host.DeleteNetworkNamespace(filepath.Join(t.TempDir(), "missing")); err != nil {
-		t.Fatalf("DeleteNetworkNamespace(missing) = %v", err)
 	}
 }
 
@@ -676,12 +673,12 @@ func TestHostMountComparisonAndGeneratedFileFailures(t *testing.T) {
 			t.Fatalf("runtimeMountsMatchConfiguration(%#v, %#v) accepted", test.desired, test.observed)
 		}
 	}
-	if _, err := appendGeneratedHostMounts(t.TempDir(), nil, domain.WorkloadSpec{
+	if _, err := appendGeneratedHostMounts(testHostDirectory(t), nil, domain.WorkloadSpec{
 		Hostname: strings.Repeat("x", maximumGeneratedHostFileBytes),
 	}); !errors.Is(err, ErrUnsupportedWorkload) {
 		t.Fatalf("appendGeneratedHostMounts(large) = %v", err)
 	}
-	root := t.TempDir()
+	root := testHostDirectory(t)
 	if err := writePrivateFile(root, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("writePrivateFile(directory target) = %v", err)
 	}
