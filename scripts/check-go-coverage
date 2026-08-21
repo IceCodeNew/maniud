@@ -10,21 +10,77 @@ temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 profile="${1:-$temporary_dir/statements.cover}"
 test_cgo=0
-coverage_packages=(./containerconfig/... ./imageref ./internal/...)
-coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
-test_args=(
-	-count=1
-	-covermode=atomic
-	-coverpkg="$coverpkg"
-	-coverprofile="$profile"
-)
 if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
-	test_args=(-race "${test_args[@]}")
 	test_cgo=1
 fi
 
-CGO_ENABLED="$test_cgo" go test "${test_args[@]}" ./...
-go tool cover -func="$profile"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+mapfile -t module_names < <("$repository_root/scripts/list-go-modules")
+module_profiles=()
+for module_number in "${!module_names[@]}"; do
+	module_name="${module_names[$module_number]}"
+	module_directory="$(cd "$repository_root/$module_name" && pwd -P)"
+	coverage_patterns=(./...)
+	if [[ "$module_name" == "." ]]; then
+		coverage_patterns=(./internal/...)
+	fi
+	mapfile -t coverage_packages < <(
+		cd "$module_directory"
+		GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
+	)
+	coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
+	module_profile="$temporary_dir/statements-$module_number.cover"
+	module_profiles+=("$module_profile")
+	test_args=(
+		-count=1
+		-covermode=atomic
+		-coverpkg="$coverpkg"
+		-coverprofile="$module_profile"
+	)
+	if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
+		test_args=(-race "${test_args[@]}")
+	fi
+	(
+		cd "$module_directory"
+		GOWORK=off CGO_ENABLED="$test_cgo" go test "${test_args[@]}" ./...
+	)
+	module_path="$(cd "$module_directory" && GOWORK=off go list -m -f '{{.Path}}')"
+	absolute_module_profile="$temporary_dir/absolute-$module_number.cover"
+	awk -v module_prefix="$module_path/" -v directory="$module_directory/" '
+    NR == 1 { print; next }
+    index($1, module_prefix) == 1 {
+      $1 = directory substr($1, length(module_prefix) + 1)
+    }
+    { print }
+  ' "$module_profile" >"$absolute_module_profile"
+	mv "$absolute_module_profile" "$module_profile"
+done
+
+absolute_profile="$temporary_dir/statements-absolute.cover"
+{
+	printf '%s\n' 'mode: atomic'
+	awk '
+    FNR == 1 { next }
+    {
+      statements[$1] = $2
+      hits[$1] += $3
+    }
+    END {
+      for (block in statements) print block, statements[block], hits[block]
+    }
+  ' "${module_profiles[@]}" | sort
+} >"$absolute_profile"
+
+repository_module_path="$(GOWORK=off go list -m -f '{{.Path}}')"
+cover_report="$(GOWORK=off go tool cover -func="$absolute_profile")"
+printf '%s\n' "${cover_report//"$repository_root/"/"$repository_module_path/"}"
+awk -v directory="$repository_root/" -v module_prefix="$repository_module_path/" '
+  NR == 1 { print; next }
+  index($1, directory) == 1 {
+    $1 = module_prefix substr($1, length(directory) + 1)
+  }
+  { print }
+' "$absolute_profile" >"$profile"
 
 read -r covered_statements total_statements < <(
 	awk '
@@ -61,9 +117,40 @@ tar --exclude=.git --exclude=.amp -cf - . | tar -xf - -C "$source_copy"
 (
 	cd "$source_copy"
 
-	CGO_ENABLED="$test_cgo" go list -f \
-		'{{.Dir}}{{"\t"}}{{join .GoFiles "\t"}}{{"\t"}}{{join .CgoFiles "\t"}}{{"\t"}}{{join .TestGoFiles "\t"}}{{"\t"}}{{join .XTestGoFiles "\t"}}' \
-		./... >"$temporary_dir/packages.tsv"
+	: >"$temporary_dir/packages.tsv"
+	: >"$temporary_dir/coverage-directories.txt"
+	for module_name in "${module_names[@]}"; do
+		module_directory="$(cd "$source_copy/$module_name" && pwd -P)"
+		python3 - "$module_directory/go.mod" "$module_directory" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+module_file = Path(sys.argv[1])
+module_directory = Path(sys.argv[2])
+contents = module_file.read_text(encoding="utf-8")
+contents = re.sub(
+    r"(=>[ \t]+)(\.\.?(?:/[^\s]+)?)",
+    lambda match: match.group(1) + str((module_directory / match.group(2)).resolve()),
+    contents,
+)
+module_file.write_text(contents, encoding="utf-8")
+PY
+		coverage_patterns=(./...)
+		if [[ "$module_name" == "." ]]; then
+			coverage_patterns=(./internal/...)
+		fi
+		(
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" go list -f \
+				'{{.Dir}}{{"\t"}}{{join .GoFiles "\t"}}{{"\t"}}{{join .CgoFiles "\t"}}{{"\t"}}{{join .TestGoFiles "\t"}}{{"\t"}}{{join .XTestGoFiles "\t"}}' \
+				./...
+			while IFS= read -r coverage_directory; do
+				printf '%s\t%s\n' "$module_directory" "$coverage_directory" \
+					>>"$temporary_dir/coverage-directories.txt"
+			done < <(GOWORK=off CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' "${coverage_patterns[@]}")
+		) >>"$temporary_dir/packages.tsv"
+	done
 	while IFS=$'\t' read -r package_dir selected_files; do
 		selected_files=$'\t'"$selected_files"$'\t'
 		shopt -s nullglob
@@ -79,10 +166,13 @@ tar --exclude=.git --exclude=.amp -cf - . | tar -xf - -C "$source_copy"
 	covered_branches=0
 	total_branches=0
 	package_number=0
-	while IFS= read -r package_dir; do
+	while IFS=$'\t' read -r module_directory package_dir; do
 		stats="$temporary_dir/branches-$package_number.json"
 		log="$temporary_dir/branches-$package_number.log"
-		if ! CGO_ENABLED="$test_cgo" gobco -branch -stats "$stats" "$package_dir" >"$log" 2>&1; then
+		if ! (
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" gobco -branch -stats "$stats" "$package_dir"
+		) >"$log" 2>&1; then
 			cat "$log" >&2
 			exit 1
 		fi
@@ -120,7 +210,7 @@ PY
 		covered_branches=$((covered_branches + package_covered))
 		total_branches=$((total_branches + package_total))
 		package_number=$((package_number + 1))
-	done < <(CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' "${coverage_packages[@]}")
+	done <"$temporary_dir/coverage-directories.txt"
 
 	printf 'covered branch outcomes are %d/%d\n' "$covered_branches" "$total_branches"
 )

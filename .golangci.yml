@@ -55,6 +55,10 @@ linters:
             - github.com/IceCodeNew/maniud
             - github.com/distribution/reference
             - github.com/opencontainers/go-digest
+    # Public adapter modules use repository-relative replacements only while
+    # this monorepo develops and tests a shared release version.
+    gomoddirectives:
+      replace-local: true
     nolintlint:
       require-explanation: true
       require-specific: true
