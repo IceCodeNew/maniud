@@ -90,7 +90,11 @@ func TestCompletedStorageRestoreRequiresExactEvidence(t *testing.T) {
 			archives: [][]byte{fixture.archive},
 		}
 	}
-	if _, err := completedStorageRestore(context.Background(), store.Action{}, newEffect()); !errors.Is(err, ErrConflictingState) {
+	if _, err := completedStorageRestore(
+		context.Background(),
+		store.Action{},
+		newEffect(),
+	); !errors.Is(err, ErrConflictingState) {
 		t.Fatalf("completedStorageRestore(missing digest) error = %v", err)
 	}
 

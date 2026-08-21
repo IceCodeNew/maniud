@@ -84,7 +84,9 @@ func matchingBackupArtifacts(
 	}
 
 	for index, artifact := range manifest.Artifacts {
-		if artifact.Mount != sources[index].Mount || !backup.SameContent(artifact.Inventory, inventories[index]) {
+		// The exact length checks above prove both indexed reads are in range.
+		if artifact.Mount != sources[index].Mount || //nolint:gosec // Equal lengths prove this index.
+			!backup.SameContent(artifact.Inventory, inventories[index]) { //nolint:gosec // Equal lengths prove this index.
 			return ErrConflictingState
 		}
 	}

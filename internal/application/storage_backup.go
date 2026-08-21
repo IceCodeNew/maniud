@@ -64,7 +64,7 @@ func settleStorageBackup(
 ) (EffectPostcondition, backup.Publication, error) {
 	var empty EffectPostcondition
 	var publication backup.Publication
-	if mutation == nil || root == "" || len(archives) == 0 {
+	if mutation == nil || root == "" || len(archives) == 0 || len(archives) != len(manifest.Artifacts) {
 		return empty, publication, ErrInvalidRequest
 	}
 
@@ -250,7 +250,7 @@ func archiveInputs(manifest backup.Manifest, archives [][]byte) []backup.Archive
 	for index, artifact := range manifest.Artifacts {
 		inputs[index] = backup.ArchiveInput{
 			Target:       artifact.Mount.Target,
-			Reader:       bytes.NewReader(archives[index]),
+			Reader:       bytes.NewReader(archives[index]), //nolint:gosec // settleStorageBackup proves equal lengths.
 			MaximumBytes: archiveTransferLimit,
 		}
 	}

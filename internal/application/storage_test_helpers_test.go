@@ -56,7 +56,7 @@ func (runtime *storageArchiveRuntime) PutWorkloadArchive(
 	}
 	raw, err := io.ReadAll(source)
 	if err != nil {
-		return err
+		return fmt.Errorf("read test archive: %w", err)
 	}
 	runtime.archive = raw
 
