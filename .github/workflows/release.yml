@@ -273,6 +273,12 @@ jobs:
           for asset in "${assets[@]}"; do
             test -f "$asset"
           done
+          remote_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            printf 'master moved before publication: expected %s, found %s\n' \
+              "$GITHUB_SHA" "$remote_sha" >&2
+            exit 1
+          fi
           if [[ "$RESUME_DRAFT" == false ]]; then
             gh release create "$RELEASE_TAG" \
               --draft \
