@@ -218,6 +218,10 @@ func TestPlatformAndInternalValidationBoundaries(t *testing.T) {
 			t.Fatalf("parseSourceForArchitecture(%q) error = %v", architecture, err)
 		}
 	}
+	amd64Projection, err := parseSourceForArchitecture(testImage, "", amd64Architecture)
+	if err != nil || amd64Projection.Platform() != (domain.Platform{OS: linuxOS, Architecture: amd64Architecture}) {
+		t.Fatalf("parseSourceForArchitecture(amd64) = %#v, %v", amd64Projection, err)
+	}
 	arm64Projection, err := parseSourceForArchitecture(testImage, "", arm64Architecture)
 	if err != nil || arm64Projection.Platform().Variant != arm64Variant {
 		t.Fatalf("parseSourceForArchitecture(arm64) = %#v, %v", arm64Projection, err)
