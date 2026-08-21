@@ -184,6 +184,13 @@ func TestRenderArchiveRejectsInvalidInputs(t *testing.T) {
 	); err == nil {
 		t.Fatal("RenderArchive(invalid working directory) succeeded")
 	}
+	invalidProof := analysis
+	invalidProof.ArchiveSize = 1 << 41
+	if _, _, err := RenderArchive(
+		context.Background(), invalidProof, "", t.TempDir(),
+	); err == nil {
+		t.Fatal("RenderArchive(invalid archive proof) succeeded")
+	}
 }
 
 func TestValidateRenderedArchiveRejectsInvalidRoundTrips(t *testing.T) {
@@ -248,9 +255,9 @@ func TestRuntimeExtensionsIncludeSourceReference(t *testing.T) {
 
 	analysis := archiveRenderAnalysis(t)
 	analysis.SourceReference = "example.test/api:1"
-	source := runtimeArchiveMetadata(analysis)
-	if source[archiveSourceRefField] != "example.test/api:1" {
-		t.Fatalf("runtimeArchiveMetadata() = %#v", source)
+	proof := runtimeArchiveProof(analysis)
+	if proof.SourceReference != "example.test/api:1" {
+		t.Fatalf("runtimeArchiveProof() = %#v", proof)
 	}
 }
 

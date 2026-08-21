@@ -12,6 +12,7 @@ import (
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
+	"github.com/IceCodeNew/maniud/internal/composeext/maniud"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
 )
@@ -26,17 +27,30 @@ const (
 func TestRemainingPureValidationBranches(t *testing.T) {
 	t.Parallel()
 
-	if _, _, _, valid := decodeManiudService(map[string]any{runtimeMetadataField: 1}); valid {
-		t.Fatal("non-string runtime provenance accepted")
-	}
-	if _, _, _, valid := decodeManiudService(map[string]any{runtimeMetadataField: "invalid"}); valid {
+	if _, valid := internalRuntime(maniud.Runtime("invalid")); valid {
 		t.Fatal("unknown runtime provenance accepted")
 	}
-	if _, _, _, valid := decodeManiudService(map[string]any{
-		archiveImageSourceKey: map[string]any{}, "unexpected": true,
-	}); valid {
-		t.Fatal("unknown service provenance key accepted")
+	if _, valid := internalManiudExtension(maniud.Extension{Services: map[string]maniud.Service{
+		apiService: {Runtime: maniud.Runtime("invalid")},
+	}}); valid {
+		t.Fatal("extension with unknown runtime provenance accepted")
 	}
+	if _, valid := internalManiudExtension(maniud.Extension{Services: map[string]maniud.Service{
+		apiService: {Runtime: maniud.RuntimeDocker, ArchiveProof: &maniud.ArchiveProof{}},
+	}}); valid {
+		t.Fatal("extension with invalid archive proof accepted")
+	}
+	if _, err := encodeManiudService("", maniud.Service{}); err == nil {
+		t.Fatal("invalid typed extension encoded")
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("invalid runtime provenance did not trip the invariant")
+			}
+		}()
+		mustEncodeManiudRuntime("", maniud.Runtime("invalid"))
+	}()
 
 	if _, err := workloadSpecFromService(composetypes.ServiceConfig{
 		HealthCheck: &composetypes.HealthCheckConfig{Disable: true, Test: []string{"NONE"}},
@@ -48,6 +62,22 @@ func TestRemainingPureValidationBranches(t *testing.T) {
 		"a/x": {}, "b/y": {},
 	}); !reflect.DeepEqual(got, []string{".", "a", "b"}) {
 		t.Fatalf("runtime directories = %q", got)
+	}
+}
+
+func TestComposeExtensionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	cycle := map[string]any{}
+	cycle[maniud.Key] = cycle
+	for _, document := range []map[string]any{
+		cycle,
+		{maniud.Key: map[string]any{"services": map[string]any{}}, "x-other": true},
+		{"x-other": true},
+	} {
+		if _, valid := decodeComposeExtensions(document); valid {
+			t.Fatalf("decodeComposeExtensions(%#v) accepted", document)
+		}
 	}
 }
 

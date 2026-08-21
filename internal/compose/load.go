@@ -56,9 +56,7 @@ type RepositorySnapshot struct {
 type Project struct {
 	value        *composetypes.Project
 	sourceDigest domain.Digest
-	archives     map[string]archiveSource
-	runtimes     map[string]domain.RuntimeKind
-	maniud       bool
+	extension    maniudExtension
 	pathFrom     string
 	pathTo       string
 }
@@ -92,7 +90,7 @@ func Load(ctx context.Context, source Source) (Project, error) {
 	}
 	defer cleanup()
 
-	archives, runtimes, maniud, err := validateSource(source.Content, source.Repository != nil)
+	extension, err := validateSource(source.Content, source.Repository != nil)
 	if err != nil {
 		return Project{value: nil, sourceDigest: domain.Digest{}}, err
 	}
@@ -133,7 +131,7 @@ func Load(ctx context.Context, source Source) (Project, error) {
 	}
 
 	return Project{
-		value: project, sourceDigest: sourceDigest, archives: archives, runtimes: runtimes, maniud: maniud,
+		value: project, sourceDigest: sourceDigest, extension: extension,
 		pathFrom: loadedSource.repositoryRoot, pathTo: source.repositoryRoot(),
 	}, nil
 }
@@ -254,35 +252,35 @@ func classifyLoadError(ctx context.Context) error {
 func validateSource(
 	content []byte,
 	allowSecondary bool,
-) (map[string]archiveSource, map[string]domain.RuntimeKind, bool, error) {
+) (maniudExtension, error) {
 	var document yaml.Node
 
 	err := yaml.Load(content, &document, yaml.WithUniqueKeys())
 	if err != nil {
-		return nil, nil, false, ErrInvalidSource
+		return maniudExtension{}, ErrInvalidSource
 	}
 
 	if hasUnsupportedYAML(&document) {
-		return nil, nil, false, ErrInvalidSource
+		return maniudExtension{}, ErrInvalidSource
 	}
 
 	raw := make(map[string]any)
 
 	err = document.Load(&raw, yaml.WithUniqueKeys())
 	if err != nil {
-		return nil, nil, false, ErrInvalidSource
+		return maniudExtension{}, ErrInvalidSource
 	}
 
 	if referencesExternalSource(raw) && !allowSecondary {
-		return nil, nil, false, ErrExternalSource
+		return maniudExtension{}, ErrExternalSource
 	}
 
-	archives, runtimes, maniud, valid := decodeManiudSources(raw)
+	extension, valid := decodeComposeExtensions(raw)
 	if !valid {
-		return nil, nil, false, ErrInvalidSource
+		return maniudExtension{}, ErrInvalidSource
 	}
 
-	return archives, runtimes, maniud, nil
+	return extension, nil
 }
 
 func hasUnsupportedYAML(node *yaml.Node) bool {

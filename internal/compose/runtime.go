@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"reflect"
 
-	containercompose "github.com/IceCodeNew/maniud/containerconfig/compose"
+	"github.com/opencontainers/go-digest"
+
+	composecodec "github.com/IceCodeNew/maniud/containerconfig/compose"
+	"github.com/IceCodeNew/maniud/internal/composeext/maniud"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imagearchive"
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
@@ -39,10 +42,13 @@ func RenderRuntime(
 	}
 	var extensions map[string]any
 	if runtimeName := projection.Runtime(); runtimeName != "" && runtimeName != composeDockerRuntime {
-		extensions = serviceExtensions(workload.ServiceName, map[string]any{runtimeMetadataField: runtimeName})
+		extensions = mustEncodeManiudRuntime(
+			workload.ServiceName,
+			maniud.Runtime(runtimeName),
+		)
 	}
 
-	rendered, err := containercompose.Encode(ctx, workload, containercompose.EncodeOptions{
+	rendered, err := composecodec.Encode(ctx, workload, composecodec.EncodeOptions{
 		Image: image.Reference, WorkingDirectory: workingDirectory, ProjectName: projection.Name(),
 		EnvironmentFiles: environmentFiles, Extensions: extensions,
 	})
@@ -72,8 +78,15 @@ func RenderArchive(
 		ServiceName: name, ContainerName: name, Platform: analysis.Identity.Platform,
 		NetworkMode: composeBridgeNetwork,
 	}, analysis.Identity)
-	extensions := serviceExtensions(name, map[string]any{archiveImageSourceKey: runtimeArchiveMetadata(analysis)})
-	rendered, err := containercompose.Encode(ctx, workload, containercompose.EncodeOptions{
+	proof := runtimeArchiveProof(analysis)
+	extensions, err := encodeManiudService(
+		name,
+		maniud.Service{Runtime: maniud.RuntimeDocker, ArchiveProof: &proof},
+	)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode archive extension: %w", err)
+	}
+	rendered, err := composecodec.Encode(ctx, workload, composecodec.EncodeOptions{
 		Image: analysis.ComposeReference, WorkingDirectory: workingDirectory, ProjectName: name,
 		PullPolicy: "never", Extensions: extensions,
 	})
@@ -86,12 +99,6 @@ func RenderArchive(
 	}
 
 	return rendered, name, nil
-}
-
-func serviceExtensions(serviceName string, service map[string]any) map[string]any {
-	return map[string]any{archiveExtensionKey: map[string]any{
-		archiveServicesField: map[string]any{serviceName: service},
-	}}
 }
 
 func validateRenderedArchive(
@@ -123,23 +130,16 @@ func validateRenderedArchive(
 	return nil
 }
 
-func runtimeArchiveMetadata(analysis imagearchive.Analysis) map[string]any {
-	source := map[string]any{
-		archiveKindField: archiveKind, archiveSelectorField: analysis.Source.Selector(),
-		archiveDigestField:         analysis.ArchiveDigest.String(),
-		archiveSizeField:           analysis.ArchiveSize,
-		archiveManifestField:       analysis.ManifestDigest.String(),
-		archiveMemberIndexField:    analysis.MemberIndex,
-		archivePlatformField:       containercompose.FormatPlatform(analysis.Identity.Platform),
-		archiveReferenceField:      analysis.Identity.ReferenceDigest.String(),
-		archivePlatformDigestField: analysis.Identity.PlatformManifest.String(),
-		archiveImageConfigField:    analysis.Identity.ImageConfig.String(),
+func runtimeArchiveProof(analysis imagearchive.Analysis) maniud.ArchiveProof {
+	return maniud.ArchiveProof{
+		ArchiveDigest: digest.Digest(analysis.ArchiveDigest.String()), ArchiveSize: analysis.ArchiveSize,
+		ManifestDigest: digest.Digest(analysis.ManifestDigest.String()), MemberIndex: analysis.MemberIndex,
+		Platform: analysis.Identity.Platform, Selector: analysis.Source.Selector(),
+		SourceReference:        analysis.SourceReference,
+		ReferenceDigest:        digest.Digest(analysis.Identity.ReferenceDigest.String()),
+		PlatformManifestDigest: digest.Digest(analysis.Identity.PlatformManifest.String()),
+		ImageConfigDigest:      digest.Digest(analysis.Identity.ImageConfig.String()),
 	}
-	if analysis.SourceReference != "" {
-		source[archiveSourceRefField] = analysis.SourceReference
-	}
-
-	return source
 }
 
 func runtimeEnvironmentFiles(values []string, workingDirectory string) ([]string, error) {

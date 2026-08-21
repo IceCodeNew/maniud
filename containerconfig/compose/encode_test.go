@@ -183,6 +183,43 @@ func TestNormalizeExtensionsRejectsCyclesAndUnsupportedMaps(t *testing.T) {
 	}
 }
 
+func TestNormalizeExtensionsReturnsOwnedSafeTree(t *testing.T) {
+	t.Parallel()
+
+	source := map[string]any{"x-plugin": map[string]any{"values": []any{"one", int64(2)}}}
+	normalized, err := NormalizeExtensions(source)
+	if err != nil {
+		t.Fatalf("NormalizeExtensions() error = %v", err)
+	}
+	sourcePlugin, valid := source["x-plugin"].(map[string]any)
+	if !valid {
+		t.Fatalf("source plugin = %#v", source["x-plugin"])
+	}
+	sourceValues, valid := sourcePlugin["values"].([]any)
+	if !valid {
+		t.Fatalf("source values = %#v", sourcePlugin["values"])
+	}
+	sourceValues[0] = "changed"
+	normalizedPlugin, valid := normalized["x-plugin"].(map[string]any)
+	if !valid {
+		t.Fatalf("normalized plugin = %#v", normalized["x-plugin"])
+	}
+	values, valid := normalizedPlugin["values"].([]any)
+	if !valid {
+		t.Fatalf("normalized values = %#v", normalizedPlugin["values"])
+	}
+	if values[0] != "one" || values[1] != int64(2) {
+		t.Fatalf("NormalizeExtensions() = %#v", normalized)
+	}
+
+	if _, err := NormalizeExtensions(map[string]any{"plugin": true}); !errors.As(
+		err,
+		new(containerconfig.ValidationError),
+	) {
+		t.Fatalf("NormalizeExtensions(invalid name) error = %v", err)
+	}
+}
+
 func TestEncodePreservesContextCancellation(t *testing.T) {
 	t.Parallel()
 

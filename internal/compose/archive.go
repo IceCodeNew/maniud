@@ -2,40 +2,18 @@ package compose
 
 import (
 	"reflect"
-	"strconv"
 	"strings"
 
+	"github.com/IceCodeNew/maniud/internal/composeext/maniud"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
 const (
-	archiveExtensionKey        = "x-maniud"
-	archiveKind                = "docker-archive"
-	maximumArchiveSize         = int64(1 << 40)
-	maximumArchiveMember       = 1_000_000
-	archiveMetadataFieldCount  = 10
-	archiveLinuxOS             = "linux"
-	archiveAMD64               = "amd64"
-	archiveARM64               = "arm64"
-	archiveARM64Variant        = "v8"
-	archivePlatformField       = "platform"
-	archiveImageSourceKey      = "image_source"
-	runtimeMetadataField       = "runtime"
-	archiveServicesField       = "services"
-	archiveKindField           = "kind"
-	archiveSelectorField       = "selector"
-	archiveDigestField         = "archive_digest"
-	archiveSizeField           = "archive_size"
-	archiveManifestField       = "archive_manifest_digest"
-	archiveMemberIndexField    = "archive_member_index"
-	archiveSourceRefField      = "source_reference"
-	archiveReferenceField      = "reference_digest"
-	archivePlatformDigestField = "platform_manifest_digest"
-	archiveImageConfigField    = "image_config_digest"
-	composeDockerRuntime       = "docker"
-	composePodmanRuntime       = "podman"
-	composeNerdctlRuntime      = "nerdctl"
+	archiveLinuxOS      = "linux"
+	archiveAMD64        = "amd64"
+	archiveARM64        = "arm64"
+	archiveARM64Variant = "v8"
 )
 
 type archiveSource struct {
@@ -47,19 +25,6 @@ type archiveSource struct {
 	selector        string
 	sourceReference string
 	identity        domain.ImageIdentity
-}
-
-type archiveMetadata struct {
-	archiveDigest    domain.Digest
-	manifestDigest   domain.Digest
-	referenceDigest  domain.Digest
-	platformManifest domain.Digest
-	imageConfig      domain.Digest
-	archiveSize      int64
-	memberIndex      int
-	platform         domain.Platform
-	selector         string
-	sourceReference  string
 }
 
 // ImageInputKind identifies the proof path for one desired image.
@@ -100,7 +65,7 @@ func (project Project) ImageInput(serviceName string) (ImageInput, error) {
 	if err != nil {
 		return ImageInput{}, err
 	}
-	if archive, found := project.archives[selected.Name]; found {
+	if archive, found := project.extension.archives[selected.Name]; found {
 		identity, _ := archiveIdentity(selected.Image, selected.Platform, selected.PullPolicy, archive)
 
 		return ImageInput{kind: ImageInputDockerArchive, archive: identity}, nil
@@ -114,252 +79,26 @@ func (project Project) ImageInput(serviceName string) (ImageInput, error) {
 	return ImageInput{kind: ImageInputRegistry, registry: source}, nil
 }
 
-func decodeManiudSources(
-	document map[string]any,
-) (map[string]archiveSource, map[string]domain.RuntimeKind, bool, bool) {
-	raw, found := document[archiveExtensionKey]
-	if !found {
-		return nil, nil, false, true
-	}
-	extension, valid := exactMapping(raw, archiveServicesField)
-	if !valid {
-		return nil, nil, true, false
-	}
-	rawServices, valid := extension[archiveServicesField].(map[string]any)
-	if !valid || len(rawServices) == 0 {
-		return nil, nil, true, false
-	}
-
-	archives := make(map[string]archiveSource, len(rawServices))
-	runtimes := make(map[string]domain.RuntimeKind, len(rawServices))
-	for serviceName, rawService := range rawServices {
-		service, archive, runtimeKind, serviceValid := decodeManiudService(rawService)
-		if !serviceValid || serviceName == "" {
-			return nil, nil, true, false
-		}
-		runtimes[serviceName] = runtimeKind
-		if archive {
-			archives[serviceName] = service
-		}
-	}
-
-	return archives, runtimes, true, true
-}
-
-//nolint:cyclop // Runtime provenance and archive metadata are mutually exclusive service variants.
-func decodeManiudService(raw any) (archiveSource, bool, domain.RuntimeKind, bool) {
-	service, valid := raw.(map[string]any)
-	if !valid || len(service) == 0 || len(service) > 2 {
-		return archiveSource{}, false, "", false
-	}
-	runtimeKind := domain.RuntimeDocker
-	if runtimeName, found := service[runtimeMetadataField]; found {
-		var runtimeValid bool
-		runtimeKind, runtimeValid = runtimeProvenance(runtimeName)
-		if !runtimeValid {
-			return archiveSource{}, false, "", false
-		}
-	}
-	rawImage, archive := service[archiveImageSourceKey]
-	if !archive {
-		_, runtimeFound := service[runtimeMetadataField]
-
-		return archiveSource{}, false, runtimeKind, runtimeFound
-	}
-	imageSource, valid := rawImage.(map[string]any)
-	if !valid {
-		return archiveSource{}, false, "", false
-	}
-	for key := range service {
-		if key != runtimeMetadataField && key != archiveImageSourceKey {
-			return archiveSource{}, false, "", false
-		}
-	}
-	decoded, valid := decodeArchiveImageSource(imageSource)
-
-	return decoded, true, runtimeKind, valid
-}
-
-func runtimeProvenance(raw any) (domain.RuntimeKind, bool) {
-	value, valid := raw.(string)
-	if !valid {
-		return "", false
-	}
-
-	switch value {
-	case composeDockerRuntime:
-		return domain.RuntimeDocker, true
-	case composePodmanRuntime:
-		return domain.RuntimePodman, true
-	case composeNerdctlRuntime:
-		return domain.RuntimeContainerd, true
-	default:
-		return "", false
-	}
-}
-
-func decodeArchiveImageSource(raw map[string]any) (archiveSource, bool) {
-	if !archiveMetadataFieldsValid(raw) || stringValue(raw[archiveKindField]) != archiveKind {
-		return archiveSource{}, false
-	}
-	metadata, valid := decodeArchiveMetadata(raw)
-	if !valid || metadata.manifestDigest != metadata.referenceDigest ||
-		!validArchiveSelector(metadata.selector, metadata.memberIndex, metadata.sourceReference) {
+func archiveSourceFromProof(proof maniud.ArchiveProof) (archiveSource, bool) {
+	archiveDigest, archiveValid := domain.ParseDigest(proof.ArchiveDigest.String())
+	manifestDigest, manifestValid := domain.ParseDigest(proof.ManifestDigest.String())
+	referenceDigest, referenceValid := domain.ParseDigest(proof.ReferenceDigest.String())
+	platformManifest, platformValid := domain.ParseDigest(proof.PlatformManifestDigest.String())
+	imageConfig, imageConfigValid := domain.ParseDigest(proof.ImageConfigDigest.String())
+	if archiveValid != nil || manifestValid != nil || referenceValid != nil || platformValid != nil ||
+		imageConfigValid != nil {
 		return archiveSource{}, false
 	}
 
 	return archiveSource{
-		archiveDigest: metadata.archiveDigest, archiveSize: metadata.archiveSize,
-		manifestDigest: metadata.manifestDigest, memberIndex: metadata.memberIndex,
-		platform: metadata.platform, selector: metadata.selector, sourceReference: metadata.sourceReference,
+		archiveDigest: archiveDigest, archiveSize: proof.ArchiveSize,
+		manifestDigest: manifestDigest, memberIndex: proof.MemberIndex,
+		platform: proof.Platform, selector: proof.Selector, sourceReference: proof.SourceReference,
 		identity: domain.ImageIdentity{
-			Origin: domain.ImageOriginDockerArchive, ReferenceDigest: metadata.referenceDigest,
-			Platform: metadata.platform, PlatformManifest: metadata.platformManifest,
-			ImageConfig: metadata.imageConfig,
+			Origin: domain.ImageOriginDockerArchive, ReferenceDigest: referenceDigest,
+			Platform: proof.Platform, PlatformManifest: platformManifest, ImageConfig: imageConfig,
 		},
 	}, true
-}
-
-func decodeArchiveMetadata(raw map[string]any) (archiveMetadata, bool) {
-	var empty archiveMetadata
-	archiveDigest, archiveDigestValid := digestValue(raw[archiveDigestField])
-	manifestDigest, manifestValid := digestValue(raw[archiveManifestField])
-	referenceDigest, referenceValid := digestValue(raw[archiveReferenceField])
-	platformManifest, platformManifestValid := digestValue(raw[archivePlatformDigestField])
-	imageConfig, imageConfigValid := digestValue(raw[archiveImageConfigField])
-	if !archiveDigestValid || !manifestValid || !referenceValid ||
-		!platformManifestValid || !imageConfigValid {
-		return empty, false
-	}
-
-	return decodeArchiveMetadataValues(
-		raw,
-		archiveDigest,
-		manifestDigest,
-		referenceDigest,
-		platformManifest,
-		imageConfig,
-	)
-}
-
-func decodeArchiveMetadataValues(
-	raw map[string]any,
-	archiveDigest, manifestDigest, referenceDigest, platformManifest, imageConfig domain.Digest,
-) (archiveMetadata, bool) {
-	var empty archiveMetadata
-	archiveSize, sizeValid := positiveInt64(raw[archiveSizeField], maximumArchiveSize)
-	memberIndex, indexValid := nonnegativeInt(raw[archiveMemberIndexField], maximumArchiveMember)
-	platform, platformValid := archivePlatform(stringValue(raw[archivePlatformField]))
-	selector, selectorValid := raw[archiveSelectorField].(string)
-	sourceReference := optionalString(raw, archiveSourceRefField)
-	if !sizeValid || !indexValid || !platformValid || !selectorValid || sourceReference == nil {
-		return empty, false
-	}
-
-	return archiveMetadata{
-		archiveDigest: archiveDigest, manifestDigest: manifestDigest,
-		referenceDigest: referenceDigest, platformManifest: platformManifest,
-		imageConfig: imageConfig, archiveSize: archiveSize, memberIndex: memberIndex,
-		platform: platform, selector: selector, sourceReference: *sourceReference,
-	}, true
-}
-
-func archiveMetadataFieldsValid(raw map[string]any) bool {
-	allowed := map[string]struct{}{
-		archiveKindField: {}, archiveSelectorField: {}, archiveDigestField: {}, archiveSizeField: {},
-		archiveManifestField: {}, archiveMemberIndexField: {}, archivePlatformField: {}, archiveSourceRefField: {},
-		archiveReferenceField: {}, archivePlatformDigestField: {}, archiveImageConfigField: {},
-	}
-	if len(raw) < archiveMetadataFieldCount || len(raw) > archiveMetadataFieldCount+1 {
-		return false
-	}
-	for key := range raw {
-		if _, found := allowed[key]; !found {
-			return false
-		}
-	}
-
-	return true
-}
-
-func exactMapping(raw any, key string) (map[string]any, bool) {
-	mapping, valid := raw.(map[string]any)
-	if !valid || len(mapping) != 1 {
-		return nil, false
-	}
-	_, found := mapping[key]
-
-	return mapping, found
-}
-
-func stringValue(raw any) string {
-	value, _ := raw.(string)
-
-	return value
-}
-
-func optionalString(raw map[string]any, key string) *string {
-	value, found := raw[key]
-	if !found {
-		empty := ""
-
-		return &empty
-	}
-	text, valid := value.(string)
-	if !valid || text == "" {
-		return nil
-	}
-
-	return &text
-}
-
-func digestValue(raw any) (domain.Digest, bool) {
-	value, valid := raw.(string)
-	if !valid {
-		return domain.Digest{}, false
-	}
-	digest, err := domain.ParseDigest(value)
-
-	return digest, err == nil
-}
-
-func positiveInt64(raw any, maximum int64) (int64, bool) {
-	value, valid := raw.(int)
-	if !valid || value <= 0 || int64(value) > maximum {
-		return 0, false
-	}
-
-	return int64(value), true
-}
-
-func nonnegativeInt(raw any, maximum int) (int, bool) {
-	value, valid := raw.(int)
-
-	return value, valid && value >= 0 && value < maximum
-}
-
-func validArchiveSelector(selector string, memberIndex int, sourceReference string) bool {
-	if index, found := strings.CutPrefix(selector, "@"); found {
-		parsed, err := strconv.Atoi(index)
-
-		return err == nil && parsed == memberIndex && selector == "@"+strconv.Itoa(parsed) &&
-			validOptionalSourceReference(sourceReference)
-	}
-	if sourceReference == "" || selector != sourceReference {
-		return false
-	}
-
-	return validOptionalSourceReference(sourceReference)
-}
-
-func validOptionalSourceReference(value string) bool {
-	if value == "" {
-		return true
-	}
-	source, err := imageref.Normalize(value)
-
-	return err == nil && !source.IsPinned() && source.String() == value &&
-		strings.LastIndexByte(value, ':') > strings.LastIndexByte(value, '/')
 }
 
 func validArchiveService(image, platform, pullPolicy string, source archiveSource) bool {
