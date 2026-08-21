@@ -10,10 +10,12 @@ temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 profile="${1:-$temporary_dir/statements.cover}"
 test_cgo=0
+coverage_packages=(./containerconfig/... ./imageref ./internal/...)
+coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
 test_args=(
 	-count=1
 	-covermode=atomic
-	-coverpkg=./containerconfig/...,./internal/...
+	-coverpkg="$coverpkg"
 	-coverprofile="$profile"
 )
 if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
@@ -118,7 +120,7 @@ PY
 		covered_branches=$((covered_branches + package_covered))
 		total_branches=$((total_branches + package_total))
 		package_number=$((package_number + 1))
-	done < <(CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' ./containerconfig/... ./internal/...)
+	done < <(CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' "${coverage_packages[@]}")
 
 	printf 'covered branch outcomes are %d/%d\n' "$covered_branches" "$total_branches"
 )
