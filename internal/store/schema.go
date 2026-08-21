@@ -27,7 +27,7 @@ const (
 		"service_id BLOB NOT NULL CHECK (typeof(service_id) = 'blob' AND length(service_id) = 32), " +
 		"kind TEXT NOT NULL CHECK (kind IN ('bootstrap', 'adopt', 'upgrade')), " +
 		"state TEXT NOT NULL CHECK (state IN ('active', 'degraded', 'failed', 'succeeded')), " +
-		"runtime TEXT NOT NULL CHECK (runtime IN ('docker', 'podman')), " +
+		"runtime TEXT NOT NULL CHECK (runtime IN ('docker', 'podman', 'containerd')), " +
 		"source_digest BLOB NOT NULL CHECK " +
 		"(typeof(source_digest) = 'blob' AND length(source_digest) = 32 AND source_digest != zeroblob(32)), " +
 		"effective_digest BLOB NOT NULL CHECK " +
@@ -267,7 +267,7 @@ SELECT
     typeof(service_id) != 'blob' OR length(service_id) != 32 OR
     typeof(kind) != 'text' OR kind NOT IN ('bootstrap', 'adopt', 'upgrade') OR
     typeof(state) != 'text' OR state NOT IN ('active', 'degraded', 'failed', 'succeeded') OR
-    typeof(runtime) != 'text' OR runtime NOT IN ('docker', 'podman') OR
+    typeof(runtime) != 'text' OR runtime NOT IN ('docker', 'podman', 'containerd') OR
     typeof(source_digest) != 'blob' OR length(source_digest) != 32 OR source_digest = zeroblob(32) OR
     typeof(effective_digest) != 'blob' OR length(effective_digest) != 32 OR effective_digest = zeroblob(32) OR
     typeof(execution_digest) != 'blob' OR length(execution_digest) != 32 OR execution_digest = zeroblob(32) OR

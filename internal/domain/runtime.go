@@ -8,7 +8,7 @@ const (
 	RuntimeDocker RuntimeKind = "docker"
 	// RuntimePodman uses the Podman Libpod REST API.
 	RuntimePodman RuntimeKind = "podman"
-	// RuntimeContainerd uses containerd gRPC for image analysis.
+	// RuntimeContainerd uses the native containerd gRPC API.
 	RuntimeContainerd RuntimeKind = "containerd"
 )
 
@@ -28,7 +28,7 @@ func ParseRuntimeKind(value string) (RuntimeKind, bool) {
 
 // SupportsWorkloads reports whether the runtime can mutate workloads.
 func (kind RuntimeKind) SupportsWorkloads() bool {
-	return kind == RuntimeDocker || kind == RuntimePodman
+	return kind == RuntimeDocker || kind == RuntimePodman || kind == RuntimeContainerd
 }
 
 // String returns the stable wire-independent name.

@@ -449,7 +449,7 @@ func TestBindPreparedTransactionRejectsInvalidEvidence(t *testing.T) {
 	defer closeMutationTestLock(t, lock)
 
 	invalidRuntime := preparation
-	invalidRuntime.Execution.Kind = domain.RuntimeContainerd
+	invalidRuntime.Execution.Kind = domain.RuntimeKind("unknown")
 	got, err = bindPreparedTransaction(context.Background(), lock, invalidRuntime)
 	assertRejectedPreparedTransaction(t, "invalid runtime", got, err, store.ErrInvalidState)
 

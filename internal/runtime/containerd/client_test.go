@@ -151,7 +151,7 @@ func TestContainerdEndpointAndNamespaceValidation(t *testing.T) {
 	t.Parallel()
 
 	invalidAddresses := []string{
-		"", "relative", " tcp:///tmp/x", "tcp:///tmp/x", "unix://relative", "/tmp/../tmp/x", "/tmp/x\x00",
+		"", testRelativePath, " tcp:///tmp/x", "tcp:///tmp/x", "unix://relative", "/tmp/../tmp/x", "/tmp/x\x00",
 	}
 	for _, address := range invalidAddresses {
 		if _, valid := endpointPath(address); valid {
@@ -280,7 +280,9 @@ func TestConnectContainsGRPCClientConstructionFailures(t *testing.T) {
 		nil,
 		func(string, ...grpc.DialOption) (*grpc.ClientConn, error) { return nil, errContainerdTest },
 	} {
-		client, err := connect(context.Background(), path, testContainerdScopeText, factory)
+		client, err := connect(
+			context.Background(), path, testContainerdScopeText, DefaultWorkloadOptions(), factory,
+		)
 		if client != nil || err == nil {
 			t.Fatalf("connect(failing factory) = %#v, %v", client, err)
 		}
@@ -351,7 +353,7 @@ func TestContainerdCheckedOperationFailures(t *testing.T) {
 	if !errors.Is(err, ErrProtocol) {
 		t.Fatalf("checked(pre-operation failure) = %v", err)
 	}
-	drifted := &introspectionapi.ServerResponse{UUID: "changed", Pid: 1, Pidns: 2}
+	drifted := &introspectionapi.ServerResponse{UUID: testChangedValue, Pid: 1, Pidns: 2}
 	client = scopeTestClient(t, validVersion, validServer, drifted)
 	err = client.checked(context.Background(), func(context.Context) error { return nil })
 	if !errors.Is(err, ErrUnavailable) {

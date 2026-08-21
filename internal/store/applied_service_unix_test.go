@@ -459,7 +459,7 @@ func TestAppliedServiceScannersRejectMalformedAndUnavailableRows(t *testing.T) {
 	}
 	rows[0][0] = []byte("short")
 	rows[1][1] = testUnknownValue
-	rows[2][2] = "containerd"
+	rows[2][2] = testUnknownValue
 	rows[3][6] = ""
 
 	for _, values := range rows {

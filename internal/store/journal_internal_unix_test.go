@@ -206,13 +206,13 @@ func TestJournalTransactionIdentityHelpersRejectInvalidState(t *testing.T) {
 	identifier := make([]byte, transactionIDBytes)
 	if populateTransactionIdentity(
 		&Transaction{},
-		domain.RuntimeContainerd.String(),
+		testUnknownValue,
 		identifier,
 		digest,
 		digest,
 		digest,
 	) {
-		t.Fatal("populateTransactionIdentity() accepted an unsupported runtime")
+		t.Fatal("populateTransactionIdentity() accepted an unknown runtime")
 	}
 
 	if populateTransactionRelationship(&Transaction{}, []byte("short"), sql.NullString{}) {
