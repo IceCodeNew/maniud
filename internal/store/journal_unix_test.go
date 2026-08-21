@@ -36,6 +36,35 @@ func TestJournalPersistsUnknownEffectAndResolvesByTypedProbe(t *testing.T) {
 	requireNoError(t, state.Close())
 }
 
+func TestJournalAcceptsEveryWorkloadRuntime(t *testing.T) {
+	t.Parallel()
+
+	for _, runtimeKind := range []domain.RuntimeKind{
+		domain.RuntimeDocker,
+		domain.RuntimePodman,
+		domain.RuntimeContainerd,
+	} {
+		t.Run(runtimeKind.String(), func(t *testing.T) {
+			t.Parallel()
+
+			state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+			t.Cleanup(func() {
+				requireNoError(t, lock.Close())
+				requireNoError(t, state.Close())
+			})
+
+			transaction, err := lock.BeginTransaction(
+				context.Background(),
+				testTransactionIntent(runtimeKind),
+			)
+			requireNoError(t, err)
+			if transaction.Runtime != runtimeKind {
+				t.Fatalf("transaction runtime = %q", transaction.Runtime)
+			}
+		})
+	}
+}
+
 func TestJournalRejectsInvalidTransitionsAndConcurrentMutation(t *testing.T) {
 	t.Parallel()
 
@@ -58,7 +87,6 @@ func TestJournalRejectsInvalidInputsAndLostOwnership(t *testing.T) {
 	requireNoError(t, err)
 
 	invalidTransactionInputs := []TransactionIntent{
-		testTransactionIntent(domain.RuntimeContainerd),
 		testTransactionIntent(domain.RuntimeKind(testUnknownValue)),
 	}
 	for _, intent := range invalidTransactionInputs {

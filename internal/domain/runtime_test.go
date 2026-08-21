@@ -13,7 +13,7 @@ func TestParseRuntimeKind(t *testing.T) {
 	}{
 		{value: "docker", want: RuntimeDocker, valid: true, supportsWorkloads: true},
 		{value: "podman", want: RuntimePodman, valid: true, supportsWorkloads: true},
-		{value: "containerd", want: RuntimeContainerd, valid: true, supportsWorkloads: false},
+		{value: "containerd", want: RuntimeContainerd, valid: true, supportsWorkloads: true},
 		{value: "nerdctl", want: "", valid: false, supportsWorkloads: false},
 		{value: "", want: "", valid: false, supportsWorkloads: false},
 	}

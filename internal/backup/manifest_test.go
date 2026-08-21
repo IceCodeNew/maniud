@@ -146,7 +146,7 @@ func TestManifestRejectsInvalidIdentityFields(t *testing.T) {
 		func(value *Manifest) { value.Project = "" },
 		func(value *Manifest) { value.Project = strings.Repeat("x", maximumIdentityBytes+1) },
 		func(value *Manifest) { value.Service = "bad\x00service" },
-		func(value *Manifest) { value.Runtime = domain.RuntimeContainerd },
+		func(value *Manifest) { value.Runtime = domain.RuntimeKind("invalid") },
 		func(value *Manifest) { value.CreatedUnix = 0 },
 		func(value *Manifest) { value.SourceDigest = domain.Digest{} },
 		func(value *Manifest) { value.EffectiveDigest = domain.Digest{} },

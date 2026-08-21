@@ -236,7 +236,7 @@ func TestBackupIndexRejectsMalformedAndUnavailableRows(t *testing.T) {
 		append([]any(nil), valid...),
 	}
 	rows[0][0] = []byte("short")
-	rows[1][1] = "containerd"
+	rows[1][1] = testUnknownValue
 	rows[2][2] = "wrong/manifest.json"
 	rows[3][3] = make([]byte, len(domain.Digest{}))
 	rows[4][4] = int64(0)

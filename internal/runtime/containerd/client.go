@@ -1,5 +1,5 @@
-// Package containerd implements read-only image analysis over containerd's
-// native gRPC API. It does not provide registry pull or workload mutation.
+// Package containerd implements image analysis and workload transactions over
+// containerd's native gRPC API.
 package containerd
 
 import (
@@ -123,6 +123,7 @@ type Client struct {
 	content       contentClient
 	introspection introspectionClient
 	version       versionClient
+	workloads     workloadBackend
 	socketPath    string
 	namespace     string
 	socket        socketIdentity
@@ -136,17 +137,29 @@ type Client struct {
 // and containerd server identity. Address may be an absolute path or unix://
 // followed by one.
 func Connect(ctx context.Context, address, namespace string) (*Client, error) {
-	return connect(ctx, address, namespace, grpc.NewClient)
+	return ConnectWithWorkloadOptions(ctx, address, namespace, DefaultWorkloadOptions())
+}
+
+// ConnectWithWorkloadOptions authenticates one local containerd endpoint and
+// configures the host-side resources used for workload execution.
+func ConnectWithWorkloadOptions(
+	ctx context.Context,
+	address string,
+	namespace string,
+	options WorkloadOptions,
+) (*Client, error) {
+	return connect(ctx, address, namespace, options, grpc.NewClient)
 }
 
 func connect(
 	ctx context.Context,
 	address string,
 	namespace string,
+	options WorkloadOptions,
 	newClient grpcClientFactory,
 ) (*Client, error) {
 	path, valid := endpointPath(address)
-	if !valid || !validNamespace(namespace) || newClient == nil {
+	if !valid || !validNamespace(namespace) || !options.valid() || newClient == nil {
 		return nil, ErrInvalidEndpoint
 	}
 	socket, err := inspectSocket(path)
@@ -157,6 +170,7 @@ func connect(
 	client := &Client{
 		connection: nil,
 		images:     nil, content: nil, introspection: nil, version: nil,
+		workloads:  nil,
 		socketPath: path, namespace: namespace, socket: socket, scope: runtimeScope{},
 		peerLock: sync.Mutex{}, peer: peerIdentity{},
 	}
@@ -177,6 +191,7 @@ func connect(
 	client.content = contentapi.NewContentClient(grpcConnection)
 	client.introspection = introspectionapi.NewIntrospectionClient(grpcConnection)
 	client.version = versionapi.NewVersionClient(grpcConnection)
+	client.workloads = newNativeWorkloadBackend(grpcConnection, namespace, options)
 
 	scope, err := client.currentScope(ctx)
 	if err != nil {
