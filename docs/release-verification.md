@@ -10,6 +10,12 @@ The workflow calculates the next stable SemVer tag from existing
 points directly to the tested master commit; publication does not add a release
 commit.
 
+The workflow stages a draft release before uploading assets. It validates the
+complete nonempty asset set, then publishes the draft as the final visibility
+step. If a run stops after creating the draft, a later dispatch from the same
+master SHA resumes that draft and replaces its assets. A draft that points to a
+different commit blocks publication for operator review.
+
 ## Platform qualification
 
 | Artifact suffix | Build runner | Native release smoke |

@@ -29,6 +29,7 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      resume-draft: ${{ steps.release.outputs.resume-draft }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,32 +75,56 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          latest=0.0.0
-          while IFS= read -r candidate; do
-            if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-              latest="${candidate#v}"
-              break
-            fi
-          done < <(git tag --list 'v*' --sort=-version:refname)
-
-          IFS=. read -r major minor patch <<< "$latest"
-          case "$RELEASE_BUMP" in
-            major) version="$((major + 1)).0.0" ;;
-            minor) version="$major.$((minor + 1)).0" ;;
-            patch) version="$major.$minor.$((patch + 1))" ;;
-            *) printf 'unsupported release bump: %s\n' "$RELEASE_BUMP" >&2; exit 1 ;;
-          esac
-          tag="v$version"
-
-          existing_release_tags="$(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name'
-          )"
-          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1 || \
-             grep -Fxq "$tag" <<< "$existing_release_tags"; then
-            printf 'Refusing to reuse existing release %s\n' "$tag" >&2
+          mapfile -t draft_tags < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.draft == true) | .tag_name' \
+              | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+              || true
+          )
+          if (( ${#draft_tags[@]} > 1 )); then
+            printf 'Refusing to choose between %d unfinished stable release drafts\n' \
+              "${#draft_tags[@]}" >&2
             exit 1
           fi
-          printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
+
+          resume_draft=false
+          if (( ${#draft_tags[@]} == 1 )); then
+            tag="${draft_tags[0]}"
+            read -r tag_type tag_sha < <(
+              gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
+                --jq '[.object.type, .object.sha] | @tsv'
+            )
+            if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+              printf 'Unfinished release draft %s does not point to exact SHA %s\n' \
+                "$tag" "$GITHUB_SHA" >&2
+              exit 1
+            fi
+            version="${tag#v}"
+            resume_draft=true
+          else
+            latest=0.0.0
+            while IFS= read -r candidate; do
+              if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                latest="${candidate#v}"
+                break
+              fi
+            done < <(git tag --list 'v*' --sort=-version:refname)
+
+            IFS=. read -r major minor patch <<< "$latest"
+            case "$RELEASE_BUMP" in
+              major) version="$((major + 1)).0.0" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              patch) version="$major.$minor.$((patch + 1))" ;;
+              *) printf 'unsupported release bump: %s\n' "$RELEASE_BUMP" >&2; exit 1 ;;
+            esac
+            tag="v$version"
+            if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+              printf 'Refusing to reuse existing release tag %s\n' "$tag" >&2
+              exit 1
+            fi
+          fi
+          printf 'tag=%s\nversion=%s\nresume-draft=%s\n' \
+            "$tag" "$version" "$resume_draft" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -236,6 +261,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RESUME_DRAFT: ${{ needs.preflight.outputs.resume-draft }}
         run: |
           set -euo pipefail
           assets=(
@@ -249,7 +275,41 @@ jobs:
           for asset in "${assets[@]}"; do
             test -f "$asset"
           done
-          gh release create "$RELEASE_TAG" "${assets[@]}" \
-            --target "$GITHUB_SHA" \
-            --title "maniud $RELEASE_TAG" \
-            --generate-notes
+          if [[ "$RESUME_DRAFT" == false ]]; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "maniud $RELEASE_TAG" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+          release_json="$RUNNER_TEMP/release.json"
+          gh release view "$RELEASE_TAG" --json assets,isDraft,tagName > "$release_json"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            '.isDraft == true and .tagName == $tag and
+             all(.assets[]; .state == "uploaded" and .size > 0)' \
+            "$release_json" >/dev/null
+          expected=(
+            SHA256SUMS
+            "maniud_${RELEASE_VERSION}.sigstore.json"
+            "maniud_${RELEASE_VERSION}_darwin_amd64"
+            "maniud_${RELEASE_VERSION}_darwin_arm64"
+            "maniud_${RELEASE_VERSION}_linux_amd64"
+            "maniud_${RELEASE_VERSION}_linux_arm64"
+          )
+          mapfile -t actual < <(jq -r '.assets | sort_by(.name)[].name' "$release_json")
+          if (( ${#actual[@]} != ${#expected[@]} )); then
+            printf 'expected %d uploaded release assets, found %d\n' \
+              "${#expected[@]}" "${#actual[@]}" >&2
+            exit 1
+          fi
+          for index in "${!expected[@]}"; do
+            if [[ "${actual[index]}" != "${expected[index]}" ]]; then
+              printf 'unexpected uploaded asset: expected %s, found %s\n' \
+                "${expected[index]}" "${actual[index]}" >&2
+              exit 1
+            fi
+          done
+          gh release edit "$RELEASE_TAG" --draft=false
