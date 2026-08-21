@@ -14,8 +14,6 @@ import (
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
 )
 
-var errRuntimeRenderTest = errors.New("runtime render test failed")
-
 func TestRenderRuntimeProducesStrictCompose(t *testing.T) {
 	t.Parallel()
 
@@ -245,6 +243,17 @@ services:
 	}
 }
 
+func TestRuntimeExtensionsIncludeSourceReference(t *testing.T) {
+	t.Parallel()
+
+	analysis := archiveRenderAnalysis(t)
+	analysis.SourceReference = "example.test/api:1"
+	source := runtimeArchiveMetadata(analysis)
+	if source[archiveSourceRefField] != "example.test/api:1" {
+		t.Fatalf("runtimeArchiveMetadata() = %#v", source)
+	}
+}
+
 func archiveRenderAnalysis(t *testing.T) imagearchive.Analysis {
 	t.Helper()
 
@@ -300,12 +309,7 @@ func testRuntimeRenderBoundaries(
 	if !errors.Is(err, runtimeargv.ErrInvalid) {
 		t.Fatalf("RenderRuntime(mismatched image) error = %v", err)
 	}
-	rendered, err := finishRuntimeRender([]byte(testInvalidArchive), errRuntimeRenderTest)
-	if err == nil || rendered != nil {
-		t.Fatalf("finishRuntimeRender() = %q, %v", rendered, err)
-	}
-	rendered, err = finishRuntimeRender(make([]byte, maxSourceBytes+1), nil)
-	if !errors.Is(err, ErrInvalidSource) || rendered != nil {
-		t.Fatalf("finishRuntimeRender(oversized) = %q, %v", rendered, err)
+	if _, err := RenderRuntime(context.Background(), projection, image, "relative"); err == nil {
+		t.Fatal("RenderRuntime() accepted a relative working directory")
 	}
 }

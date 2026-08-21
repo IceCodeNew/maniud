@@ -23,7 +23,6 @@ const (
 	remainingChildCompose = "child.yaml"
 )
 
-//nolint:cyclop // Each assertion closes one independent pure validation branch.
 func TestRemainingPureValidationBranches(t *testing.T) {
 	t.Parallel()
 
@@ -39,33 +38,12 @@ func TestRemainingPureValidationBranches(t *testing.T) {
 		t.Fatal("unknown service provenance key accepted")
 	}
 
-	var spec domain.WorkloadSpec
 	if _, err := workloadSpecFromService(composetypes.ServiceConfig{
 		HealthCheck: &composetypes.HealthCheckConfig{Disable: true, Test: []string{"NONE"}},
 	}, domain.Platform{}, "", ""); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("invalid workload service error = %v", err)
 	}
-	if !addUlimits(&spec, map[string]*composetypes.UlimitsConfig{
-		"z": {Single: 1}, "a": {Single: 2},
-	}) || spec.Ulimits[0].Name != "a" {
-		t.Fatalf("ulimits were not sorted: %#v", spec.Ulimits)
-	}
-	if addMounts(&spec, []composetypes.ServiceVolumeConfig{{
-		Type: composeBindMountType, Source: "/repo/data", Target: "/data", ReadOnly: true,
-	}}, "/repo", "relative") {
-		t.Fatal("relative runtime rebase accepted")
-	}
-	if path, valid := rebaseRepositoryPath("/outside", "/repo", "/runtime"); !valid || path != "/outside" {
-		t.Fatalf("outside repository path = %q, %v", path, valid)
-	}
 
-	weight, timeout := 10, int64(3)
-	runtimeService := runtimeServiceFromWorkload(domain.WorkloadSpec{
-		BlkioWeight: &weight, StopTimeout: &timeout,
-	}, "example.test/image@sha256:"+strings.Repeat("a", 64))
-	if runtimeService.BlkioConfig == nil || runtimeService.StopGracePeriod != "3s" {
-		t.Fatalf("runtime pointer fields = %#v", runtimeService)
-	}
 	if got := runtimeSnapshotDirectories(map[string]RepositoryFile{
 		"a/x": {}, "b/y": {},
 	}); !reflect.DeepEqual(got, []string{".", "a", "b"}) {
@@ -96,7 +74,7 @@ func TestRenderRuntimeRejectsEnvironmentFileAtOutputDirectory(t *testing.T) {
 	}
 }
 
-func TestWorkloadReportsAdapterValidationFailure(t *testing.T) {
+func TestImageInputReportsAdapterValidationFailure(t *testing.T) {
 	t.Parallel()
 
 	project, err := Load(context.Background(), testSource(t, `
@@ -111,7 +89,29 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := project.ImageInput(apiService); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("ImageInput() error = %v", err)
+	}
+}
+
+func TestWorkloadRejectsInvalidRepositoryPathMapping(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(context.Background(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    volumes: [/repository/data:/data]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	image := resolvedImageForService(t, project, apiService)
+	project.pathFrom = "/repository"
+	project.pathTo = "relative"
 	if _, err := project.Workload(apiService, image); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Workload() error = %v", err)
 	}

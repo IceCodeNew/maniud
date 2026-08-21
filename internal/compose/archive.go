@@ -10,21 +10,32 @@ import (
 )
 
 const (
-	archiveExtensionKey       = "x-maniud"
-	archiveKind               = "docker-archive"
-	maximumArchiveSize        = int64(1 << 40)
-	maximumArchiveMember      = 1_000_000
-	archiveMetadataFieldCount = 10
-	archiveLinuxOS            = "linux"
-	archiveAMD64              = "amd64"
-	archiveARM64              = "arm64"
-	archiveARM64Variant       = "v8"
-	archivePlatformField      = "platform"
-	archiveImageSourceKey     = "image_source"
-	runtimeMetadataField      = "runtime"
-	composeDockerRuntime      = "docker"
-	composePodmanRuntime      = "podman"
-	composeNerdctlRuntime     = "nerdctl"
+	archiveExtensionKey        = "x-maniud"
+	archiveKind                = "docker-archive"
+	maximumArchiveSize         = int64(1 << 40)
+	maximumArchiveMember       = 1_000_000
+	archiveMetadataFieldCount  = 10
+	archiveLinuxOS             = "linux"
+	archiveAMD64               = "amd64"
+	archiveARM64               = "arm64"
+	archiveARM64Variant        = "v8"
+	archivePlatformField       = "platform"
+	archiveImageSourceKey      = "image_source"
+	runtimeMetadataField       = "runtime"
+	archiveServicesField       = "services"
+	archiveKindField           = "kind"
+	archiveSelectorField       = "selector"
+	archiveDigestField         = "archive_digest"
+	archiveSizeField           = "archive_size"
+	archiveManifestField       = "archive_manifest_digest"
+	archiveMemberIndexField    = "archive_member_index"
+	archiveSourceRefField      = "source_reference"
+	archiveReferenceField      = "reference_digest"
+	archivePlatformDigestField = "platform_manifest_digest"
+	archiveImageConfigField    = "image_config_digest"
+	composeDockerRuntime       = "docker"
+	composePodmanRuntime       = "podman"
+	composeNerdctlRuntime      = "nerdctl"
 )
 
 type archiveSource struct {
@@ -110,11 +121,11 @@ func decodeManiudSources(
 	if !found {
 		return nil, nil, false, true
 	}
-	extension, valid := exactMapping(raw, "services")
+	extension, valid := exactMapping(raw, archiveServicesField)
 	if !valid {
 		return nil, nil, true, false
 	}
-	rawServices, valid := extension["services"].(map[string]any)
+	rawServices, valid := extension[archiveServicesField].(map[string]any)
 	if !valid || len(rawServices) == 0 {
 		return nil, nil, true, false
 	}
@@ -188,7 +199,7 @@ func runtimeProvenance(raw any) (domain.RuntimeKind, bool) {
 }
 
 func decodeArchiveImageSource(raw map[string]any) (archiveSource, bool) {
-	if !archiveMetadataFieldsValid(raw) || stringValue(raw["kind"]) != archiveKind {
+	if !archiveMetadataFieldsValid(raw) || stringValue(raw[archiveKindField]) != archiveKind {
 		return archiveSource{}, false
 	}
 	metadata, valid := decodeArchiveMetadata(raw)
@@ -211,11 +222,11 @@ func decodeArchiveImageSource(raw map[string]any) (archiveSource, bool) {
 
 func decodeArchiveMetadata(raw map[string]any) (archiveMetadata, bool) {
 	var empty archiveMetadata
-	archiveDigest, archiveDigestValid := digestValue(raw["archive_digest"])
-	manifestDigest, manifestValid := digestValue(raw["archive_manifest_digest"])
-	referenceDigest, referenceValid := digestValue(raw["reference_digest"])
-	platformManifest, platformManifestValid := digestValue(raw["platform_manifest_digest"])
-	imageConfig, imageConfigValid := digestValue(raw["image_config_digest"])
+	archiveDigest, archiveDigestValid := digestValue(raw[archiveDigestField])
+	manifestDigest, manifestValid := digestValue(raw[archiveManifestField])
+	referenceDigest, referenceValid := digestValue(raw[archiveReferenceField])
+	platformManifest, platformManifestValid := digestValue(raw[archivePlatformDigestField])
+	imageConfig, imageConfigValid := digestValue(raw[archiveImageConfigField])
 	if !archiveDigestValid || !manifestValid || !referenceValid ||
 		!platformManifestValid || !imageConfigValid {
 		return empty, false
@@ -236,11 +247,11 @@ func decodeArchiveMetadataValues(
 	archiveDigest, manifestDigest, referenceDigest, platformManifest, imageConfig domain.Digest,
 ) (archiveMetadata, bool) {
 	var empty archiveMetadata
-	archiveSize, sizeValid := positiveInt64(raw["archive_size"], maximumArchiveSize)
-	memberIndex, indexValid := nonnegativeInt(raw["archive_member_index"], maximumArchiveMember)
+	archiveSize, sizeValid := positiveInt64(raw[archiveSizeField], maximumArchiveSize)
+	memberIndex, indexValid := nonnegativeInt(raw[archiveMemberIndexField], maximumArchiveMember)
 	platform, platformValid := archivePlatform(stringValue(raw[archivePlatformField]))
-	selector, selectorValid := raw["selector"].(string)
-	sourceReference := optionalString(raw, "source_reference")
+	selector, selectorValid := raw[archiveSelectorField].(string)
+	sourceReference := optionalString(raw, archiveSourceRefField)
 	if !sizeValid || !indexValid || !platformValid || !selectorValid || sourceReference == nil {
 		return empty, false
 	}
@@ -255,9 +266,9 @@ func decodeArchiveMetadataValues(
 
 func archiveMetadataFieldsValid(raw map[string]any) bool {
 	allowed := map[string]struct{}{
-		"kind": {}, "selector": {}, "archive_digest": {}, "archive_size": {},
-		"archive_manifest_digest": {}, "archive_member_index": {}, archivePlatformField: {}, "source_reference": {},
-		"reference_digest": {}, "platform_manifest_digest": {}, "image_config_digest": {},
+		archiveKindField: {}, archiveSelectorField: {}, archiveDigestField: {}, archiveSizeField: {},
+		archiveManifestField: {}, archiveMemberIndexField: {}, archivePlatformField: {}, archiveSourceRefField: {},
+		archiveReferenceField: {}, archivePlatformDigestField: {}, archiveImageConfigField: {},
 	}
 	if len(raw) < archiveMetadataFieldCount || len(raw) > archiveMetadataFieldCount+1 {
 		return false

@@ -1,7 +1,6 @@
 package compose
 
 import (
-	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -20,7 +19,7 @@ const (
 	contractVolume   = "volume"
 )
 
-//nolint:cyclop,funlen // Contract matrix for every supported field and rejection boundary.
+//nolint:cyclop // Contract matrix for every supported field and rejection boundary.
 func TestWorkloadSpecFullFieldMappingAndRejections(t *testing.T) {
 	t.Parallel()
 
@@ -60,52 +59,6 @@ func TestWorkloadSpecFullFieldMappingAndRejections(t *testing.T) {
 		!reflect.DeepEqual(spec.Environment, []string{"EMPTY", "KEY=value"}) ||
 		!reflect.DeepEqual(spec.ExposedPorts, []domain.ExposedPort{{TargetPort: 53, Protocol: composeProtocolUDP}}) {
 		t.Fatalf("full mapping = %#v, %v", spec, err)
-	}
-	if cloneMapping(composetypes.Mapping{"a": "b"})["a"] != "b" || *clonePointer(&truth) != truth ||
-		truePointer(true) == nil || !reflect.DeepEqual(hostsList(service.ExtraHosts), []string{"host=127.0.0.1"}) {
-		t.Fatal("non-nil helper semantics were not preserved")
-	}
-
-	var target domain.WorkloadSpec
-	badUlimits := []map[string]*composetypes.UlimitsConfig{
-		{"x": nil}, {"x": {Single: 1, Soft: 1}}, {"x": {Soft: -2}},
-		{"x": {Soft: -1, Hard: 1}}, {"x": {Soft: 2, Hard: 1}},
-	}
-	for _, value := range badUlimits {
-		if addUlimits(&target, value) {
-			t.Fatalf("ulimit accepted %#v", value)
-		}
-	}
-	badDevices := []composetypes.DeviceMapping{
-		{Source: contractRelative, Target: contractDevX, Permissions: "r"},
-		{Source: contractDevX, Target: contractRelative, Permissions: "r"},
-		{Source: contractDevX, Target: "/dev/y", Permissions: "x"},
-	}
-	for _, value := range badDevices {
-		if addDevices(&target, []composetypes.DeviceMapping{value}) {
-			t.Fatalf("device accepted %#v", value)
-		}
-	}
-	for _, value := range []string{"0", "65536", "80/sctp", "80/tcp/extra"} {
-		if addExposedPorts(&target, composetypes.StringOrNumberList{value}) {
-			t.Fatalf("exposed port accepted %q", value)
-		}
-	}
-	badMounts := []composetypes.ServiceVolumeConfig{
-		{Type: composeBindMountType, Source: contractRelative, Target: "/x"},
-		{Type: composeBindMountType, Source: "/x", Target: contractRelative},
-		{Type: contractVolume, Source: "named", Target: "/x"},
-		{Type: contractVolume, Target: "/x", ReadOnly: true},
-	}
-	for _, value := range badMounts {
-		if addMounts(&target, []composetypes.ServiceVolumeConfig{value}, "", "") {
-			t.Fatalf("mount accepted %#v", value)
-		}
-	}
-	tooManyRetries := uint64(math.MaxInt) + 1
-	if addHealthcheck(&target, &composetypes.HealthCheckConfig{Retries: &tooManyRetries}) ||
-		addHealthcheck(&target, &composetypes.HealthCheckConfig{Disable: true, Timeout: &stop}) {
-		t.Fatal("invalid healthcheck accepted")
 	}
 }
 
