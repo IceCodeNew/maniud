@@ -21,7 +21,7 @@ func TestBackupRootOpenBoundaries(t *testing.T) {
 	if root, found := openExistingBackupRoot(broad); root != nil || found {
 		t.Fatalf("openExistingBackupRoot(broad) = %#v, %t", root, found)
 	}
-	parent := t.TempDir()
+	parent := canonicalBackupParent(t.TempDir())
 	root, err := openBackupRoot(filepath.Join(parent, "missing", "backups"))
 	if root != nil || err == nil {
 		t.Fatalf("openBackupRoot(missing parent) = %#v, %v", root, err)
