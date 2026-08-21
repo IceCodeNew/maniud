@@ -169,7 +169,9 @@ func TestEvidenceIdentityClonesConfiguration(t *testing.T) {
 	if got := (imageconfig.Evidence{}).Identity(domain.ImageIdentity{}); got.Healthcheck != nil {
 		t.Fatalf("nil healthcheck became non-nil: %#v", got)
 	}
-	withoutRetries := imageconfig.Evidence{Healthcheck: &domain.Healthcheck{Test: []string{testHealthCMD, testTrueCommand}}}
+	withoutRetries := imageconfig.Evidence{Healthcheck: &domain.Healthcheck{
+		Test: []string{testHealthCMD, testTrueCommand},
+	}}
 	if got := withoutRetries.Identity(domain.ImageIdentity{}); got.Healthcheck == nil || got.Healthcheck.Retries != nil {
 		t.Fatalf("healthcheck without retries = %#v", got.Healthcheck)
 	}
