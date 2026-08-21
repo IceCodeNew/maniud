@@ -105,12 +105,11 @@ func TestParseAcceptedCommands(t *testing.T) {
 		},
 		{
 			name: "doctor confirms reindex",
-			args: []string{string(commandDoctor), configOption + "=config.toml", reindexBackupsOption, confirmOption},
+			args: []string{string(commandDoctor), reindexBackupsOption, confirmOption},
 			want: invocation{
 				arguments: doctorInvocation{
 					reindexBackups: true,
 					confirm:        true,
-					config:         "config.toml",
 					state:          "",
 				},
 				debug: false,
@@ -123,7 +122,6 @@ func TestParseAcceptedCommands(t *testing.T) {
 				arguments: doctorInvocation{
 					reindexBackups: true,
 					confirm:        false,
-					config:         "",
 					state:          "state.db",
 				},
 				debug: true,
@@ -184,7 +182,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandDoctor)},
 		{string(commandDoctor), reindexBackupsOption, "extra"},
 		{string(commandDoctor), reindexBackupsOption + "=true"},
-		{string(commandDoctor), reindexBackupsOption, configOption},
+		{string(commandDoctor), reindexBackupsOption, "--config", "config.toml"},
 		{string(commandDoctor), reindexBackupsOption, unknownOption},
 	}
 

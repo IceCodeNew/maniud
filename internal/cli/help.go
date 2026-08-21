@@ -57,7 +57,7 @@ const daemonHelp = `Usage: maniud daemon [--once] [--interval SECONDS]
 Reconcile the registered repository. The default interval is 300 seconds.
 `
 
-const doctorHelp = `Usage: maniud doctor --reindex-backups [--confirm] [--config PATH] [--state PATH]
+const doctorHelp = `Usage: maniud doctor --reindex-backups [--confirm] [--state PATH]
 
 Validate complete maniud backup manifests and report candidate entries for its
 internal index. The command is read-only unless --confirm is supplied;

@@ -30,7 +30,6 @@ const (
 	debugOption                  = "--debug"
 	reindexBackupsOption         = "--reindex-backups"
 	confirmOption                = "--confirm"
-	configOption                 = "--config"
 	stateOption                  = "--state"
 	defaultInterval              = 5 * time.Minute
 	maxApplyArguments            = 2
@@ -91,7 +90,6 @@ func (daemonInvocation) kind() command {
 type doctorInvocation struct {
 	reindexBackups bool
 	confirm        bool
-	config         string
 	state          string
 }
 
@@ -280,7 +278,6 @@ func parseDoctor(args []string) (invocation, error) {
 	accepted := map[string]bool{
 		reindexBackupsOption: false,
 		confirmOption:        false,
-		configOption:         true,
 		stateOption:          true,
 	}
 
@@ -292,7 +289,6 @@ func parseDoctor(args []string) (invocation, error) {
 	flags := newFlagSet("doctor")
 	reindexBackups := flags.Bool(reindexBackupsOption[2:], false, "")
 	confirm := flags.Bool(confirmOption[2:], false, "")
-	config := flags.String(configOption[2:], "", "")
 	state := flags.String(stateOption[2:], "", "")
 
 	if flags.Parse(ordered) != nil || flags.NArg() != 0 || !*reindexBackups {
@@ -303,7 +299,6 @@ func parseDoctor(args []string) (invocation, error) {
 		arguments: doctorInvocation{
 			reindexBackups: *reindexBackups,
 			confirm:        *confirm,
-			config:         *config,
 			state:          *state,
 		},
 		debug: false,
