@@ -51,6 +51,7 @@ linters:
             - "!**/internal/registry/*.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/docker/*.go"
+            - "!**/internal/runtime/containerd/*.go"
             - "!**/internal/runtime/docker/*.go"
           allow:
             - $gostd
@@ -128,6 +129,19 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/moby/moby/api
+        containerd-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/runtime/containerd/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/containerd/containerd/api
+            - github.com/opencontainers/go-digest
+            - github.com/opencontainers/image-spec
+            - golang.org/x/sys
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
         docker-adapter:
           list-mode: strict
           files:
