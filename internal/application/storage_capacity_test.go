@@ -60,7 +60,7 @@ func TestPrepareBackupCapacityFailsTransactionBeforeStop(t *testing.T) {
 func capacityTestSources() []backedStorageSource {
 	return []backedStorageSource{
 		{Mount: domain.RuntimeMount{
-			Kind: domain.MountVolume, Name: testDataName, Source: "/runtime/data", Target: "/data",
+			Kind: domain.MountVolume, Name: testDataName, Source: "/runtime/data", Target: testVolumeTarget,
 		}},
 		{Mount: domain.RuntimeMount{
 			Kind: domain.MountVolume, Name: "state", Source: "/runtime/state", Target: "/state",

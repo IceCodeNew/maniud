@@ -20,10 +20,12 @@ func TestReplacementBindInputBoundaries(t *testing.T) {
 	}
 	execution := &upgradeExecution{
 		mutation: &boundMutation{preparation: Preparation{Workload: domain.DesiredWorkload{WorkloadSpec: domain.WorkloadSpec{
-			Mounts: []domain.Mount{{Kind: domain.MountBind, Source: "/new", Target: "/data"}},
+			Mounts: []domain.Mount{{
+				Kind: domain.MountBind, Source: testBindSourceNew, Target: testVolumeTarget,
+			}},
 		}}}},
 		sources: []backedStorageSource{{Mount: domain.RuntimeMount{
-			Kind: domain.MountBind, Source: "/old", Target: "/data",
+			Kind: domain.MountBind, Source: testBindSourceOld, Target: testVolumeTarget,
 		}}},
 	}
 	if !errors.Is(prepareUpgradeReplacementBinds(execution), ErrInvalidRequest) {
@@ -36,12 +38,16 @@ func TestReplacementBindInputBoundaries(t *testing.T) {
 			t.Fatalf("replacementBindPath(%#v) error = %v", mount, err)
 		}
 	}
-	if _, err := replacementBindPath("", "transaction", domain.Mount{Target: "/data"}); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := replacementBindPath(
+		"",
+		"transaction",
+		domain.Mount{Target: testVolumeTarget},
+	); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("replacementBindPath(empty root) error = %v", err)
 	}
-
 }
 
+//nolint:cyclop // Each case forces a distinct filesystem operation failure.
 func TestEnsureEmptyReplacementBindFilesystemFailures(t *testing.T) {
 	t.Parallel()
 
@@ -64,7 +70,7 @@ func TestEnsureEmptyReplacementBindFilesystemFailures(t *testing.T) {
 	if err := ensureEmptyReplacementBind(unreadable); err == nil {
 		t.Fatal("ensureEmptyReplacementBind() read an inaccessible directory")
 	}
-	if err := os.Chmod(unreadable, 0o700); err != nil {
+	if err := os.Chmod(unreadable, 0o700); err != nil { //nolint:gosec // Directories require execute permission.
 		t.Fatalf("Chmod(unreadable) error = %v", err)
 	}
 
@@ -75,7 +81,7 @@ func TestEnsureEmptyReplacementBindFilesystemFailures(t *testing.T) {
 	if err := ensureEmptyReplacementBind(filepath.Join(lockedParent, "child")); err == nil {
 		t.Fatal("ensureEmptyReplacementBind() created a child in a locked directory")
 	}
-	if err := os.Chmod(lockedParent, 0o700); err != nil {
+	if err := os.Chmod(lockedParent, 0o700); err != nil { //nolint:gosec // Directories require execute permission.
 		t.Fatalf("Chmod(locked) error = %v", err)
 	}
 
@@ -90,7 +96,7 @@ func TestUpgradeCreateContainsReplacementBindFailure(t *testing.T) {
 
 	fixture := newStorageTestFixture(t, false)
 	fixture.mutation.preparation.Workload.Mounts = []domain.Mount{{
-		Kind: domain.MountBind, Source: "/new", Target: "/data",
+		Kind: domain.MountBind, Source: testBindSourceNew, Target: testVolumeTarget,
 	}}
 	if err := os.MkdirAll(fixture.mutation.backupRoot, 0o700); err != nil {
 		t.Fatalf("MkdirAll(backup root) error = %v", err)
@@ -106,7 +112,7 @@ func TestUpgradeCreateContainsReplacementBindFailure(t *testing.T) {
 		mutation: fixture.mutation,
 		runtime:  fixture.upgradeRuntime,
 		sources: []backedStorageSource{{Mount: domain.RuntimeMount{
-			Kind: domain.MountBind, Source: "/old", Target: "/data",
+			Kind: domain.MountBind, Source: testBindSourceOld, Target: testVolumeTarget,
 		}}},
 	}
 	if err := execution.create(context.Background()); err == nil {
@@ -119,12 +125,12 @@ func TestReplacementBindRejectsInvalidSelectedTarget(t *testing.T) {
 
 	fixture := newStorageTestFixture(t, false)
 	fixture.mutation.preparation.Workload.Mounts = []domain.Mount{{
-		Kind: domain.MountBind, Source: "/new", Target: "/",
+		Kind: domain.MountBind, Source: testBindSourceNew, Target: "/",
 	}}
 	execution := &upgradeExecution{
 		mutation: fixture.mutation,
 		sources: []backedStorageSource{{Mount: domain.RuntimeMount{
-			Kind: domain.MountBind, Source: "/old", Target: "/",
+			Kind: domain.MountBind, Source: testBindSourceOld, Target: "/",
 		}}},
 	}
 	if err := prepareUpgradeReplacementBinds(execution); !errors.Is(err, ErrInvalidRequest) {
