@@ -24,7 +24,8 @@ func TestFastForwardGitOpsCheckoutSelectsRemoteDescendant(t *testing.T) {
 		t.Fatalf("fastForwardGitOpsCheckout() error = %v", err)
 	}
 	want, err := resolveGitObject(t.Context(), producer, "HEAD^{commit}")
-	if err != nil || selected != want || root != checkout {
+	physicalCheckout, pathErr := filepath.EvalSymlinks(checkout)
+	if err != nil || pathErr != nil || selected != want || root != physicalCheckout {
 		t.Fatalf("fastForwardGitOpsCheckout() = %q, %q, %v; want %q", root, selected, err, want)
 	}
 	info, err := os.Stat(filepath.Join(checkout, "services", "api.yaml"))

@@ -46,7 +46,7 @@ func TestExecuteDoctorReportsEmptyBackupRoot(t *testing.T) {
 func TestExecuteDoctorConfirmsEmptyBackupIndex(t *testing.T) {
 	t.Parallel()
 
-	statePath := privateDoctorStatePath(t)
+	statePath := privateStatePath(t)
 	output := new(bytes.Buffer)
 	err := executeDoctor(context.Background(), doctorInvocation{
 		reindexBackups: true,
@@ -148,7 +148,7 @@ func TestRunDoctorRequiresExecutor(t *testing.T) {
 	}
 }
 
-func privateDoctorStatePath(t *testing.T) string {
+func privateStatePath(t *testing.T) string {
 	t.Helper()
 
 	directory := t.TempDir()

@@ -21,7 +21,7 @@ var (
 func TestExecuteDoctorConfirmsScanUnderLock(t *testing.T) {
 	t.Parallel()
 
-	statePath := privateDoctorStatePath(t)
+	statePath := privateStatePath(t)
 	publication := testDoctorPublication()
 	var (
 		locked      bool
@@ -66,7 +66,7 @@ func TestExecuteDoctorConfirmsScanUnderLock(t *testing.T) {
 func TestExecuteDoctorDoesNotReportFailedReplacement(t *testing.T) {
 	t.Parallel()
 
-	statePath := privateDoctorStatePath(t)
+	statePath := privateStatePath(t)
 	dependencies := defaultDoctorDependencies()
 	dependencies.lockBackupIndex = func(context.Context, *store.Store) (doctorBackupIndexLock, error) {
 		return &doctorTestLock{replaceErr: store.ErrInvalidState}, nil
@@ -133,7 +133,7 @@ func TestRebuildBackupIndexReportsDependencyFailures(t *testing.T) {
 			test.mutate(&dependencies)
 			_, _, err := rebuildBackupIndex(
 				context.Background(),
-				privateDoctorStatePath(t),
+				privateStatePath(t),
 				dependencies,
 			)
 			if !errors.Is(err, errDoctorTest) {

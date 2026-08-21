@@ -56,18 +56,13 @@ func scanBackupRoot(ctx context.Context, root string) ([]backup.Publication, err
 	}
 
 	publications := make([]backup.Publication, 0, len(entries))
-	seen := make(map[backup.Identifier]struct{}, len(entries))
 	for _, entry := range entries {
-		publication, identifier, openErr := openBackupEntry(ctx, root, entry)
+		publication, openErr := openBackupEntry(ctx, root, entry)
 		if openErr != nil {
 			return nil, openErr
 		}
-		if _, exists := seen[identifier]; exists {
-			return nil, errGitOpsRepositoryInvalid
-		}
 
 		publications = append(publications, publication)
-		seen[identifier] = struct{}{}
 	}
 
 	return publications, nil
@@ -77,32 +72,32 @@ func openBackupEntry(
 	ctx context.Context,
 	root string,
 	entry os.DirEntry,
-) (backup.Publication, backup.Identifier, error) {
+) (backup.Publication, error) {
 	if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-		return backup.Publication{}, backup.Identifier{}, errGitOpsRepositoryInvalid
+		return backup.Publication{}, errGitOpsRepositoryInvalid
 	}
 
 	identifier, valid := parseBackupDirectoryName(entry.Name())
 	if !valid {
-		return backup.Publication{}, backup.Identifier{}, errGitOpsRepositoryInvalid
+		return backup.Publication{}, errGitOpsRepositoryInvalid
 	}
 
 	publication, found, err := backup.Open(ctx, root, identifier)
 	if err != nil || !found {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return backup.Publication{}, backup.Identifier{}, fmt.Errorf("scan backups: %w", ctxErr)
+			return backup.Publication{}, fmt.Errorf("scan backups: %w", ctxErr)
 		}
 
-		return backup.Publication{}, backup.Identifier{}, errGitOpsRepositoryInvalid
+		return backup.Publication{}, errGitOpsRepositoryInvalid
 	}
 
-	return publication, identifier, nil
+	return publication, nil
 }
 
 func parseBackupDirectoryName(name string) (backup.Identifier, bool) {
 	var identifier backup.Identifier
 	decoded, err := hex.DecodeString(name)
-	if err != nil || len(decoded) != len(identifier) {
+	if err != nil || len(decoded) != len(identifier) || hex.EncodeToString(decoded) != name {
 		return identifier, false
 	}
 
