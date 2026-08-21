@@ -25,6 +25,23 @@ const (
 	PlanRestore PlanKind = "restore"
 )
 
+// WarningCode identifies a stable operator-facing apply warning.
+type WarningCode string
+
+const (
+	// WarningDaemonMountProbeUnavailable reports that a persistent storage
+	// upgrade is proceeding without daemon-side capacity and filesystem proof.
+	WarningDaemonMountProbeUnavailable WarningCode = "daemon_mount_probe_unavailable"
+	downgradedMountProbeMessage                    = "daemon mount capacity and filesystem identity were not verified; " +
+		"persistent restore relies on host backup capacity checks only"
+)
+
+// Warning is a privacy-safe notice attached to a successful apply plan.
+type Warning struct {
+	Code    WarningCode
+	Message string
+}
+
 // RuntimeEvidence binds one operation to a runtime, platform, and opaque
 // execution identity.
 type RuntimeEvidence struct {
@@ -69,6 +86,7 @@ type Plan struct {
 	Source      domain.Digest
 	Desired     domain.Digest
 	Observation WorkloadObservation
+	Warnings    []Warning
 }
 
 // Preparation retains private evidence needed by a later transaction mutation.
@@ -275,4 +293,39 @@ func validActionState(action store.Action) bool {
 	default:
 		return false
 	}
+}
+
+func mountProbeFallbackWarnings(preparation Preparation) []Warning {
+	if !persistentUpgradeWithoutMountProbe(preparation) {
+		return nil
+	}
+
+	return []Warning{{
+		Code:    WarningDaemonMountProbeUnavailable,
+		Message: downgradedMountProbeMessage,
+	}}
+}
+
+func persistentUpgradeWithoutMountProbe(preparation Preparation) bool {
+	switch preparation.Plan.Kind {
+	case PlanUpgrade, PlanResume, PlanProbeUnknownEffect, PlanRestore:
+	case PlanBootstrap, PlanAdopt, PlanUnchanged:
+		return false
+	default:
+		return false
+	}
+
+	if preparation.Plan.Kind != PlanUpgrade && preparation.Transaction.Kind != store.TransactionUpgrade {
+		return false
+	}
+	if len(backedStorageSources(preparation.Plan.Observation, preparation.Workload)) > 0 {
+		return true
+	}
+
+	kinds := make([]string, 0, len(preparation.Actions))
+	for _, action := range preparation.Actions {
+		kinds = append(kinds, action.Kind)
+	}
+
+	return containsStorageUpgradeAction(kinds)
 }

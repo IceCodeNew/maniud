@@ -3,10 +3,12 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/store"
 )
 
@@ -89,6 +91,52 @@ func TestDryRunBindsRuntimeToComposeProvenance(t *testing.T) {
 	plan, err := operation.service.DryRun(context.Background(), operation.request)
 	if err != nil || plan.Runtime != domain.RuntimePodman {
 		t.Fatalf("DryRun(Podman) = %#v, %v", plan, err)
+	}
+}
+
+func TestDryRunWarnsWhenPersistentUpgradeCannotProbeDaemonMount(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	resolver := operation.service.images
+	operation.service.images = imageResolverFunc(func(
+		ctx context.Context,
+		source imageref.Source,
+		platform domain.Platform,
+	) (domain.ImageIdentity, error) {
+		image, err := resolver.Resolve(ctx, source, platform)
+		if err != nil {
+			return domain.ImageIdentity{}, fmt.Errorf("resolve test image: %w", err)
+		}
+		image.Volumes = []string{testVolumeTarget}
+
+		return image, nil
+	})
+	operation.runtime.observe = func(
+		_ context.Context,
+		workload domain.DesiredWorkload,
+	) (WorkloadObservation, error) {
+		return changedManagedObservation(workload), nil
+	}
+	operation.transactions.applied = func(
+		context.Context,
+		string,
+		string,
+	) (store.AppliedService, bool, error) {
+		observation := changedManagedObservation(*operation.projected)
+
+		return appliedServiceForObservation(
+			*operation.projected,
+			testExecutionEvidence(),
+			observation,
+		), true, nil
+	}
+
+	plan, err := operation.service.DryRun(context.Background(), operation.request)
+	if err != nil || plan.Kind != PlanUpgrade || len(plan.Warnings) != 1 ||
+		plan.Warnings[0].Code != WarningDaemonMountProbeUnavailable ||
+		plan.Warnings[0].Message != downgradedMountProbeMessage {
+		t.Fatalf("DryRun(storage upgrade) = %#v, %v", plan, err)
 	}
 }
 

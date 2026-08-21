@@ -262,7 +262,13 @@ func (service *Service) prepareObserved(ctx context.Context, desired desiredAppl
 	preparation := prepareApplyEvidence(desired, observation, transaction, found, applied, hasApplied)
 
 	if found {
-		return service.prepareRecovery(ctx, preparation)
+		preparation, err = service.prepareRecovery(ctx, preparation)
+		if err != nil {
+			return empty, err
+		}
+		preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
+
+		return preparation, nil
 	}
 
 	preparation.Plan.Kind, err = classifyNewApply(
@@ -275,6 +281,7 @@ func (service *Service) prepareObserved(ctx context.Context, desired desiredAppl
 	if err != nil {
 		return empty, err
 	}
+	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
 }
