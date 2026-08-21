@@ -37,6 +37,7 @@ func TestStoragePublicationMatchingBoundaries(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // The cases share expensive publication fixtures and one cache boundary.
 func TestOpenPublishedBackupBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -47,7 +48,8 @@ func TestOpenPublishedBackupBoundaries(t *testing.T) {
 
 	missing := newStorageTestFixture(t, false)
 	execution = &upgradeExecution{mutation: missing.mutation}
-	if publication, found, err := execution.openPublishedBackup(context.Background()); err != nil || found || publication.ManifestDigest != (domain.Digest{}) {
+	publication, found, err := execution.openPublishedBackup(context.Background())
+	if err != nil || found || publication.ManifestDigest != (domain.Digest{}) {
 		t.Fatalf("openPublishedBackup(missing) = %#v, %t, %v", publication, found, err)
 	}
 	if _, err := execution.publishedBackup(context.Background()); !errors.Is(err, ErrConflictingState) {
@@ -65,7 +67,7 @@ func TestOpenPublishedBackupBoundaries(t *testing.T) {
 		sources:     []backedStorageSource{published.source},
 		inventories: []backup.Inventory{published.inventory},
 	}
-	publication, err := execution.publishedBackup(context.Background())
+	publication, err = execution.publishedBackup(context.Background())
 	if err != nil || publication.ManifestDigest != published.publication.ManifestDigest {
 		t.Fatalf("publishedBackup() = %#v, %v", publication, err)
 	}
@@ -112,6 +114,7 @@ func TestBackupManifestReusesOrCreatesExactPublication(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // The test temporarily replaces the package-level crypto/rand reader.
 func TestBackupManifestConstructionBoundaries(t *testing.T) {
 	fixture := newStorageTestFixture(t, false)
 	if _, err := newUpgradeBackupManifest(fixture.mutation.preparation, nil, nil); !errors.Is(err, ErrConflictingState) {

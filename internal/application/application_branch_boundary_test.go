@@ -31,7 +31,10 @@ func TestApplicationTransactionBranchMatrix(t *testing.T) {
 	}
 	_ = transactionIntent(Preparation{Plan: Plan{Kind: PlanKind(testInvalidValue)}})
 
-	if _, err := classifyRecovery(store.Transaction{State: store.TransactionFailed}, nil); !errors.Is(err, ErrConflictingState) {
+	if _, err := classifyRecovery(
+		store.Transaction{State: store.TransactionFailed},
+		nil,
+	); !errors.Is(err, ErrConflictingState) {
 		t.Fatalf("classifyRecovery(failed) error = %v", err)
 	}
 	if validRestorePendingAction(
@@ -74,6 +77,7 @@ func validExistingWorkloadForBranch(t *testing.T) ExistingWorkload {
 	return newUpgradeJourney(mutation.preparation).stop.Before
 }
 
+//nolint:cyclop // One fixture exercises the publication and reconstructed-manifest outcomes together.
 func TestRestoreStorageIntentAndPublicationBranches(t *testing.T) {
 	t.Parallel()
 
@@ -84,15 +88,18 @@ func TestRestoreStorageIntentAndPublicationBranches(t *testing.T) {
 	if len(intents) != 8 {
 		t.Fatalf("upgradeCoreIntents(with storage) = %d", len(intents))
 	}
-	if manifest := restoreBackupManifest(preparation, published.publication); manifest.OperationToken != published.manifest.OperationToken {
+	if manifest := restoreBackupManifest(
+		preparation,
+		published.publication,
+	); manifest.OperationToken != published.manifest.OperationToken {
 		t.Fatalf("restoreBackupManifest(publication) = %#v", manifest)
 	}
 
 	preparation.Plan.Observation.RuntimeMounts = []domain.RuntimeMount{{
-		Kind: domain.MountBind, Source: "/old", Target: "/data",
+		Kind: domain.MountBind, Source: testBindSourceOld, Target: testVolumeTarget,
 	}}
 	preparation.Workload.Mounts = []domain.Mount{{
-		Kind: domain.MountBind, Source: "/new", Target: "/data",
+		Kind: domain.MountBind, Source: testBindSourceNew, Target: testVolumeTarget,
 	}}
 	manifest := restoreBackupManifest(preparation, backup.Publication{})
 	if len(manifest.Artifacts) != 1 ||
@@ -166,7 +173,11 @@ func TestBindPreparedTransactionRejectsEveryRecoveryPlan(t *testing.T) {
 	preparation.HasTransaction = false
 	for _, kind := range []PlanKind{PlanProbeUnknownEffect, PlanRestore} {
 		preparation.Plan.Kind = kind
-		if _, err := bindPreparedTransaction(context.Background(), mutation.lock, preparation); !errors.Is(err, ErrConflictingState) {
+		if _, err := bindPreparedTransaction(
+			context.Background(),
+			mutation.lock,
+			preparation,
+		); !errors.Is(err, ErrConflictingState) {
 			t.Fatalf("bindPreparedTransaction(%q) error = %v", kind, err)
 		}
 	}

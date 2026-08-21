@@ -8,6 +8,8 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+var errRandomSource = errors.New("random source failed")
+
 func TestStorageSelectionBoundaryMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -24,13 +26,15 @@ func TestStorageSelectionBoundaryMatrix(t *testing.T) {
 
 	workload.Mounts = []domain.Mount{
 		{Kind: domain.MountVolume, Target: "/skip"},
-		{Kind: domain.MountBind, Source: "/new", Target: "/readonly", ReadOnly: true},
-		{Kind: domain.MountBind, Source: "/new", Target: "/data"},
+		{Kind: domain.MountBind, Source: testBindSourceNew, Target: "/readonly", ReadOnly: true},
+		{Kind: domain.MountBind, Source: testBindSourceNew, Target: testVolumeTarget},
 	}
 	sources := []backedStorageSource{
 		{Mount: domain.RuntimeMount{Kind: domain.MountVolume, Target: "/volume"}},
-		{Mount: domain.RuntimeMount{Kind: domain.MountBind, Source: "/old", Target: "/missing"}},
-		{Mount: domain.RuntimeMount{Kind: domain.MountBind, Source: "/old", Target: "/data"}},
+		{Mount: domain.RuntimeMount{Kind: domain.MountBind, Source: testBindSourceOld, Target: "/missing"}},
+		{Mount: domain.RuntimeMount{
+			Kind: domain.MountBind, Source: testBindSourceOld, Target: testVolumeTarget,
+		}},
 	}
 	replacements := replacementBindIndexes(sources, workload)
 	if len(replacements) != 1 || replacements[0] != 2 {
@@ -64,5 +68,5 @@ func TestStorageDigestBoundaryMatrix(t *testing.T) {
 type failingRandomReader struct{}
 
 func (failingRandomReader) Read([]byte) (int, error) {
-	return 0, errors.New("random source failed")
+	return 0, errRandomSource
 }

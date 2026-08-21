@@ -21,6 +21,13 @@ func TestStorageBackupRejectsInvalidRequestsAndActions(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("settleStorageBackup(nil mutation) error = %v", err)
 	}
+	_, _, err = settleStorageBackup(
+		context.Background(), fixture.mutation, store.Action{}, 1, fixture.mutation.backupRoot,
+		fixture.manifest, [][]byte{fixture.archive, fixture.archive}, backup.PublicationCapacity{},
+	)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("settleStorageBackup(mismatched archives) error = %v", err)
+	}
 
 	intent := storageBackupIntent(1, fixture.manifest)
 	conflicting := storageCompletedAction(fixture.mutation, intent, domain.Hash([]byte("postcondition")))
@@ -34,6 +41,7 @@ func TestStorageBackupRejectsInvalidRequestsAndActions(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // The cases share publication fixtures and exercise one effect boundary.
 func TestStorageBackupEffectPublicationBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -93,7 +101,11 @@ func TestCompletedStorageBackupRequiresExactEvidence(t *testing.T) {
 			root: fixture.mutation.backupRoot, manifest: fixture.manifest, archives: [][]byte{fixture.archive},
 		}
 	}
-	if _, err := completedStorageBackup(context.Background(), store.Action{}, newEffect()); !errors.Is(err, ErrConflictingState) {
+	if _, err := completedStorageBackup(
+		context.Background(),
+		store.Action{},
+		newEffect(),
+	); !errors.Is(err, ErrConflictingState) {
 		t.Fatalf("completedStorageBackup(missing digest) error = %v", err)
 	}
 
