@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.6
 
 require (
+	github.com/IceCodeNew/maniud/containerconfig v0.1.0
 	github.com/compose-spec/compose-go/v2 v2.14.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -34,3 +35,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/IceCodeNew/maniud/containerconfig => ./containerconfig

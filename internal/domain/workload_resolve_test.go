@@ -88,6 +88,13 @@ func TestResolveWorkloadSpecKeepsExplicitProcessAndConfiguration(t *testing.T) {
 		got.Healthcheck == nil || !got.Healthcheck.Disabled {
 		t.Fatalf("ResolveWorkloadSpec() = %#v", got)
 	}
+
+	got = domain.ResolveWorkloadSpec(domain.WorkloadSpec{}, domain.ImageIdentity{
+		Healthcheck: &domain.Healthcheck{Test: []string{testHealthCommand, testTrueCommand}},
+	})
+	if got.Healthcheck == nil || got.Healthcheck.Retries != nil {
+		t.Fatalf("ResolveWorkloadSpec() healthcheck = %#v", got.Healthcheck)
+	}
 }
 
 func TestResolveWorkloadSpecPreservesNilAndEmptyDefaults(t *testing.T) {
