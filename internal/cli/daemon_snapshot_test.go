@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -55,10 +57,11 @@ func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T
 	}
 }
 
-func TestReconcileGitOpsSnapshotMutatesValidatedServices(t *testing.T) {
+func TestReconcileGitOpsSnapshotEmitsValidatedServiceResults(t *testing.T) {
 	t.Parallel()
 
 	root := initGitOpsSnapshotTestRepository(t)
+	output := new(bytes.Buffer)
 	events := make([]string, 0, 24)
 	reader := &applyReaderFixture{events: &events, closeErr: nil}
 	runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
@@ -79,16 +82,29 @@ func TestReconcileGitOpsSnapshotMutatesValidatedServices(t *testing.T) {
 	) (application.Plan, error) {
 		mutations++
 
-		return application.Plan{Kind: application.PlanBootstrap}, nil
+		return application.Plan{
+			Kind: application.PlanBootstrap,
+			Warnings: []application.Warning{{
+				Code: application.WarningDaemonMountProbeUnavailable,
+			}},
+		}, nil
 	}
 
 	state, err := cleanGitTree(t.Context(), root)
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, output, dependencies)
 	if err != nil || mutations != 2 {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+	}
+	decoder := json.NewDecoder(output)
+	for index := range mutations {
+		var got applyPlan
+		if decodeErr := decoder.Decode(&got); decodeErr != nil || len(got.Warnings) != 1 ||
+			got.Warnings[0].Code != application.WarningDaemonMountProbeUnavailable {
+			t.Fatalf("reconcileGitOpsSnapshot() result %d = %#v, %v", index, got, decodeErr)
+		}
 	}
 }
 
