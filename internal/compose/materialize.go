@@ -56,7 +56,6 @@ func (source Source) MaterializeRuntime() error {
 	return source.materializeRuntime(root, root.Lstat)
 }
 
-//nolint:cyclop // Publication keeps validation, atomic rename, and cleanup in one ordered boundary.
 func (source Source) materializeRuntime(
 	root *os.Root,
 	lstat func(string) (fs.FileInfo, error),

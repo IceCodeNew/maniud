@@ -16,6 +16,7 @@ import (
 
 const (
 	composeTestDataPath         = "/data"
+	composeTestRunPath          = "/run"
 	composeTestWorkingDirectory = "/work"
 )
 
@@ -170,7 +171,7 @@ func TestWorkloadAdapterHelperSuccessAndFailureBoundaries(t *testing.T) {
 			t.Fatalf("permission %q", p)
 		}
 	}
-	if !addTmpfs(&spec, composetypes.StringList{"/run", "/tmp:ro,size=1m"}) ||
+	if !addTmpfs(&spec, composetypes.StringList{composeTestRunPath, "/tmp:ro,size=1m"}) ||
 		addTmpfs(&spec, composetypes.StringList{"relative"}) {
 		t.Fatal("tmpfs")
 	}
@@ -261,8 +262,12 @@ func TestRuntimeWriterHelperCompleteShapes(t *testing.T) {
 	if !reflect.DeepEqual(ports, []string{"79:80", "[::1]:80:81/udp"}) {
 		t.Fatal(ports)
 	}
-	if got := runtimeTmpfs([]domain.TmpfsMount{{Target: "/run"}, {Target: "/tmp", Options: []string{"ro"}}}); !reflect.DeepEqual(got, []string{"/run", "/tmp:ro"}) {
-		t.Fatal(got)
+	tmpfs := runtimeTmpfs([]domain.TmpfsMount{
+		{Target: composeTestRunPath},
+		{Target: "/tmp", Options: []string{"ro"}},
+	})
+	if !reflect.DeepEqual(tmpfs, []string{composeTestRunPath, "/tmp:ro"}) {
+		t.Fatal(tmpfs)
 	}
 	if runtimeUlimits(nil) != nil || len(runtimeMounts([]domain.Mount{{Kind: domain.MountVolume, Target: "/v"}})) != 1 {
 		t.Fatal("runtime helpers")
@@ -308,7 +313,8 @@ func TestRepositoryCollectorMalformedShapes(t *testing.T) {
 	if _, ok := repositoryDefaultEnvironment(".", map[string]string{composeDisableEnvFile: "maybe"}); ok {
 		t.Fatal("bad bool")
 	}
-	if value, ok := repositoryDefaultEnvironment(".", map[string]string{composeDisableEnvFile: "false"}); !ok || value == "" {
+	value, ok := repositoryDefaultEnvironment(".", map[string]string{composeDisableEnvFile: "false"})
+	if !ok || value == "" {
 		t.Fatalf("false disable flag = %q, %t", value, ok)
 	}
 	if strings.TrimSpace(resolveRepositoryDefaultEnv(".")) == "" {
