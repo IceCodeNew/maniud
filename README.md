@@ -31,6 +31,11 @@ install -m 0755 maniud_VERSION_OS_ARCH "$HOME/.local/bin/maniud"
 maniud --version
 ```
 
+An official binary reports `maniud X.Y.Z`. A source build reports its UTC
+commit date and abbreviated revision as `maniud YYYYMMDD-gxxxxxxxxxxxx`, with
+`-dirty` before `-g` when the checkout had uncommitted changes. A build without
+trustworthy Git metadata reports `maniud development-unknown`.
+
 ## Three-step offline generation
 
 This flow needs an installed `maniud` binary and a Docker image archive. It

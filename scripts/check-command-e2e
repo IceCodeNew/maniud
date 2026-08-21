@@ -12,13 +12,16 @@ trap 'rm -rf "$temporary_dir"' EXIT
 
 binary="${1:-$temporary_dir/maniud}"
 if (($# == 0)); then
-	(
-		cd "$repo_root"
-		CGO_ENABLED=0 go build -trimpath -o "$binary" ./cmd/maniud
-	)
+	"$repo_root/scripts/build-maniud" "$binary"
 elif [[ ! -x "$binary" ]]; then
 	printf 'maniud binary is not executable: %s\n' "$binary" >&2
 	exit 2
+fi
+
+version="$($binary --version)"
+if [[ ! "$version" =~ ^maniud\ ((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)|[0-9]{8}(-dirty)?-g[0-9a-f]{12})$ ]]; then
+	printf 'unexpected maniud version: %s\n' "$version" >&2
+	exit 1
 fi
 
 archive="$temporary_dir/hello.tar"

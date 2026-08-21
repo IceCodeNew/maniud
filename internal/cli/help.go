@@ -21,6 +21,7 @@ Commands:
 
 Options:
   --debug      include internal diagnostic context in command failures
+  --version    show the release version or source revision
 
 Run 'maniud COMMAND --help' for command-specific syntax.
 `

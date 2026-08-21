@@ -63,7 +63,7 @@ func TestRunPublicTransport(t *testing.T) {
 			name:       "version",
 			args:       []string{versionOption},
 			wantStatus: 0,
-			wantOutput: "maniud dev\n",
+			wantOutput: "maniud " + currentVersion() + "\n",
 		},
 		{
 			name:       testInvalidValue,
