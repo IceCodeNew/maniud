@@ -7,7 +7,10 @@ if (($# == 0)); then
 fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-mapfile -t module_names < <("$repository_root/scripts/list-go-modules")
+module_names=()
+while IFS= read -r module_name; do
+	module_names+=("$module_name")
+done < <("$repository_root/scripts/list-go-modules")
 
 for module_name in "${module_names[@]}"; do
 	printf '==> %s: %s\n' "$module_name" "$*"
