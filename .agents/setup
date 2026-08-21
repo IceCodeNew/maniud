@@ -5,23 +5,18 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 cd "$repo_root"
 
+# shellcheck source=.agents/tool-versions.sh
+source "$repo_root/.agents/tool-versions.sh"
+
 readonly GIT_USER_NAME='IceCodeNew'
 readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
-readonly DOCKER_VERSION='29.7.2'
-readonly DOCKER_APT_VERSION='5:29.7.2-1~debian.12~bookworm'
-readonly CONTAINERD_VERSION='2.3.3'
-readonly CONTAINERD_APT_VERSION='2.3.3-1~debian.12~bookworm'
-readonly DOCKER_COMPOSE_APT_VERSION='5.4.0-1~debian.12~bookworm'
-readonly PODMAN_APT_VERSION='4.3.1+ds1-8+deb12u1+b3'
-readonly NERDCTL_VERSION='2.3.5'
-readonly NERDCTL_BUILDKIT_VERSION='0.31.2'
-readonly NERDCTL_RUNC_VERSION='1.5.1'
-readonly NERDCTL_ARCHIVE_SHA256='b697295c623639734aaab737523c808fd3cc8d3046039fd94fff1744e4c317aa'
-readonly NERDCTL_URL='https://github.com/containerd/nerdctl/releases/download/v2.3.5/nerdctl-full-2.3.5-linux-amd64.tar.gz'
 readonly CONTAINERD_CONFIG_PATH='/etc/maniud/containerd.toml'
 readonly CONTAINERD_ADDRESS='/run/maniud-containerd/containerd.sock'
 readonly DOCKER_GROUP='docker'
 readonly NERDCTL_CONFIG_PATH='/etc/nerdctl/nerdctl.toml'
+# Release assets may move independently of their checksum file. Pin the
+# maintainer key fingerprint while Renovate updates the release version.
+readonly NERDCTL_SIGNER_FINGERPRINT='C020EA876CE4E06C7AB95AEF49524C6F9F638F1A'
 
 run_step() {
   local label="$1"
@@ -30,8 +25,8 @@ run_step() {
   time "$@"
 }
 
-package_has_version() {
-  [[ "$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null)" == "$2" ]]
+package_is_installed() {
+  [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" == 'ii '* ]]
 }
 
 disable_system_runtime_services() {
@@ -118,20 +113,22 @@ PY
 
 install_system_packages() {
   if command -v curl >/dev/null 2>&1 \
+    && command -v gpg >/dev/null 2>&1 \
     && command -v newgidmap >/dev/null 2>&1 \
     && command -v newuidmap >/dev/null 2>&1 \
     && command -v podman >/dev/null 2>&1 \
     && command -v ssh-keygen >/dev/null 2>&1 \
     && command -v unzip >/dev/null 2>&1 \
-    && package_has_version podman "$PODMAN_APT_VERSION"; then
+    && package_is_installed podman; then
     return
   fi
 
   sudo apt-get update
   sudo apt-get install -y --no-install-recommends \
     curl \
+    gnupg \
     openssh-client \
-    "podman=$PODMAN_APT_VERSION" \
+    podman \
     python3-minimal \
     uidmap \
     unzip
@@ -139,10 +136,10 @@ install_system_packages() {
 
 install_docker_tools() {
   disable_system_runtime_services
-  if package_has_version docker-ce "$DOCKER_APT_VERSION" \
-    && package_has_version docker-ce-cli "$DOCKER_APT_VERSION" \
-    && package_has_version containerd.io "$CONTAINERD_APT_VERSION" \
-    && package_has_version docker-compose-plugin "$DOCKER_COMPOSE_APT_VERSION" \
+  if package_is_installed docker-ce \
+    && package_is_installed docker-ce-cli \
+    && package_is_installed containerd.io \
+    && package_is_installed docker-compose-plugin \
     && docker compose version >/dev/null 2>&1; then
     return
   fi
@@ -161,55 +158,102 @@ install_docker_tools() {
   fi
 
   sudo apt-get update
-  sudo apt-get install -y --allow-downgrades --no-install-recommends \
-    "containerd.io=$CONTAINERD_APT_VERSION" \
-    "docker-ce=$DOCKER_APT_VERSION" \
-    "docker-ce-cli=$DOCKER_APT_VERSION" \
-    "docker-compose-plugin=$DOCKER_COMPOSE_APT_VERSION"
+  sudo apt-get install -y --no-install-recommends \
+    containerd.io \
+    docker-ce \
+    docker-ce-cli \
+    docker-compose-plugin
   disable_system_runtime_services
 }
 
 install_nerdctl_tools() (
-  local temporary_dir
   local archive
-  local completion_marker
+  local archive_name
+  local checksum_file
+  local expected_checksum
+  local gnupg_home
+  local public_key_file
   local required_path
+  local signature_file
+  local temporary_dir
+  local valid_signer
+  local verification_status
 
-  completion_marker="$HOME/.cache/maniud/nerdctl-full-$NERDCTL_VERSION.complete"
-  if [[ -f "$completion_marker" ]] \
-    && grep -Fqx "$NERDCTL_ARCHIVE_SHA256" "$completion_marker" \
-    && [[ -x "$HOME/.local/bin/buildkitd" ]] \
-    && [[ -x "$HOME/.local/bin/containerd-shim-runc-v2" ]] \
-    && [[ -x "$HOME/.local/libexec/cni/bridge" ]] \
-    && [[ "$(containerd --version 2>/dev/null | awk '{print $3}')" == "v$CONTAINERD_VERSION" ]] \
-    && [[ "$(buildctl --version 2>/dev/null | awk '{print $3}')" == "v$NERDCTL_BUILDKIT_VERSION" ]] \
-    && [[ "$(runc --version 2>/dev/null | sed -n '1s/^runc version //p')" == "$NERDCTL_RUNC_VERSION" ]]; then
+  if [[ "$(/usr/local/bin/nerdctl --version 2>/dev/null | awk '{print $3}')" == "$NERDCTL_VERSION" ]] \
+    && [[ -x /usr/local/bin/buildctl ]] \
+    && [[ -x /usr/local/bin/buildkitd ]] \
+    && [[ -x /usr/local/bin/containerd ]] \
+    && [[ -x /usr/local/bin/containerd-shim-runc-v2 ]] \
+    && [[ -x /usr/local/bin/runc ]] \
+    && [[ -x /usr/local/libexec/cni/bridge ]]; then
     return
   fi
 
-  rm -f "$completion_marker"
   temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-nerdctl.XXXXXX")"
   trap 'rm -rf "$temporary_dir"' EXIT
-  archive="$temporary_dir/nerdctl-full.tar.gz"
-  curl --fail --location --retry 3 --output "$archive" "$NERDCTL_URL"
-  printf '%s  %s\n' "$NERDCTL_ARCHIVE_SHA256" "$archive" | sha256sum --check --strict
-  install -m 0755 -d "$HOME/.local"
-  tar --extract --gzip --no-same-owner --file "$archive" --directory "$HOME/.local"
+  archive_name="nerdctl-full-$NERDCTL_VERSION-linux-amd64.tar.gz"
+  archive="$temporary_dir/$archive_name"
+  checksum_file="$temporary_dir/SHA256SUMS"
+  signature_file="$temporary_dir/SHA256SUMS.asc"
+  public_key_file="$temporary_dir/release-manager.gpg"
+  gnupg_home="$temporary_dir/gnupg"
+  install -m 0700 -d "$gnupg_home"
+  curl --fail --location --retry 3 \
+    --output "$archive" \
+    "https://github.com/containerd/nerdctl/releases/download/v$NERDCTL_VERSION/$archive_name"
+  curl --fail --location --retry 3 \
+    --output "$checksum_file" \
+    "https://github.com/containerd/nerdctl/releases/download/v$NERDCTL_VERSION/SHA256SUMS"
+  curl --fail --location --retry 3 \
+    --output "$signature_file" \
+    "https://github.com/containerd/nerdctl/releases/download/v$NERDCTL_VERSION/SHA256SUMS.asc"
+  curl --fail --location --retry 3 \
+    --output "$public_key_file" \
+    'https://github.com/AkihiroSuda.gpg'
+  GNUPGHOME="$gnupg_home" gpg --batch --quiet --import "$public_key_file"
+  if ! verification_status="$(
+    GNUPGHOME="$gnupg_home" gpg \
+      --batch \
+      --status-fd=1 \
+      --verify "$signature_file" "$checksum_file" 2>/dev/null
+  )"; then
+    printf '%s\n' 'The nerdctl checksum signature is invalid.' >&2
+    return 1
+  fi
+  valid_signer="$(
+    awk '
+      $1 == "[GNUPG:]" && $2 == "VALIDSIG" {
+        if (found) exit 2
+        print $3
+        found = 1
+      }
+      END { if (!found) exit 1 }
+    ' <<<"$verification_status"
+  )"
+  if [[ "$valid_signer" != "$NERDCTL_SIGNER_FINGERPRINT" ]]; then
+    printf 'The nerdctl checksum signer %s is not the reviewed release manager.\n' "$valid_signer" >&2
+    return 1
+  fi
+  expected_checksum="$(awk -v name="$archive_name" '$2 == name { print $1 }' "$checksum_file")"
+  if [[ ! "$expected_checksum" =~ ^[[:xdigit:]]{64}$ ]]; then
+    printf 'The nerdctl checksum manifest has no unique entry for %s.\n' "$archive_name" >&2
+    return 1
+  fi
+  printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --strict
+  sudo tar Cxzvvf /usr/local "$archive"
   for required_path in \
-    "$HOME/.local/bin/buildctl" \
-    "$HOME/.local/bin/buildkitd" \
-    "$HOME/.local/bin/containerd" \
-    "$HOME/.local/bin/containerd-shim-runc-v2" \
-    "$HOME/.local/bin/nerdctl" \
-    "$HOME/.local/bin/runc" \
-    "$HOME/.local/libexec/cni/bridge"; do
+    /usr/local/bin/buildctl \
+    /usr/local/bin/buildkitd \
+    /usr/local/bin/containerd \
+    /usr/local/bin/containerd-shim-runc-v2 \
+    /usr/local/bin/nerdctl \
+    /usr/local/bin/runc \
+    /usr/local/libexec/cni/bridge; do
     if [[ ! -x "$required_path" ]]; then
       printf 'The nerdctl full bundle is missing %s.\n' "$required_path" >&2
       return 1
     fi
   done
-  install -m 0755 -d "$(dirname "$completion_marker")"
-  printf '%s\n' "$NERDCTL_ARCHIVE_SHA256" >"$completion_marker"
 )
 
 configure_runtime_access() {
@@ -243,8 +287,8 @@ state = '/run/maniud-containerd'
 EOF
   cat >"$temporary_nerdctl_config" <<EOF
 address = 'unix://$CONTAINERD_ADDRESS'
-cni_path = '$HOME/.local/libexec/cni'
-cni_netconfpath = '$HOME/.local/etc/cni/net.d'
+cni_path = '/usr/local/libexec/cni'
+cni_netconfpath = '/usr/local/etc/cni/net.d'
 EOF
   sudo install -m 0755 -d /etc/maniud /etc/nerdctl /var/lib/maniud-containerd
   sudo install -m 0644 "$temporary_config" "$CONTAINERD_CONFIG_PATH"
@@ -297,83 +341,72 @@ PY
 }
 
 install_golang() {
-  mise use --global go
+  if [[ -n "$GO_VERSION" ]]; then
+    mise use --global "go@$GO_VERSION"
+  else
+    mise use --global go
+  fi
   eval "$(mise hook-env -s bash)"
-  go env -w GOPROXY='https://golang.flatt.tech'
+  # Keep developer builds CGO-free by default. The race gate opts back in explicitly.
+  go env -w CGO_ENABLED=0 GOPROXY='https://golang.flatt.tech'
 }
 
 install_mise_tools() {
   mise use --global uv
   mise use --global \
-      ast-grep bun node@lts shellcheck shfmt \
-      "go:github.com/google/capslock/cmd/capslock" \
-      "go:go.uber.org/nilaway/cmd/nilaway" \
-      "go:github.com/uber-go/gopatch" \
-      "go:golang.org/x/vuln/cmd/govulncheck" \
-      "go:github.com/alexkohler/prealloc" \
-      "npm:openskills" \
-      "pipx:nmem-cli" "pipx:prek"
+    ast-grep bun node@lts prek shellcheck shfmt \
+    "golangci-lint@$GOLANGCI_LINT_VERSION" \
+    "go:github.com/google/capslock/cmd/capslock@$CAPSLOCK_VERSION" \
+    "go:github.com/rillig/gobco@$GOBCO_VERSION" \
+    "go:go.uber.org/nilaway/cmd/nilaway@$NILAWAY_VERSION" \
+    "go:github.com/tailscale/depaware@$DEPAWARE_VERSION" \
+    "go:github.com/uber-go/gopatch" \
+    "go:golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" \
+    "npm:greptile" \
+    "npm:openskills" \
+    "pipx:nmem-cli"
   mise reshim
 }
 
-install_agent_skills() (
-  eval "$(mise hook-env -s bash)"
-  local skills_dir="$HOME/.agents/skills"
-  local compatibility_dir="$HOME/.agent/skills"
-  local temporary_dir
+install_coderabbit_cli() {
+  # The official installer selects the current stable binary for this platform.
+  # Authentication remains an explicit user action and is never persisted by setup.
+  curl -fsSL https://cli.coderabbit.ai/install.sh | env CI=1 sh
+}
 
-  mkdir -p "$skills_dir" "$compatibility_dir"
+update_managed_checkout() {
+  local destination="$1"
+  local expected_origin="$2"
+  local actual_origin
 
-  install_skill() {
-    local name="$1"
-    local source="$2"
-    local destination="$skills_dir/$name"
-
-    if [[ -f "$destination/SKILL.md" ]]; then
-      return
-    fi
-    [[ ! -e "$destination" ]] || {
-      printf 'Refusing to replace incomplete skill directory: %s\n' "$destination" >&2
-      return 1
-    }
-    cp -a "$source" "$destination"
-  }
-
-  if [[ ! -f "$skills_dir/autofix/SKILL.md" \
-    || ! -f "$skills_dir/code-review/SKILL.md" \
-    || ! -f "$skills_dir/gh-stack/SKILL.md" \
-    || ! -f "$skills_dir/modular-go/SKILL.md" ]] \
-; then
-    temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-skills.XXXXXX")"
-    trap 'rm -rf "$temporary_dir"' EXIT
-
-    git clone --quiet --depth 1 https://github.com/coderabbitai/skills.git "$temporary_dir/coderabbit"
-    git clone --quiet --depth 1 https://github.com/github/gh-stack.git "$temporary_dir/gh-stack"
-    git clone --quiet --depth 1 https://github.com/PsiACE/skills.git "$temporary_dir/psiace"
-
-    install_skill autofix "$temporary_dir/coderabbit/skills/autofix"
-    install_skill code-review "$temporary_dir/coderabbit/skills/code-review"
-    install_skill gh-stack "$temporary_dir/gh-stack/skills/gh-stack"
-    install_skill modular-go "$temporary_dir/psiace/skills/modular-go"
+  actual_origin="$(git -C "$destination" remote get-url origin 2>/dev/null || true)"
+  if [[ "$actual_origin" != "$expected_origin" ]]; then
+    printf 'Refusing to update managed checkout with an unexpected origin: %s\n' "$destination" >&2
+    return 1
+  fi
+  if ! git -C "$destination" symbolic-ref --quiet HEAD >/dev/null \
+    || [[ -n "$(git -C "$destination" status --porcelain)" ]]; then
+    printf 'Refusing to update a detached or modified managed checkout: %s\n' "$destination" >&2
+    return 1
   fi
 
-  for skill in autofix code-review gh-stack modular-go; do
-    [[ -e "$compatibility_dir/$skill" ]] || ln -s "$skills_dir/$skill" "$compatibility_dir/$skill"
-  done
-
-  openskills read autofix,code-review,gh-stack,modular-go >/dev/null
-)
+  git -C "$destination" fetch --quiet --depth 1 origin HEAD
+  git -C "$destination" reset --hard --quiet FETCH_HEAD
+}
 
 install_ninehills_skills() (
   eval "$(mise hook-env -s bash)"
   local source_dir="$HOME/.cache/maniud/ninehills-skills"
+  local source_url='https://github.com/ninehills/skills.git'
 
   if [[ -e "$source_dir" && ! -d "$source_dir/.git" ]]; then
     printf 'Refusing to replace unmanaged ninehills source directory: %s\n' "$source_dir" >&2
     return 1
   fi
   if [[ ! -d "$source_dir/.git" ]]; then
-    git clone --quiet --depth 1 https://github.com/ninehills/skills.git "$source_dir"
+    git clone --quiet --depth 1 "$source_url" "$source_dir"
+  else
+    update_managed_checkout "$source_dir" "$source_url"
   fi
   amp skill add --global --overwrite "$source_dir"
 )
@@ -386,6 +419,7 @@ install_gstack() (
   local state_dir="$HOME/.cache/maniud"
   local setup_marker="$state_dir/gstack-setup-revision"
   local setup_log="$HOME/.cache/amp/logs/maniud-gstack-setup.log"
+  local source_url='https://github.com/garrytan/gstack.git'
   local revision
   local setup_required=false
 
@@ -394,8 +428,10 @@ install_gstack() (
     return 1
   fi
   if [[ ! -d "$destination/.git" ]]; then
-    git clone --quiet --depth 1 https://github.com/garrytan/gstack.git "$destination"
+    git clone --quiet --depth 1 "$source_url" "$destination"
     setup_required=true
+  else
+    update_managed_checkout "$destination" "$source_url"
   fi
 
   if [[ ! -d "$destination/node_modules" ]]; then
@@ -453,14 +489,14 @@ run_step 'Install mise' install_mise
 run_step 'Configure mise for login shells' configure_mise_login_shell
 run_step 'Install golang' install_golang
 run_step 'Install mise-managed tools' install_mise_tools
+run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
 run_step 'Configure signed Git commits' configure_git
 run_step 'Disable commit identity trailers' configure_amp_commit_privacy
 run_step 'Stop supervised container runtimes before updating them' stop_supervised_runtimes
-run_step "Install Docker $DOCKER_VERSION tools" install_docker_tools
+run_step 'Install Docker tools' install_docker_tools
 run_step "Install nerdctl $NERDCTL_VERSION full bundle" install_nerdctl_tools
 run_step 'Grant the orb user access to container runtime sockets' configure_runtime_access
 run_step 'Configure the supervised containerd daemon' configure_containerd
-run_step 'Install and load agent skills' install_agent_skills
 run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step 'Install and load gstack' install_gstack
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
