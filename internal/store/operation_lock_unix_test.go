@@ -115,12 +115,15 @@ func TestStateOperationLockRejectsUnsafeAndChangedEntries(t *testing.T) {
 	})
 }
 
+// TestStateOperationLockContainsDescriptorAndEntryReplacement mutates the
+// process-wide descriptor table.
+//
+//nolint:paralleltest // A parallel open could reuse the deliberately closed descriptor.
 func TestStateOperationLockContainsDescriptorAndEntryReplacement(t *testing.T) {
-	t.Parallel()
-
+	// This test deliberately closes a live process descriptor. Keep both cases
+	// serial so another test cannot reuse the descriptor number before close()
+	// observes the failure.
 	t.Run("close failure", func(t *testing.T) {
-		t.Parallel()
-
 		state := openServiceLockTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
 		operation, err := trySharedStateOperation(context.Background(), state.anchor)
 		requireNoError(t, err)
@@ -132,8 +135,6 @@ func TestStateOperationLockContainsDescriptorAndEntryReplacement(t *testing.T) {
 	})
 
 	t.Run("service writer gate replacement", func(t *testing.T) {
-		t.Parallel()
-
 		directory := privateTempDir(t)
 		state := openServiceLockTestStore(t, filepath.Join(directory, "state.db"))
 		service := requireTryServiceLock(t, state, "project", "api")
