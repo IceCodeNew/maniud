@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -49,6 +50,13 @@ func TestDarwinPeerHelpersRejectInvalidObjects(t *testing.T) {
 	if _, valid := socketMetadata(darwinFakeFileInfo{}); valid {
 		t.Fatal("socketMetadata(fake) accepted")
 	}
+	invalidOwner := uint32(os.Geteuid() + 1) //nolint:gosec // Native Unix UIDs are non-negative.
+	if _, err := authenticateSocketMetadata(darwinStatFileInfo{
+		darwinFakeFileInfo: darwinFakeFileInfo{},
+		stat:               &syscall.Stat_t{Uid: invalidOwner},
+	}); !errors.Is(err, ErrInvalidEndpoint) {
+		t.Fatalf("authenticateSocketMetadata(invalid owner) = %v", err)
+	}
 	if _, err := connectedPeer(nil); !errors.Is(err, ErrInvalidEndpoint) {
 		t.Fatalf("connectedPeer(nil) = %v", err)
 	}
@@ -68,3 +76,11 @@ func (darwinFakeFileInfo) Mode() os.FileMode  { return os.ModeSocket }
 func (darwinFakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (darwinFakeFileInfo) IsDir() bool        { return false }
 func (darwinFakeFileInfo) Sys() any           { return nil }
+
+type darwinStatFileInfo struct {
+	darwinFakeFileInfo
+
+	stat *syscall.Stat_t
+}
+
+func (info darwinStatFileInfo) Sys() any { return info.stat }
