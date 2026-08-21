@@ -7,7 +7,7 @@ if (($# > 1)); then
 fi
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-temporary_dir="$(mktemp -d)"
+temporary_dir="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$temporary_dir"' EXIT
 
 binary="${1:-$temporary_dir/maniud}"
