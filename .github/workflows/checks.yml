@@ -40,6 +40,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Read shared tool versions
         id: tool-versions
         run: |
@@ -74,7 +77,7 @@ jobs:
       # CI bounds it separately.
       - name: Run interprocedural nil analysis
         timeout-minutes: 12
-        run: nilaway -include-pkgs=github.com/IceCodeNew/maniud ./...
+        run: scripts/run-go-modules nilaway -include-pkgs=github.com/IceCodeNew/maniud ./...
       - name: Run tests, race detector, statement coverage, and branch coverage
         env:
           MANIUD_CI_RACE: 1
@@ -112,6 +115,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Verify native runner
         env:
           EXPECTED_GOOS: ${{ matrix.goos }}
@@ -159,6 +165,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Cross-build without cgo
         env:
           CGO_ENABLED: 0
