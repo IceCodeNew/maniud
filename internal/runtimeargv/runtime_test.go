@@ -2,261 +2,113 @@ package runtimeargv
 
 import (
 	"errors"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	publicargv "github.com/IceCodeNew/maniud/containerconfig/runtimeargv"
 	"github.com/IceCodeNew/maniud/internal/domain"
-	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
 const (
-	testImage            = "image:1"
-	testWorkingDirectory = "/workspace/project"
-	testService          = "service"
-	testNamedService     = "--name=service"
-	testARM64Option      = "--platform=linux/arm64"
-	testServeCommand     = "serve"
-	testInitEntrypoint   = "/init"
-	testHealthCommand    = "--health-cmd=true"
-	testExecOperation    = execOptionValue
+	wrapperWorkingDirectory = "/workspace/project"
+	wrapperImage            = "team/app:1"
 )
 
-func TestParseProjectsExecutableRuntimeSubset(t *testing.T) {
-	t.Parallel()
-
-	for _, runtimeName := range []string{dockerRuntime, podmanRuntime, nerdctlRuntime} {
-		projection, err := Parse([]string{
-			runtimeName, runOperation, detachOption, "--quiet=false", "--pull=never",
-			testNamedService, "--network", "default", testARM64Option,
-			"--entrypoint", testInitEntrypoint, "team/app:1", testServeCommand, "--flag",
-		}, testService, testWorkingDirectory)
-		if err != nil {
-			t.Fatalf("Parse(%s) error = %v", runtimeName, err)
-		}
-		if projection.Name() != testService || projection.Source().String() != "docker.io/team/app:1" ||
-			projection.Platform() != (domain.Platform{
-				OS: linuxOS, Architecture: arm64Architecture, Variant: arm64Variant,
-			}) ||
-			!slices.Equal(projection.service.Entrypoint, []string{testInitEntrypoint}) ||
-			!slices.Equal(projection.service.Command, []string{testServeCommand, "--flag"}) ||
-			len(projection.Warnings()) != 3 {
-			t.Fatalf("Parse(%s) = %#v", runtimeName, projection)
-		}
-		warnings := projection.Warnings()
-		warnings[0].Option = "changed"
-		if projection.Warnings()[0].Option == "changed" {
-			t.Fatal("Warnings returned mutable state")
-		}
-	}
-}
-
-func TestParseAcceptsSafeExecutionOnlyOptions(t *testing.T) {
+func TestProjectionBindsImmutableImage(t *testing.T) {
 	t.Parallel()
 
 	projection, err := Parse([]string{
-		dockerRuntime, runOperation, "-d=true", "-q", "--rm=false", "--sig-proxy=true",
-		"--attach=stdout", "-a", "stderr", "--detach-keys", "ctrl-x", "--", testImage,
-	}, "", testWorkingDirectory)
-	if err != nil || len(projection.Warnings()) != 6 {
-		t.Fatalf("Parse(ignored options) = %#v, %v", projection, err)
-	}
-}
-
-func TestWorkloadCanonicalizesInheritedProcessAndHealthDefaults(t *testing.T) {
-	t.Parallel()
-
-	projection, err := Parse([]string{
-		dockerRuntime, createOperation, "--entrypoint=/debug", testHealthCommand,
-		"--health-retries=0", testImage,
-	}, testService, testWorkingDirectory)
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	digest := domain.Hash([]byte("runtime defaults"))
-	reference, err := projection.Source().Pin(digest)
-	if err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	workload, err := projection.Workload(domain.ImageIdentity{
-		Origin: domain.ImageOriginRegistry, Reference: reference.String(), ReferenceDigest: digest,
-		Platform: projection.Platform(), Entrypoint: []string{testInitEntrypoint}, Command: []string{"serve"},
-	})
-	if err != nil {
-		t.Fatalf("Workload() error = %v", err)
-	}
-	if !slices.Equal(workload.Entrypoint, []string{"/debug"}) || workload.Command == nil ||
-		len(workload.Command) != 0 || workload.Healthcheck == nil || workload.Healthcheck.Retries != nil {
-		t.Fatalf("Workload() = %#v", workload)
-	}
-}
-
-//nolint:cyclop // One test keeps source projection and every rejected identity variant adjacent.
-func TestParseSourceAndWorkload(t *testing.T) {
-	t.Parallel()
-
-	projection, err := ParseSource("team/my_app:1", "")
-	if err != nil {
-		t.Fatalf("ParseSource() error = %v", err)
-	}
-	if projection.Name() != "my-app" || projection.Platform().OS != linuxOS ||
-		projection.Platform().Architecture != runtime.GOARCH {
-		t.Fatalf("ParseSource() = %#v", projection)
-	}
-	digest, err := domain.ParseDigest("sha256:" + strings.Repeat("a", 64))
+		publicargv.RuntimeNerdctl, publicargv.OperationCreate,
+		"--entrypoint=/debug", wrapperImage, "serve",
+	}, "service", wrapperWorkingDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := domain.ImageIdentity{
-		Origin:          domain.ImageOriginRegistry,
-		Reference:       "docker.io/team/my_app:1@" + digest.String(),
-		ReferenceDigest: digest, Platform: projection.Platform(),
+	digest := domain.Hash([]byte("runtime argv wrapper"))
+	reference, err := projection.Source().Pin(digest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	workload, err := projection.Workload(identity)
-	if err != nil || workload.ServiceName != "my-app" || workload.Platform != identity.Platform {
+	image := domain.ImageIdentity{
+		Origin: domain.ImageOriginRegistry, Reference: reference.String(), ReferenceDigest: digest,
+		Platform: projection.Platform(), Entrypoint: []string{"/init"}, Command: []string{"default"},
+	}
+	workload, err := projection.Workload(image)
+	if err != nil || workload.ServiceName != "service" ||
+		!slices.Equal(workload.Entrypoint, []string{"/debug"}) || !slices.Equal(workload.Command, []string{"serve"}) {
 		t.Fatalf("Workload() = %#v, %v", workload, err)
 	}
-	mismatchedPlatform := domain.Platform{OS: linuxOS, Architecture: amd64Architecture}
-	if identity.Platform.Architecture == amd64Architecture {
-		mismatchedPlatform = domain.Platform{
-			OS: linuxOS, Architecture: arm64Architecture, Variant: arm64Variant,
-		}
-	}
-
-	invalid := []domain.ImageIdentity{
-		{},
-		{Origin: domain.ImageOriginDockerArchive, Reference: identity.Reference,
-			ReferenceDigest: digest, Platform: identity.Platform},
-		{Origin: domain.ImageOriginRegistry, Reference: identity.Reference,
-			ReferenceDigest: digest, Platform: mismatchedPlatform},
-		{Origin: domain.ImageOriginRegistry, Reference: "docker.io/team/other:1@" + digest.String(),
-			ReferenceDigest: digest, Platform: identity.Platform},
-	}
-	for _, value := range invalid {
-		if _, err = projection.Workload(value); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("Workload(%#v) error = %v", value, err)
-		}
-	}
+	assertProjectionMetadata(t, projection)
 }
 
-func TestParseRejectsUnsupportedOrLossyArguments(t *testing.T) {
-	t.Parallel()
-
-	tests := [][]string{
-		nil,
-		{"crictl", runOperation, testImage},
-		{dockerRuntime, testExecOperation, testImage},
-		{dockerRuntime, runOperation, "-", testImage},
-		{dockerRuntime, runOperation, "--name"},
-		{dockerRuntime, runOperation, "--name=", testImage},
-		{dockerRuntime, runOperation, "--network=host", testImage},
-		{dockerRuntime, runOperation, "--platform=windows/amd64", testImage},
-		{dockerRuntime, runOperation, "--entrypoint=", testImage},
-		{dockerRuntime, runOperation, "--detach=maybe", testImage},
-		{dockerRuntime, createOperation, detachOption, testImage},
-		{dockerRuntime, createOperation, "--attach=stdout", testImage},
-		{dockerRuntime, runOperation, "--pull=sometimes", testImage},
-		{dockerRuntime, runOperation, "--attach=logs", testImage},
-		{dockerRuntime, runOperation, "--detach-keys=", testImage},
-		{dockerRuntime, runOperation},
-		{dockerRuntime, runOperation, "bad@@reference"},
-		{dockerRuntime, runOperation, testImage, "bad\x00command"},
-	}
-	for _, arguments := range tests {
-		if _, err := Parse(arguments, "", testWorkingDirectory); !errors.Is(err, ErrInvalid) {
-			t.Errorf("Parse(%q) error = %v", arguments, err)
-		}
-	}
-	if _, err := Parse([]string{dockerRuntime, runOperation, testImage}, "", "relative"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("Parse(relative cwd) error = %v", err)
-	}
-}
-
-func TestParseRejectsConflictsAndAcceptsCanonicalDuplicates(t *testing.T) {
-	t.Parallel()
-
-	valid, err := Parse([]string{
-		dockerRuntime, createOperation, "--network=default", "--network=bridge",
-		testARM64Option, "--platform=linux/arm64/v8", testNamedService, testNamedService, testImage,
-	}, testService, testWorkingDirectory)
-	if err != nil || valid.Name() != testService {
-		t.Fatalf("Parse(canonical duplicates) = %#v, %v", valid, err)
-	}
-	runtimeNamed, err := Parse(
-		[]string{dockerRuntime, createOperation, "--name=runtime-name", testImage},
-		"",
-		testWorkingDirectory,
-	)
-	if err != nil || runtimeNamed.Name() != "runtime-name" {
-		t.Fatalf("Parse(runtime name) = %#v, %v", runtimeNamed, err)
-	}
-
-	for _, arguments := range [][]string{
-		{dockerRuntime, runOperation, "--name=one", "--name=two", testImage},
-		{dockerRuntime, runOperation, "--entrypoint=/one", "--entrypoint=/two", testImage},
-	} {
-		if _, err = Parse(arguments, "", testWorkingDirectory); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("Parse(conflict %q) error = %v", arguments, err)
-		}
-	}
-	_, err = Parse(
-		[]string{dockerRuntime, runOperation, "--name=one", testImage},
-		"two",
-		testWorkingDirectory,
-	)
-	if !errors.Is(err, ErrInvalid) {
-		t.Fatalf("Parse(conflicting explicit name) error = %v", err)
-	}
-}
-
-func TestPlatformAndInternalValidationBoundaries(t *testing.T) {
-	t.Parallel()
-
-	for _, architecture := range []string{"386", ""} {
-		if _, err := parseSourceForArchitecture(testImage, "", architecture); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("parseSourceForArchitecture(%q) error = %v", architecture, err)
-		}
-	}
-	amd64Projection, err := parseSourceForArchitecture(testImage, "", amd64Architecture)
-	if err != nil || amd64Projection.Platform() != (domain.Platform{OS: linuxOS, Architecture: amd64Architecture}) {
-		t.Fatalf("parseSourceForArchitecture(amd64) = %#v, %v", amd64Projection, err)
-	}
-	arm64Projection, err := parseSourceForArchitecture(testImage, "", arm64Architecture)
-	if err != nil || arm64Projection.Platform().Variant != arm64Variant {
-		t.Fatalf("parseSourceForArchitecture(arm64) = %#v, %v", arm64Projection, err)
-	}
-
-	testInternalValidationBoundaries(t)
-}
-
-func testInternalValidationBoundaries(t *testing.T) {
+func assertProjectionMetadata(t *testing.T, projection Projection) {
 	t.Helper()
 
-	_, err := Parse(
-		[]string{dockerRuntime, runOperation, "--platform=amd64", testImage},
-		"",
-		testWorkingDirectory,
-	)
-	if !errors.Is(err, ErrInvalid) {
-		t.Fatalf("Parse(malformed platform) error = %v", err)
+	if projection.Name() != "service" || projection.Runtime() != publicargv.RuntimeNerdctl ||
+		projection.Source().String() != "docker.io/team/app:1" || len(projection.EnvironmentFiles()) != 0 ||
+		len(projection.Warnings()) != 0 {
+		t.Fatalf("Projection = %#v", projection)
+	}
+}
+
+func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Parse(nil, "", wrapperWorkingDirectory); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Parse(nil) error = %v", err)
 	}
 	if _, err := ParseSource("bad@@reference", ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("ParseSource(invalid) error = %v", err)
 	}
-	if _, err := ParseSource(testImage, "Bad Name"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("ParseSource(invalid name) error = %v", err)
+	if _, err := newProjection(domain.WorkloadSpec{}, "", domain.Platform{}, nil, nil, ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("newProjection(zero) error = %v", err)
 	}
-	if _, err := canonicalScalar("unknown", "x"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("canonicalScalar(unknown) error = %v", err)
+
+	projection, err := ParseSource(wrapperImage, "service")
+	if err != nil {
+		t.Fatal(err)
 	}
-	parser := newArgvParser(runOperation, []string{dockerRuntime, runOperation, testImage})
-	if err := parser.setScalar("unknown", "x"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("setScalar(unknown) error = %v", err)
+	digest := domain.Hash([]byte("runtime argv invalid proof"))
+	reference, err := projection.Source().Pin(digest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	parser.seenScalars[platformField] = "invalid"
-	parser.service.ContainerName = testService
-	if _, err := parser.finish("", imageref.Source{}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("finish(invalid platform) error = %v", err)
+	valid := domain.ImageIdentity{
+		Origin: domain.ImageOriginRegistry, Reference: reference.String(), ReferenceDigest: digest,
+		Platform: projection.Platform(),
+	}
+	otherDigest := domain.Hash([]byte("other"))
+	for _, image := range []domain.ImageIdentity{
+		{},
+		{Origin: domain.ImageOriginDockerArchive, Reference: valid.Reference,
+			ReferenceDigest: digest, Platform: valid.Platform},
+		{Origin: domain.ImageOriginRegistry, Reference: valid.Reference,
+			ReferenceDigest: otherDigest, Platform: valid.Platform},
+		{Origin: domain.ImageOriginRegistry, Reference: "docker.io/team/other:1@" + digest.String(),
+			ReferenceDigest: digest, Platform: valid.Platform},
+	} {
+		if _, err := projection.Workload(image); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Workload(%#v) error = %v", image, err)
+		}
+	}
+	if !strings.HasPrefix(valid.Reference, "docker.io/") {
+		t.Fatalf("normalized reference = %q", valid.Reference)
+	}
+}
+
+func TestProjectionSelectsClientAdapter(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Parse([]string{
+		publicargv.RuntimeDocker, publicargv.OperationCreate, wrapperImage,
+	}, "", wrapperWorkingDirectory); err != nil {
+		t.Fatalf("Parse(valid Docker) error = %v", err)
+	}
+	if _, err := Parse([]string{
+		publicargv.RuntimeNerdctl, publicargv.OperationCreate,
+		"--health-cmd=true", "--health-start-interval=1s", wrapperImage,
+	}, "", wrapperWorkingDirectory); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Parse(invalid nerdctl) error = %v", err)
 	}
 }
