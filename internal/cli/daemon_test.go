@@ -49,9 +49,8 @@ func TestExecuteDaemonStopsPollingWhenCancelled(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Parallel Git-heavy tests can exhaust the polling deadline on macOS race runs.
 func TestExecuteDaemonReconcilesRegisteredRepositoryOnce(t *testing.T) {
-	t.Parallel()
-
 	home := t.TempDir()
 	root := initGitOpsTestRepository(t)
 	environment := map[string]string{homeKey: home}
@@ -70,7 +69,7 @@ func TestExecuteDaemonReconcilesRegisteredRepositoryOnce(t *testing.T) {
 		t.Fatalf("executeDaemon(once) error = %v", err)
 	}
 
-	timed, cancel := context.WithTimeout(t.Context(), time.Second)
+	timed, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	err = executeDaemon(
 		timed, daemonInvocation{interval: time.Hour}, io.Discard, environment, io.Discard,
