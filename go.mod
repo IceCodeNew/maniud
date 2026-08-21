@@ -7,6 +7,7 @@ toolchain go1.26.6
 require (
 	github.com/IceCodeNew/maniud/containerconfig v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/compose v0.1.0
+	github.com/IceCodeNew/maniud/imageref v0.1.0
 	github.com/compose-spec/compose-go/v2 v2.14.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -40,4 +41,5 @@ require (
 replace (
 	github.com/IceCodeNew/maniud/containerconfig => ./containerconfig
 	github.com/IceCodeNew/maniud/containerconfig/compose => ./containerconfig/compose
+	github.com/IceCodeNew/maniud/imageref => ./imageref
 )
