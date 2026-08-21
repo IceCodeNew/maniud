@@ -260,9 +260,10 @@ func TestDiagnosticCallSiteBounds(t *testing.T) {
 	}
 }
 
+//go:noinline
 func deepDiagnosticCallSites(depth int) ([]string, bool) {
 	if depth == 0 {
-		return diagnosticCallSites(newDiagnosticRedactor(map[string]string{"PATH_SEPARATOR": "/"}))
+		return diagnosticCallSites(newDiagnosticRedactor(nil))
 	}
 
 	return deepDiagnosticCallSites(depth - 1)
