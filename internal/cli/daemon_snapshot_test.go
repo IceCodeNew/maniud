@@ -29,7 +29,7 @@ func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T
 
 		return testComposeSource(t), nil
 	}
-	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	statePath := privateStatePath(t)
 	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
 		return store.Open(ctx, statePath)
 	}
@@ -66,7 +66,7 @@ func TestReconcileGitOpsSnapshotMutatesValidatedServices(t *testing.T) {
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return testComposeSource(t), nil
 	}
-	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	statePath := privateStatePath(t)
 	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
 		return store.Open(ctx, statePath)
 	}
@@ -105,7 +105,7 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return testComposeSource(t), nil
 	}
-	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	statePath := privateStatePath(t)
 	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
 		return store.Open(ctx, statePath)
 	}
@@ -139,7 +139,7 @@ func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
 		&applyReaderFixture{events: &events},
 		&applyRuntimeFixture{events: &events},
 	)
-	statePath := filepath.Join(t.TempDir(), "maniud", stateDatabaseName)
+	statePath := privateStatePath(t)
 	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
 		return store.Open(ctx, statePath)
 	}

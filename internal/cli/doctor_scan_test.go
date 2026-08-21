@@ -73,11 +73,10 @@ func TestScanBackupRootRejectsInvalidEntries(t *testing.T) {
 			},
 		},
 		{
-			name: "duplicate transaction",
+			name: "noncanonical directory name",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				publication := publishDoctorBackup(t, root)
-				upper := strings.ToUpper(publication.Manifest.TransactionID.String())
+				upper := strings.ToUpper(backup.Identifier{0xab}.String())
 				requireDoctorTestNoError(t, os.Mkdir(filepath.Join(root, upper), 0o700))
 			},
 		},
@@ -121,6 +120,9 @@ func TestScanBackupRootReportsReadAndCancellationFailures(t *testing.T) {
 	}
 	if _, valid := parseBackupDirectoryName("00"); valid {
 		t.Fatal("parseBackupDirectoryName(short) succeeded")
+	}
+	if _, valid := parseBackupDirectoryName(strings.ToUpper(backup.Identifier{0xab}.String())); valid {
+		t.Fatal("parseBackupDirectoryName(uppercase) succeeded")
 	}
 }
 
