@@ -246,7 +246,7 @@ func TestPortDeviceHostSysctlAndUlimitBoundaries(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,funlen // This test intentionally keeps the related parser-boundary matrix in one audit surface.
+//nolint:cyclop,funlen,gocognit,gocyclo // The related parser-boundary matrix forms one audit surface.
 func TestHealthAndParserInternalFailureBoundaries(t *testing.T) {
 	t.Parallel()
 
