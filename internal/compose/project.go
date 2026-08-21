@@ -1,11 +1,11 @@
 package compose
 
 import (
-	"reflect"
 	"slices"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
+	containercompose "github.com/IceCodeNew/maniud/containerconfig/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
@@ -85,9 +85,10 @@ func (project Project) service(serviceName string) (composetypes.ServiceConfig, 
 
 	selected, serviceFound := selectedService(project.value, serviceName)
 	archive, isArchive := project.archives[selected.Name]
-	if !serviceFound || serviceUsesUnsupportedFields(selected, isArchive) ||
-		!validContainerName(selected.ContainerName) ||
-		selected.NetworkMode != composeBridgeNetwork {
+	if !serviceFound || containercompose.ValidateService(
+		selected,
+		containercompose.ServiceOptions{AllowPullPolicy: isArchive},
+	) != nil {
 		return composetypes.ServiceConfig{}, ErrInvalidSource
 	}
 	if isArchive && !validArchiveService(selected.Image, selected.Platform, selected.PullPolicy, archive) {
@@ -159,55 +160,4 @@ func projectUsesUnsupportedFields(
 
 	return len(project.Networks) != 0 || len(project.Volumes) != 0 || len(project.Secrets) != 0 ||
 		len(project.Configs) != 0 || len(project.Models) != 0 || !extensionsValid
-}
-
-func serviceUsesUnsupportedFields(service composetypes.ServiceConfig, archive bool) bool {
-	value := reflect.ValueOf(service)
-	valueType := value.Type()
-
-	for index := range valueType.NumField() {
-		if supportedServiceField(valueType.Field(index).Name, archive) {
-			continue
-		}
-
-		if !value.Field(index).IsZero() {
-			return true
-		}
-	}
-
-	return false
-}
-
-func supportedServiceField(name string, archive bool) bool {
-	switch name {
-	case "BlkioConfig", "CapAdd", "CapDrop", "CgroupParent", "Cgroup", "CPUS", "Command",
-		"ContainerName", "Devices", "DNS", "DNSOpts", "DNSSearch", "Entrypoint", "Environment",
-		"Expose", "ExtraHosts", "GroupAdd", "HealthCheck", "Hostname", "Image", "Init", "Labels", "MemLimit",
-		"Name", "NetworkMode", "OomKillDisable", "OomScoreAdj", "PidsLimit", "Platform", "Ports",
-		"Profiles", "ReadOnly", "Restart", "SecurityOpt", "ShmSize", "StdinOpen", "StopGracePeriod",
-		"StopSignal", "Sysctls", "Tmpfs", "Tty", "Ulimits", "User", "Volumes", "WorkingDir":
-		return true
-	case "PullPolicy":
-		return archive
-	default:
-		return false
-	}
-}
-
-func validContainerName(name string) bool {
-	if len(name) == 0 || len(name) > 63 || !lowerAlphaNumeric(name[0]) || !lowerAlphaNumeric(name[len(name)-1]) {
-		return false
-	}
-
-	for index := 1; index < len(name)-1; index++ {
-		if name[index] != '-' && !lowerAlphaNumeric(name[index]) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func lowerAlphaNumeric(value byte) bool {
-	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }

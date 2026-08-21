@@ -7,16 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
-
-	composetypes "github.com/compose-spec/compose-go/v2/types"
-
-	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const (
-	composeTestDataPath         = "/data"
-	composeTestRunPath          = "/run"
 	composeTestWorkingDirectory = "/work"
 )
 
@@ -143,105 +136,9 @@ func TestMaterializeRuntimeRejectsInvalidBoundaries(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,funlen,gocognit,gocyclo // Independent adapter validation branches form one focused matrix.
-func TestWorkloadAdapterHelperSuccessAndFailureBoundaries(t *testing.T) {
+func TestRuntimeEnvironmentFiles(t *testing.T) {
 	t.Parallel()
 
-	var spec domain.WorkloadSpec
-	weight := uint16(10)
-	if !addBlkio(&spec, &composetypes.BlkioConfig{Weight: weight}) || spec.BlkioWeight == nil {
-		t.Fatal("blkio")
-	}
-	if addBlkio(&spec, &composetypes.BlkioConfig{Weight: 9}) {
-		t.Fatal("bad blkio")
-	}
-	d := composetypes.Duration(2 * time.Second)
-	if !addStopTimeout(&spec, &d) || spec.StopTimeout == nil {
-		t.Fatal("timeout")
-	}
-	badDuration := composetypes.Duration(time.Millisecond)
-	if addStopTimeout(&spec, &badDuration) {
-		t.Fatal("bad timeout")
-	}
-	if !addDevices(&spec, []composetypes.DeviceMapping{{Source: "/dev/a", Target: "/dev/b", Permissions: "rwm"}}) {
-		t.Fatal("device")
-	}
-	for _, p := range []string{"", "rr", "x"} {
-		if validDevicePermissions(p) {
-			t.Fatalf("permission %q", p)
-		}
-	}
-	if !addTmpfs(&spec, composetypes.StringList{composeTestRunPath, "/tmp:ro,size=1m"}) ||
-		addTmpfs(&spec, composetypes.StringList{"relative"}) {
-		t.Fatal("tmpfs")
-	}
-	if !addUlimits(&spec, map[string]*composetypes.UlimitsConfig{"nofile": {Soft: 1, Hard: 2}}) ||
-		addUlimits(&spec, map[string]*composetypes.UlimitsConfig{"": {}}) {
-		t.Fatal("ulimit")
-	}
-	validPorts := []composetypes.ServicePortConfig{{
-		Published: "80", Target: 81, Protocol: composeProtocolTCP, HostIP: "::1",
-	}}
-	invalidPorts := []composetypes.ServicePortConfig{{Published: "0", Target: 1, Protocol: composeProtocolTCP}}
-	if !addPorts(&spec, validPorts) || addPorts(&spec, invalidPorts) {
-		t.Fatal("ports")
-	}
-	if !validHostIP("") || validHostIP("01.2.3.4") {
-		t.Fatal("host ip")
-	}
-	if !addSecurityOptions(&spec, []string{"no-new-privileges=true"}) || addSecurityOptions(&spec, []string{"label=x"}) {
-		t.Fatal("security")
-	}
-	volumes := []composetypes.ServiceVolumeConfig{
-		{Type: "volume", Target: "/cache"},
-		{Type: "bind", Source: "/repo/data", Target: composeTestDataPath, ReadOnly: true},
-	}
-	if !addMounts(&spec, volumes, "/repo", "/runtime") || spec.Mounts[1].Source != "/runtime/data" {
-		t.Fatalf("mounts %#v", spec.Mounts)
-	}
-	if addMounts(&spec, []composetypes.ServiceVolumeConfig{{Type: "tmpfs", Target: "/x"}}, "", "") {
-		t.Fatal("mount type")
-	}
-	if !emptyVolumeOptions(nil) || emptyVolumeOptions(&composetypes.ServiceVolumeVolume{NoCopy: true}) {
-		t.Fatal("volume options")
-	}
-	zero := uint64(0)
-	health := &composetypes.HealthCheckConfig{Test: []string{contractHealth, contractTrue}, Retries: &zero}
-	if !addHealthcheck(&spec, health) || spec.Healthcheck == nil || spec.Healthcheck.Retries != nil {
-		t.Fatal("health")
-	}
-	if addHealthcheck(&spec, &composetypes.HealthCheckConfig{Disable: true, Test: []string{"NONE"}}) {
-		t.Fatal("disabled health with test")
-	}
-	if durationString(nil) != "" || durationString(&d) != "2s" {
-		t.Fatal("duration")
-	}
-	if cloneMapping(nil) != nil || clonePointer[int](nil) != nil || truePointer(false) != nil || hostsList(nil) != nil {
-		t.Fatal("nil helpers")
-	}
-}
-
-//nolint:cyclop // Each assertion exercises one independent serialization shape.
-func TestRuntimeWriterHelperCompleteShapes(t *testing.T) {
-	t.Parallel()
-
-	if got, _ := (runtimeMount{short: composeTestDataPath}).MarshalYAML(); got != composeTestDataPath {
-		t.Fatal(got)
-	}
-	gotMount, _ := (runtimeMount{bind: &runtimeBindMount{Type: "bind"}}).MarshalYAML()
-	if reflect.TypeOf(gotMount) != reflect.TypeFor[runtimeBindMount]() {
-		t.Fatal(gotMount)
-	}
-	if got, _ := (runtimeUlimit{Soft: 2, Hard: 2}).MarshalYAML(); got != int64(2) {
-		t.Fatal(got)
-	}
-	if got, _ := (runtimeUlimit{Soft: 1, Hard: 2}).MarshalYAML(); reflect.TypeOf(got).Kind() != reflect.Struct {
-		t.Fatal(got)
-	}
-	platform := domain.Platform{OS: archiveLinuxOS, Architecture: "arm64", Variant: "v8"}
-	if formatPlatform(platform) != "linux/arm64/v8" {
-		t.Fatal("platform")
-	}
 	if got, err := runtimeEnvironmentFiles(nil, composeTestWorkingDirectory); err != nil || got != nil {
 		t.Fatal(got, err)
 	}
@@ -254,23 +151,6 @@ func TestRuntimeWriterHelperCompleteShapes(t *testing.T) {
 	got, err := runtimeEnvironmentFiles([]string{"/work/a.env"}, composeTestWorkingDirectory)
 	if err != nil || !reflect.DeepEqual(got, []string{"a.env"}) {
 		t.Fatal(got, err)
-	}
-	ports := runtimePorts([]domain.PortBinding{
-		{PublishedPort: 79, TargetPort: 80, Protocol: composeProtocolTCP},
-		{HostIP: "::1", PublishedPort: 80, TargetPort: 81, Protocol: "udp"},
-	})
-	if !reflect.DeepEqual(ports, []string{"79:80", "[::1]:80:81/udp"}) {
-		t.Fatal(ports)
-	}
-	tmpfs := runtimeTmpfs([]domain.TmpfsMount{
-		{Target: composeTestRunPath},
-		{Target: "/tmp", Options: []string{"ro"}},
-	})
-	if !reflect.DeepEqual(tmpfs, []string{composeTestRunPath, "/tmp:ro"}) {
-		t.Fatal(tmpfs)
-	}
-	if runtimeUlimits(nil) != nil || len(runtimeMounts([]domain.Mount{{Kind: domain.MountVolume, Target: "/v"}})) != 1 {
-		t.Fatal("runtime helpers")
 	}
 }
 

@@ -47,6 +47,7 @@ linters:
             - "!**/internal/compose/*.go"
             - "!**/internal/imageref/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/containerconfig/compose/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -72,6 +73,7 @@ linters:
           list-mode: strict
           files:
             - "**/internal/compose/*.go"
+            - "**/containerconfig/compose/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
