@@ -120,6 +120,25 @@ func TestLinuxHostDeviceAndNamespaceBoundaries(t *testing.T) {
 	}
 }
 
+func TestLocalWorkloadHostLinuxNamespaceOperations(t *testing.T) {
+	t.Parallel()
+
+	host := localWorkloadHost{}
+	file := filepath.Join(t.TempDir(), testFileName)
+	if err := os.WriteFile(file, nil, privateFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.EnsureNetworkNamespace(file); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("EnsureNetworkNamespace(file) = %v", err)
+	}
+	if host.NetworkNamespaceMounted(file) {
+		t.Fatal("NetworkNamespaceMounted(file) accepted")
+	}
+	if err := host.DeleteNetworkNamespace(filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Fatalf("DeleteNetworkNamespace(missing) = %v", err)
+	}
+}
+
 //nolint:cyclop // The test exercises each injected namespace lifecycle boundary.
 func TestEnsureNetworkNamespaceInjectedLifecycle(t *testing.T) {
 	t.Parallel()
