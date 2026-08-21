@@ -10,8 +10,6 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
-var version = "dev"
-
 // Run parses and executes one command without terminating the process.
 func Run(ctx context.Context, args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	return runProduction(
@@ -112,7 +110,7 @@ func handleCommandPrelude(
 		return writeText(stdout, help), true
 	}
 	if len(args) == 1 && args[0] == versionOption {
-		return writeText(stdout, "maniud "+version+"\n"), true
+		return writeText(stdout, "maniud "+currentVersion()+"\n"), true
 	}
 
 	return 0, false
