@@ -568,8 +568,9 @@ func TestPodmanWorkloadPureFailClosedBranches(t *testing.T) {
 	if hasManiudLabel(map[string]string{"team": "platform"}) {
 		t.Fatal("hasManiudLabel accepted unrelated label")
 	}
-	if method, path, query := podmanWorkloadTransitionRequest(application.WorkloadTransition{Kind: 99}); method != "" || path != "" || query != nil {
-		t.Fatalf("podmanWorkloadTransitionRequest(unknown) = %q, %q, %#v", method, path, query)
+	method, requestPath, query := podmanWorkloadTransitionRequest(application.WorkloadTransition{Kind: 99})
+	if method != "" || requestPath != "" || query != nil {
+		t.Fatalf("podmanWorkloadTransitionRequest(unknown) = %q, %q, %#v", method, requestPath, query)
 	}
 	if containerConfigurationMatches(Container{}, workload) {
 		t.Fatal("containerConfigurationMatches accepted empty container")

@@ -414,6 +414,7 @@ func podmanAssertMalformedInspectScalars(t *testing.T) {
 	podmanAssertMalformedInspectResources(t)
 }
 
+//nolint:cyclop // The helper keeps resource-field boundary checks adjacent.
 func podmanAssertMalformedInspectResources(t *testing.T) {
 	t.Helper()
 	if _, valid := podmanObservedCPUs(-1, podmanCPUPeriod, 1); valid {
@@ -433,7 +434,8 @@ func podmanAssertMalformedInspectResources(t *testing.T) {
 	if _, valid := podmanObservedTmpfs(map[string]string{"": "rw"}); valid {
 		t.Fatal("podmanObservedTmpfs(invalid) = true")
 	}
-	if tmpfs, valid := podmanObservedTmpfs(map[string]string{"/run": ""}); !valid || len(tmpfs) != 1 || tmpfs[0].Options != nil {
+	tmpfs, valid := podmanObservedTmpfs(map[string]string{"/run": ""})
+	if !valid || len(tmpfs) != 1 || tmpfs[0].Options != nil {
 		t.Fatalf("podmanObservedTmpfs(no options) = %#v, %t", tmpfs, valid)
 	}
 	if _, valid := podmanObservedUlimits([]podmanInspectUlimit{{Name: "NOFILE", Soft: 1, Hard: 2}}); valid {
@@ -549,6 +551,7 @@ func podmanAssertMalformedInspectHealth(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // One matrix covers independent native mapping outcomes.
 func TestPodmanConfigurationMappingCoversRemainingValidationBranches(t *testing.T) {
 	t.Parallel()
 
@@ -581,7 +584,10 @@ func TestPodmanConfigurationMappingCoversRemainingValidationBranches(t *testing.
 	}}); !valid || len(ports) != 1 {
 		t.Fatalf("podmanCreatePorts(host IP) = %#v, %t", ports, valid)
 	}
-	if health, valid := podmanCreateHealthcheck(&domain.Healthcheck{Test: []string{podmanTestHealthCMD, "true"}}); !valid || health == nil || health.Retries != 0 {
+	health, valid := podmanCreateHealthcheck(&domain.Healthcheck{
+		Test: []string{podmanTestHealthCMD, "true"},
+	})
+	if !valid || health == nil || health.Retries != 0 {
 		t.Fatalf("podmanCreateHealthcheck(no retries) = %#v, %t", health, valid)
 	}
 	if _, _, valid := podmanCreateMounts([]domain.Mount{
