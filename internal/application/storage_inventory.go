@@ -47,7 +47,7 @@ func settleStorageInventory(
 	archives *[][]byte,
 ) (EffectPostcondition, error) {
 	var empty EffectPostcondition
-	if !validStorageInventoryRequest(mutation, runtime, inventories, archives, sources) {
+	if mutation == nil || !validStorageInventoryRequest(runtime, inventories, archives, sources) {
 		return empty, ErrInvalidRequest
 	}
 
@@ -74,13 +74,12 @@ func settleStorageInventory(
 }
 
 func validStorageInventoryRequest(
-	mutation *boundMutation,
 	runtime WorkloadArchiveRuntime,
 	inventories *[]backup.Inventory,
 	archives *[][]byte,
 	sources []backedStorageSource,
 ) bool {
-	return mutation != nil && runtime != nil && inventories != nil && archives != nil && len(sources) > 0
+	return runtime != nil && inventories != nil && archives != nil && len(sources) > 0
 }
 
 func newStorageInventoryEffect(
