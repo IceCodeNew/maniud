@@ -22,7 +22,7 @@ func testCreateOptions() application.WorkloadCreateOptions {
 	return application.WorkloadCreateOptions{CopyImageVolumes: true}
 }
 
-//nolint:gocognit,gocyclo,cyclop,funlen // This test intentionally aggregates the invalid configuration boundary matrix.
+//nolint:gocognit,gocyclo,cyclop,funlen,maintidx // One matrix covers independent invalid configuration boundaries.
 func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +132,7 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 
 	retry := 0
 	for _, value := range []*domain.Healthcheck{
-		{Disabled: true, Test: []string{"CMD", "true"}}, {Interval: "bad"}, {Retries: &retry},
+		{Disabled: true, Test: []string{dockerTestHealthCMD, dockerQueryTrue}}, {Interval: "bad"}, {Retries: &retry},
 	} {
 		if _, valid := dockerHealthcheck(value); valid {
 			t.Fatalf("dockerHealthcheck(%v) accepted", value)
@@ -143,7 +143,9 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 		disabledHealthcheck.Test[0] != dockerHealthcheckNone {
 		t.Fatal("disabled healthcheck rejected")
 	}
-	healthcheck, valid := dockerHealthcheck(&domain.Healthcheck{Test: []string{"CMD", "true"}})
+	healthcheck, valid := dockerHealthcheck(&domain.Healthcheck{
+		Test: []string{dockerTestHealthCMD, dockerQueryTrue},
+	})
 	if !valid || healthcheck == nil || healthcheck.Retries != 0 {
 		t.Fatalf("healthcheck without retries = %#v, %v", healthcheck, valid)
 	}
