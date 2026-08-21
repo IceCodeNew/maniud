@@ -278,6 +278,119 @@ func TestAdoptedBaselineRetainsUnmanagedWorkload(t *testing.T) {
 	}
 }
 
+func TestMountProbeFallbackWarningPolicy(t *testing.T) {
+	t.Parallel()
+
+	storage := persistentStorageUpgradePreparation()
+	tests := []struct {
+		name        string
+		preparation Preparation
+		warn        bool
+	}{
+		{name: "new storage upgrade", preparation: storage, warn: true},
+		{name: "new upgrade without storage", preparation: Preparation{Plan: Plan{Kind: PlanUpgrade}}},
+		{
+			name:        "resumed storage action",
+			preparation: recoveryWarningPreparation(PlanResume, store.TransactionUpgrade, storageRestoreActionKind),
+			warn:        true,
+		},
+		{
+			name: "unknown storage action", preparation: recoveryWarningPreparation(
+				PlanProbeUnknownEffect, store.TransactionUpgrade, storageRestoreActionKind,
+			),
+			warn: true,
+		},
+		{
+			name:        "restore storage action",
+			preparation: recoveryWarningPreparation(PlanRestore, store.TransactionUpgrade, storageRestoreActionKind),
+			warn:        true,
+		},
+		{
+			name: "bootstrap recovery", preparation: recoveryWarningPreparation(
+				PlanResume, store.TransactionBootstrap, storageRestoreActionKind,
+			),
+		},
+		{
+			name: "stable plan", preparation: recoveryWarningPreparation(
+				PlanUnchanged, store.TransactionUpgrade, storageRestoreActionKind,
+			),
+		},
+		{
+			name:        "upgrade recovery without storage",
+			preparation: recoveryWarningPreparation(PlanResume, store.TransactionUpgrade, workloadStopActionKind),
+		},
+		{
+			name: "invalid plan", preparation: recoveryWarningPreparation(
+				PlanKind(testInvalidValue), store.TransactionUpgrade, storageRestoreActionKind,
+			),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			assertMountProbeFallbackWarnings(t, test.preparation, test.warn)
+		})
+	}
+}
+
+func assertMountProbeFallbackWarnings(t *testing.T, preparation Preparation, warn bool) {
+	t.Helper()
+
+	warnings := mountProbeFallbackWarnings(preparation)
+	if len(warnings) == 0 {
+		if warn {
+			t.Fatalf("mountProbeFallbackWarnings() = %#v", warnings)
+		}
+
+		return
+	}
+	if !warn || len(warnings) != 1 {
+		t.Fatalf("mountProbeFallbackWarnings() = %#v", warnings)
+
+		return
+	}
+	if warnings[0].Code != WarningDaemonMountProbeUnavailable ||
+		warnings[0].Message != downgradedMountProbeMessage {
+		t.Fatalf("mountProbeFallbackWarnings() = %#v", warnings)
+	}
+}
+
+func persistentStorageUpgradePreparation() Preparation {
+	return Preparation{
+		Plan: Plan{
+			Kind: PlanUpgrade,
+			Observation: WorkloadObservation{
+				State: WorkloadObservationPresent,
+				RuntimeMounts: []domain.RuntimeMount{{
+					Kind: domain.MountVolume, Name: testVolumeName, Source: testVolumeSource,
+					Target: testVolumeTarget,
+				}},
+			},
+		},
+		Workload: domain.DesiredWorkload{WorkloadSpec: domain.WorkloadSpec{
+			Mounts: []domain.Mount{{Kind: domain.MountVolume, Target: testVolumeTarget}},
+		}},
+	}
+}
+
+func recoveryWarningPreparation(
+	kind PlanKind,
+	transactionKind store.TransactionKind,
+	actionKinds ...string,
+) Preparation {
+	actions := make([]store.Action, len(actionKinds))
+	for index, actionKind := range actionKinds {
+		actions[index].Kind = actionKind
+	}
+
+	return Preparation{
+		Plan:        Plan{Kind: kind},
+		Transaction: store.Transaction{Kind: transactionKind},
+		Actions:     actions,
+	}
+}
+
 func mutateTransaction(
 	value store.Transaction,
 	mutate func(*store.Transaction),
