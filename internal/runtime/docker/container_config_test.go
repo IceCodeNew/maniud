@@ -13,6 +13,7 @@ import (
 const (
 	dockerTestBindSource   = "/host/data"
 	dockerTestDataTarget   = "/data"
+	dockerTestHealthCMD    = "CMD"
 	dockerTestStateTarget  = "/state"
 	dockerTestTmpfsTarget  = "/tmp"
 	dockerTestVolumeName   = "anonymous-volume"
@@ -204,7 +205,7 @@ func completeDockerWorkloadSpec() domain.WorkloadSpec {
 		},
 		Init: &truth, StdinOpen: &truth, OOMKillDisable: &truth, ReadOnly: &truth, TTY: &truth,
 		Healthcheck: &domain.Healthcheck{
-			Test: []string{"CMD", "true"}, Interval: "30s", Timeout: "5s", Retries: &retries,
+			Test: []string{dockerTestHealthCMD, dockerQueryTrue}, Interval: "30s", Timeout: "5s", Retries: &retries,
 			StartPeriod: "10s", StartInterval: "1s",
 		},
 	}
