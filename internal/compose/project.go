@@ -5,7 +5,7 @@ import (
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
-	containercompose "github.com/IceCodeNew/maniud/containerconfig/compose"
+	composecodec "github.com/IceCodeNew/maniud/containerconfig/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
@@ -17,10 +17,10 @@ func (project Project) Runtime(serviceName string) (domain.RuntimeKind, error) {
 	if err != nil {
 		return "", err
 	}
-	if !project.maniud {
+	if !project.extension.present {
 		return domain.RuntimeDocker, nil
 	}
-	runtimeKind, found := project.runtimes[selected.Name]
+	runtimeKind, found := project.extension.runtimes[selected.Name]
 	if !found {
 		return "", ErrInvalidSource
 	}
@@ -79,15 +79,15 @@ func effectiveCommandArguments(service composetypes.ServiceConfig, imageDefault 
 }
 
 func (project Project) service(serviceName string) (composetypes.ServiceConfig, error) {
-	if project.value == nil || projectUsesUnsupportedFields(project.value, project.maniud) {
+	if project.value == nil || projectUsesUnsupportedFields(project.value, project.extension) {
 		return composetypes.ServiceConfig{}, ErrInvalidSource
 	}
 
 	selected, serviceFound := selectedService(project.value, serviceName)
-	archive, isArchive := project.archives[selected.Name]
-	if !serviceFound || containercompose.ValidateService(
+	archive, isArchive := project.extension.archives[selected.Name]
+	if !serviceFound || composecodec.ValidateService(
 		selected,
-		containercompose.ServiceOptions{AllowPullPolicy: isArchive},
+		composecodec.ServiceOptions{AllowPullPolicy: isArchive},
 	) != nil {
 		return composetypes.ServiceConfig{}, ErrInvalidSource
 	}
@@ -99,7 +99,7 @@ func (project Project) service(serviceName string) (composetypes.ServiceConfig, 
 }
 
 func (project Project) imageResolvesSource(service composetypes.ServiceConfig, image domain.ImageIdentity) bool {
-	if archive, found := project.archives[service.Name]; found {
+	if archive, found := project.extension.archives[service.Name]; found {
 		expected, valid := archiveIdentity(service.Image, service.Platform, service.PullPolicy, archive)
 
 		return valid && sameArchiveIdentity(image, expected)
@@ -150,14 +150,9 @@ func selectedService(project *composetypes.Project, requested string) (composety
 
 func projectUsesUnsupportedFields(
 	project *composetypes.Project,
-	maniud bool,
+	extension maniudExtension,
 ) bool {
-	extensionsValid := len(project.Extensions) == 0 && !maniud
-	if maniud {
-		_, extensionFound := project.Extensions[archiveExtensionKey]
-		extensionsValid = len(project.Extensions) == 1 && extensionFound
-	}
-
 	return len(project.Networks) != 0 || len(project.Volumes) != 0 || len(project.Secrets) != 0 ||
-		len(project.Configs) != 0 || len(project.Models) != 0 || !extensionsValid
+		len(project.Configs) != 0 || len(project.Models) != 0 ||
+		!supportsManiudProject(project.Extensions, extension)
 }

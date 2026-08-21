@@ -3,10 +3,12 @@ package compose
 import (
 	"context"
 	"errors"
-	"maps"
 	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
+
+	"github.com/IceCodeNew/maniud/internal/composeext/maniud"
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
@@ -15,8 +17,6 @@ const (
 	testManifestDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testArchiveConfig  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	testArchiveImage   = "example.com/team/archive:1"
-	testInvalidArchive = "invalid"
-	archiveServicesKey = "services"
 )
 
 func TestArchiveImageInputProjectsEmbeddedIdentity(t *testing.T) {
@@ -83,69 +83,13 @@ func TestArchiveImageInputProjectsUntaggedIndex(t *testing.T) {
 	}
 }
 
-func TestArchiveDecoderRejectsMalformedShapes(t *testing.T) {
+func TestArchiveProofConversionRejectsUnsupportedDigest(t *testing.T) {
 	t.Parallel()
 
-	validMetadata := map[string]any{
-		"kind": "docker-archive", "selector": "@0", "archive_digest": testArchiveDigest,
-		"archive_size": 10240, "archive_manifest_digest": testManifestDigest,
-		"archive_member_index": 0, archivePlatformField: "linux/amd64",
-		"reference_digest": testManifestDigest, "platform_manifest_digest": testManifestDigest,
-		"image_config_digest": testArchiveConfig,
-	}
-	for _, raw := range []map[string]any{
-		{archiveExtensionKey: testInvalidArchive},
-		{archiveExtensionKey: map[string]any{"wrong": map[string]any{}}},
-		{archiveExtensionKey: map[string]any{archiveServicesKey: testInvalidArchive}},
-		{archiveExtensionKey: map[string]any{archiveServicesKey: map[string]any{}}},
-		{archiveExtensionKey: map[string]any{archiveServicesKey: map[string]any{apiService: testInvalidArchive}}},
-		{archiveExtensionKey: map[string]any{archiveServicesKey: map[string]any{apiService: map[string]any{
-			archiveImageSourceKey: testInvalidArchive,
-		}}}},
-	} {
-		if _, _, _, valid := decodeManiudSources(
-			map[string]any{archiveExtensionKey: raw[archiveExtensionKey]},
-		); valid {
-			t.Fatalf("decodeManiudSources(%#v) accepted malformed value", raw)
-		}
-	}
-
-	unknown := maps.Clone(validMetadata)
-	delete(unknown, "kind")
-	unknown["unknown"] = "docker-archive"
-	badSourceReference := maps.Clone(validMetadata)
-	badSourceReference["source_reference"] = 1
-	badDigest := maps.Clone(validMetadata)
-	badDigest["archive_digest"] = 1
-	for _, raw := range []map[string]any{unknown, badSourceReference, badDigest} {
-		if _, valid := decodeArchiveImageSource(raw); valid {
-			t.Fatalf("decodeArchiveImageSource(%#v) accepted malformed value", raw)
-		}
-	}
-}
-
-func TestArchiveDecoderHelperBoundaries(t *testing.T) {
-	t.Parallel()
-
-	if _, valid := exactMapping(testInvalidArchive, "key"); valid {
-		t.Fatal("exactMapping accepted scalar")
-	}
-	if _, valid := exactMapping(map[string]any{"key": 1, testOtherValue: 2}, "key"); valid {
-		t.Fatal("exactMapping accepted multiple fields")
-	}
-	if optionalString(map[string]any{"value": ""}, "value") != nil ||
-		optionalString(map[string]any{"value": 1}, "value") != nil {
-		t.Fatal("optionalString accepted invalid value")
-	}
-	if _, valid := digestValue(1); valid {
-		t.Fatal("digestValue accepted non-string")
-	}
-	if validArchiveSelector("@00", 0, "") || validArchiveSelector("@0", 1, "") ||
-		validOptionalSourceReference("busybox") {
-		t.Fatal("archive selector accepted non-canonical value")
-	}
-	if _, valid := archivePlatform("linux/386"); valid {
-		t.Fatal("archivePlatform accepted unsupported platform")
+	if _, valid := archiveSourceFromProof(maniud.ArchiveProof{
+		ArchiveDigest: digest.Digest("sha512:" + strings.Repeat("a", 128)),
+	}); valid {
+		t.Fatal("archiveSourceFromProof accepted a non-SHA-256 digest")
 	}
 }
 

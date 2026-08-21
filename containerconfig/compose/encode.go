@@ -91,8 +91,8 @@ func marshalDocument(document encodedDocument) ([]byte, error) {
 			return nil, errServiceIdentity
 		}
 	}
-	extensions, ok := normalizeExtensions(document.Extensions)
-	if !ok {
+	extensions, err := NormalizeExtensions(document.Extensions)
+	if err != nil {
 		return nil, errExtensionValue
 	}
 	document.Extensions = extensions

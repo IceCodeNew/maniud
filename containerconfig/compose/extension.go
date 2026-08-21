@@ -3,9 +3,24 @@ package compose
 import (
 	"math"
 	"strings"
+
+	"github.com/IceCodeNew/maniud/containerconfig"
 )
 
 const maximumExtensionDepth = 64
+
+// NormalizeExtensions returns an owned, acyclic extension tree containing
+// only Compose x-* names and scalar, slice, or string-keyed map values.
+// Callers can pass the result to a private extension interpreter without
+// retaining values owned by a YAML decoder.
+func NormalizeExtensions(values map[string]any) (map[string]any, error) {
+	normalized, ok := normalizeExtensions(values)
+	if !ok {
+		return nil, validationError(containerconfig.ValidationInvalidValue, "")
+	}
+
+	return normalized, nil
+}
 
 func normalizeExtensions(values map[string]any) (map[string]any, bool) {
 	if values == nil {
