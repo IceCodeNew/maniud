@@ -1,6 +1,10 @@
 package domain
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/IceCodeNew/maniud/containerconfig"
+)
 
 // ImageOrigin identifies how maniud proves a desired image.
 type ImageOrigin uint8
@@ -15,11 +19,7 @@ const (
 )
 
 // Platform identifies one operating-system and architecture image target.
-type Platform struct {
-	OS           string
-	Architecture string
-	Variant      string
-}
+type Platform = containerconfig.Platform
 
 // ImageIdentity records the resolved registry and platform-specific identities.
 type ImageIdentity struct {
