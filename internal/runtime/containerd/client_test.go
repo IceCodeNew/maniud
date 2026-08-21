@@ -1,9 +1,6 @@
-//go:build linux
-
 package containerd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -12,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -229,13 +225,6 @@ func TestContainerdNilBoundaries(t *testing.T) {
 	if descriptorValue := apiDescriptor(nil); !reflect.DeepEqual(descriptorValue, ocispec.Descriptor{}) {
 		t.Fatalf("apiDescriptor(nil) = %#v", descriptorValue)
 	}
-	invalidOwner := uint32(os.Geteuid() + 1) //nolint:gosec // Native Unix UIDs are non-negative.
-	if _, err := authenticateSocketMetadata(containerdStatFileInfo{
-		fakeFileInfo: fakeFileInfo{},
-		stat:         &syscall.Stat_t{Uid: invalidOwner},
-	}); !errors.Is(err, ErrInvalidEndpoint) {
-		t.Fatalf("authenticateSocketMetadata(invalid owner) = %v", err)
-	}
 }
 
 func TestContainerdCloseAndLocalResult(t *testing.T) {
@@ -268,10 +257,22 @@ func listenTestUnix(t *testing.T, path string) net.Listener {
 	return listener
 }
 
+func testContainerdSocketPath(t *testing.T, name string) string {
+	t.Helper()
+
+	directory, err := os.MkdirTemp("/tmp", "maniud-containerd-") //nolint:usetesting // Darwin socket paths are short.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+
+	return filepath.Join(directory, name)
+}
+
 func TestConnectContainsGRPCClientConstructionFailures(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "containerd.sock")
+	path := testContainerdSocketPath(t, "containerd.sock")
 	listener := listenTestUnix(t, path)
 	t.Cleanup(func() { _ = listener.Close() })
 
@@ -383,7 +384,7 @@ func scopeTestClient(
 ) *Client {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "containerd-scope.sock")
+	path := testContainerdSocketPath(t, "containerd-scope.sock")
 	listener := listenTestUnix(t, path)
 	t.Cleanup(func() { _ = listener.Close() })
 	identity, err := inspectSocket(path)
@@ -544,7 +545,7 @@ func TestContainerdErrorClassification(t *testing.T) {
 func TestConnectedPeerRejectsClosedConnection(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "containerd.sock")
+	path := testContainerdSocketPath(t, "containerd.sock")
 	listener := listenTestUnix(t, path)
 	t.Cleanup(func() { _ = listener.Close() })
 	closedConnection, err := (&net.Dialer{}).DialContext(context.Background(), "unix", path)
@@ -562,7 +563,7 @@ func TestConnectedPeerRejectsClosedConnection(t *testing.T) {
 func TestContainerdDialRejectsIdentityChanges(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "containerd.sock")
+	path := testContainerdSocketPath(t, "containerd.sock")
 	listener := listenTestUnix(t, path)
 	identity, err := inspectSocket(path)
 	if err != nil {
@@ -608,69 +609,3 @@ func TestAPIContainerdDescriptorMapping(t *testing.T) {
 		t.Fatalf("apiDescriptor() = %#v", got)
 	}
 }
-
-func TestLinuxPeerProcessGeneration(t *testing.T) {
-	t.Parallel()
-
-	process := int32(os.Getpid()) //nolint:gosec // Linux represents a positive native PID as int32.
-	if generation, err := processStartTime(process); err != nil || generation == 0 {
-		t.Fatalf("processStartTime(current) = %d, %v", generation, err)
-	}
-	if _, err := processStartTime(-1); !errors.Is(err, ErrInvalidEndpoint) {
-		t.Fatalf("processStartTime(missing) = %v", err)
-	}
-	for _, credentials := range []*syscall.Ucred{nil, {Pid: -1}, {Pid: 1<<30 + 1}} {
-		if _, err := peerFromCredentials(credentials); !errors.Is(err, ErrInvalidEndpoint) {
-			t.Fatalf("peerFromCredentials(%#v) = %v", credentials, err)
-		}
-	}
-
-	valid := []byte("1 (containerd test) S" + strings.Repeat(" 0", processStartTimeIndex-1) + " 123")
-	if generation, err := decodeProcessStartTime(valid); err != nil || generation != 123 {
-		t.Fatalf("decodeProcessStartTime(valid) = %d, %v", generation, err)
-	}
-	for _, value := range [][]byte{
-		nil,
-		[]byte("1 (containerd test)"),
-		[]byte("1 (containerd test) S 0"),
-		[]byte("1 (containerd test) S" + strings.Repeat(" 0", processStartTimeIndex+1)),
-	} {
-		if _, err := decodeProcessStartTime(value); !errors.Is(err, ErrInvalidEndpoint) {
-			t.Fatalf("decodeProcessStartTime(%q) = %v", value, err)
-		}
-	}
-}
-
-func TestLinuxPeerProcessStatIOFailures(t *testing.T) {
-	t.Parallel()
-
-	for _, reader := range []io.ReadCloser{
-		containerdReadCloser{Reader: containerdFailingReader{}},
-		containerdReadCloser{Reader: strings.NewReader("1 (x)"), closeErr: errContainerdTest},
-		containerdReadCloser{Reader: bytes.NewReader(make([]byte, maximumProcessStatBytes+1))},
-	} {
-		if _, err := readProcessStartTime(reader); !errors.Is(err, ErrInvalidEndpoint) {
-			t.Fatalf("readProcessStartTime() = %v", err)
-		}
-	}
-}
-
-type containerdReadCloser struct {
-	io.Reader
-
-	closeErr error
-}
-
-func (reader containerdReadCloser) Close() error { return reader.closeErr }
-
-type containerdFailingReader struct{}
-
-func (containerdFailingReader) Read([]byte) (int, error) { return 0, errContainerdTest }
-
-type containerdStatFileInfo struct {
-	fakeFileInfo
-
-	stat *syscall.Stat_t
-}
-
-func (info containerdStatFileInfo) Sys() any { return info.stat }

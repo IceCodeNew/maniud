@@ -1,5 +1,3 @@
-//go:build linux
-
 package containerd
 
 import (
@@ -8,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -439,7 +436,7 @@ func connectTestContainerd(t *testing.T, state *testContainerdState) *Client {
 func startTestContainerd(t *testing.T, state *testContainerdState) (string, func()) {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "containerd.sock")
+	path := testContainerdSocketPath(t, "containerd.sock")
 	listener := listenTestUnix(t, path)
 	if err := os.Chmod(path, 0o600); err != nil {
 		_ = listener.Close()
