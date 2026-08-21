@@ -50,6 +50,7 @@ linters:
             - "!**/internal/imageref/*.go"
             - "!**/internal/registry/*.go"
             - "!**/containerconfig/compose/*.go"
+            - "!**/containerconfig/containerd/*.go"
             - "!**/containerconfig/docker/*.go"
             - "!**/internal/runtime/containerd/*.go"
             - "!**/internal/runtime/docker/*.go"
@@ -85,6 +86,14 @@ linters:
             - github.com/compose-spec/compose-go/v2
             - github.com/opencontainers/go-digest
             - go.yaml.in/yaml/v4
+        public-containerd-adapter:
+          list-mode: strict
+          files:
+            - "**/containerconfig/containerd/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/opencontainers/runtime-spec
         maniud-compose-extension:
           list-mode: strict
           files:
