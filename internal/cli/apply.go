@@ -260,14 +260,20 @@ func executeMutation(
 }
 
 type applyPlan struct {
-	DesiredDigest string `json:"desired_digest"`
-	Image         string `json:"image"`
-	Platform      string `json:"platform"`
-	Project       string `json:"project"`
-	Runtime       string `json:"runtime"`
-	Service       string `json:"service"`
-	SourceDigest  string `json:"source_digest"`
-	Status        string `json:"status"`
+	DesiredDigest string         `json:"desired_digest"`
+	Image         string         `json:"image"`
+	Platform      string         `json:"platform"`
+	Project       string         `json:"project"`
+	Runtime       string         `json:"runtime"`
+	Service       string         `json:"service"`
+	SourceDigest  string         `json:"source_digest"`
+	Status        string         `json:"status"`
+	Warnings      []applyWarning `json:"warnings,omitempty"`
+}
+
+type applyWarning struct {
+	Code    application.WarningCode `json:"code"`
+	Message string                  `json:"message"`
 }
 
 func writeApplyPlan(output io.Writer, plan application.Plan) error {
@@ -280,6 +286,7 @@ func writeApplyPlan(output io.Writer, plan application.Plan) error {
 		Service:       plan.Service,
 		SourceDigest:  plan.Source.String(),
 		Status:        string(plan.Kind),
+		Warnings:      applyWarnings(plan.Warnings),
 	}
 
 	err := json.NewEncoder(output).Encode(encoded)
@@ -288,6 +295,19 @@ func writeApplyPlan(output io.Writer, plan application.Plan) error {
 	}
 
 	return nil
+}
+
+func applyWarnings(warnings []application.Warning) []applyWarning {
+	if len(warnings) == 0 {
+		return nil
+	}
+
+	result := make([]applyWarning, len(warnings))
+	for index, warning := range warnings {
+		result[index] = applyWarning{Code: warning.Code, Message: warning.Message}
+	}
+
+	return result
 }
 
 func platformString(platform domain.Platform) string {

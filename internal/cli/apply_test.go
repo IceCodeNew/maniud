@@ -363,6 +363,28 @@ func TestExecuteMutationEmitsPlanAfterClosingResources(t *testing.T) {
 	}
 }
 
+func TestWriteApplyPlanEmitsStableWarnings(t *testing.T) {
+	t.Parallel()
+
+	output := new(bytes.Buffer)
+	plan := application.Plan{
+		Kind: application.PlanUpgrade,
+		Warnings: []application.Warning{{
+			Code: application.WarningDaemonMountProbeUnavailable, Message: "capacity proof unavailable",
+		}},
+	}
+	if err := writeApplyPlan(output, plan); err != nil {
+		t.Fatalf("writeApplyPlan() error = %v", err)
+	}
+
+	var got applyPlan
+	if err := jsonDecode(output, &got); err != nil || len(got.Warnings) != 1 ||
+		got.Warnings[0].Code != application.WarningDaemonMountProbeUnavailable ||
+		got.Warnings[0].Message != "capacity proof unavailable" {
+		t.Fatalf("writeApplyPlan() = %#v, %v", got, err)
+	}
+}
+
 //nolint:funlen // The table keeps mutation resource ownership and error precedence together.
 func TestExecuteMutationContainsOpenRunAndOutputFailures(t *testing.T) {
 	t.Parallel()
