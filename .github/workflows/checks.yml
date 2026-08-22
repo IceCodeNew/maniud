@@ -136,6 +136,8 @@ jobs:
         if: matrix.goos == 'darwin'
         env:
           CGO_ENABLED: 1
+          MANIUD_BRANCH_BASELINE_GOARCH: amd64
+          MANIUD_BRANCH_BASELINE_GOOS: linux
           MANIUD_CI_RACE: 1
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         with:
