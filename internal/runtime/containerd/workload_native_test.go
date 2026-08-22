@@ -201,6 +201,7 @@ func TestNativeSnapshotImageAndMountEvidence(t *testing.T) {
 
 	parent := domain.Hash([]byte("parent")).String()
 	identifier := testWorkloadName
+	imageReference := "example.com/team/api@" + parent
 	backend := &nativeWorkloadBackendV1{
 		snapshots: fakeSnapshotsAPI{stat: func(
 			request *snapshotsapi.StatSnapshotRequest,
@@ -210,15 +211,23 @@ func TestNativeSnapshotImageAndMountEvidence(t *testing.T) {
 			}}, nil
 		}},
 		images: fakeImagesClient{response: &imagesapi.GetImageResponse{Image: &imagesapi.Image{
-			Name: testImageValue, Target: &api.Descriptor{Digest: parent},
+			Name: imageReference, Target: &api.Descriptor{Digest: parent},
 		}}},
 		options: DefaultWorkloadOptions(),
 	}
 	if err := backend.requireSnapshot(context.Background(), identifier, parent); err != nil {
 		t.Fatalf("requireSnapshot() = %v", err)
 	}
-	if err := backend.requireImage(context.Background(), testImageValue, parent); err != nil {
+	if err := backend.requireImage(context.Background(), imageReference, parent); err != nil {
 		t.Fatalf("requireImage() = %v", err)
+	}
+	backend.images = fakeImagesClient{response: &imagesapi.GetImageResponse{Image: &imagesapi.Image{
+		Name: imageReference, Target: &api.Descriptor{Digest: domain.Hash([]byte("other image")).String()},
+	}}}
+	if err := backend.requireImage(
+		context.Background(), imageReference, parent,
+	); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("requireImage(digest mismatch) = %v", err)
 	}
 
 	values := []*api.Mount{{Type: bindMountType, Source: testSourcePath, Options: []string{"ro"}}}

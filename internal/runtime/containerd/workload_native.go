@@ -22,6 +22,7 @@ import (
 	containerdconfig "github.com/IceCodeNew/maniud/containerconfig/containerd"
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/imageref"
 )
 
 const (
@@ -397,13 +398,17 @@ func (backend *nativeWorkloadBackendV1) requireImage(
 	reference string,
 	referenceDigest string,
 ) error {
-	response, err := backend.images.Get(ctx, &imagesapi.GetImageRequest{Name: reference})
-	if err != nil {
-		return classifyRPCError(err)
+	source, err := imageref.Normalize(reference)
+	digestValue, digestErr := domain.ParseDigest(referenceDigest)
+	pinned, pinErr := source.Pin(digestValue)
+	if err != nil || digestErr != nil || pinErr != nil || pinned.String() != reference {
+		return ErrProtocol
 	}
-	image := response.GetImage()
-	if image == nil || image.GetName() != reference || image.GetTarget() == nil ||
-		image.GetTarget().GetDigest() != referenceDigest {
+	image, err := localImageRecord(ctx, backend.images, source)
+	if err != nil {
+		return err
+	}
+	if image.GetTarget().GetDigest() != referenceDigest {
 		return ErrProtocol
 	}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -249,6 +250,39 @@ func TestConnectResolvesAndVerifiesCompleteLocalImage(t *testing.T) {
 	state.mutex.Unlock()
 	if !layerRead {
 		t.Fatal("ResolveLocalImage() did not verify the selected image layer")
+	}
+}
+
+func TestResolvePinnedReferenceUsesVerifiedTaggedRecord(t *testing.T) {
+	t.Parallel()
+
+	state, source, platform, _ := newTestContainerdState(t)
+	client := connectTestContainerd(t, state)
+	identity, err := client.Resolve(context.Background(), source, platform)
+	if err != nil {
+		t.Fatalf("Resolve(tagged) error = %v", err)
+	}
+	pinned, err := imageref.Normalize(identity.Reference)
+	if err != nil {
+		t.Fatalf("Normalize(pinned) error = %v", err)
+	}
+	if _, err = localImageRecord(context.Background(), nil, pinned); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("localImageRecord(nil client) error = %v", err)
+	}
+	resolved, err := client.Resolve(context.Background(), pinned, platform)
+	if err != nil || !reflect.DeepEqual(resolved, identity) {
+		t.Fatalf("Resolve(pinned) = %#v, %v", resolved, err)
+	}
+	requestContext, cancel := client.operationContext(context.Background())
+	defer cancel()
+	backend, ok := client.workloads.(*nativeWorkloadBackendV1)
+	if !ok {
+		t.Fatalf("workload backend = %T", client.workloads)
+	}
+	if err = backend.requireImage(
+		requestContext, identity.Reference, identity.ReferenceDigest.String(),
+	); err != nil {
+		t.Fatalf("requireImage(pinned tagged record) = %v", err)
 	}
 }
 
