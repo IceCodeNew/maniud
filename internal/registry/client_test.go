@@ -1,0 +1,419 @@
+package registry
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/registry"
+	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/auth"
+	"oras.land/oras-go/v2/registry/remote/retry"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
+)
+
+func TestNewRepositoryUsesExplicitCredentialsAndTLS(t *testing.T) {
+	t.Parallel()
+
+	reference, err := registry.ParseReference("docker.io/library/api:1")
+	if err != nil {
+		t.Fatalf("ParseReference() error = %v", err)
+	}
+
+	wantCredential := Credentials{
+		Username:     testUsername,
+		Password:     testPassword,
+		RefreshToken: testRefreshToken,
+		AccessToken:  testAccessToken,
+	}
+
+	value, err := newRepository(reference, wantCredential)
+	if err != nil {
+		t.Fatalf("newRepository() error = %v", err)
+	}
+
+	assertRepositoryConfiguration(t, value)
+	assertRepositoryCredential(t, value, wantCredential)
+}
+
+func assertRepositoryConfiguration(t *testing.T, repository *remote.Repository) {
+	t.Helper()
+
+	if repository.PlainHTTP || repository.Reference.Registry != dockerRegistryName ||
+		repository.Reference.Repository != "library/api" || repository.MaxMetadataBytes != maximumManifestBytes ||
+		!slices.Equal(repository.ManifestMediaTypes, acceptedManifestMediaTypes()) {
+		t.Fatalf("newRepository() = %#v", repository)
+	}
+}
+
+func assertRepositoryCredential(t *testing.T, repository *remote.Repository, want Credentials) {
+	t.Helper()
+
+	authClient, valid := repository.Client.(*auth.Client)
+	if !valid {
+		t.Fatalf("repository client type = %T", repository.Client)
+	}
+
+	got, err := authClient.Credential(context.Background(), "registry-1.docker.io")
+	if err != nil || got.Username != want.Username || got.Password != want.Password ||
+		got.RefreshToken != want.RefreshToken || got.AccessToken != want.AccessToken {
+		t.Fatalf("credential = %#v, %v", got, err)
+	}
+}
+
+func TestNewRepositoryRejectsInvalidReference(t *testing.T) {
+	t.Parallel()
+
+	_, err := newRepository(
+		registry.Reference{Registry: "bad host", Repository: testImageName},
+		Credentials{},
+	)
+	if err == nil {
+		t.Fatal("newRepository() accepted invalid reference")
+	}
+}
+
+func TestRegistryHTTPClientPolicy(t *testing.T) {
+	t.Parallel()
+
+	client := newHTTPClient()
+	if client.Timeout != registryTimeout || client.CheckRedirect == nil {
+		t.Fatalf("newHTTPClient() = %#v", client)
+	}
+
+	retryTransport, valid := client.Transport.(*retry.Transport)
+	if !valid {
+		t.Fatalf("transport type = %T", client.Transport)
+	}
+
+	transport, valid := retryTransport.Base.(*http.Transport)
+	if !valid || transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion != tls.VersionTLS12 ||
+		transport.Proxy == nil || transport.DialContext == nil {
+		t.Fatalf("base transport = %#v", retryTransport.Base)
+	}
+}
+
+func TestSafeRedirect(t *testing.T) {
+	t.Parallel()
+
+	origin := &http.Request{URL: mustURL(t, "https://registry.example/v2/")}
+
+	tests := []struct {
+		name     string
+		request  *http.Request
+		previous []*http.Request
+		want     error
+	}{
+		{
+			name:     "same HTTPS origin",
+			request:  &http.Request{URL: mustURL(t, "https://registry.example/v2/team/api")},
+			previous: []*http.Request{origin},
+		},
+		{
+			name:     "HTTP downgrade",
+			request:  &http.Request{URL: mustURL(t, "http://registry.example/v2/team/api")},
+			previous: []*http.Request{origin},
+			want:     ErrProtocol,
+		},
+		{
+			name: "authorization crosses host",
+			request: &http.Request{
+				URL:    mustURL(t, "https://other.example/v2/team/api"),
+				Header: http.Header{"Authorization": {"Bearer secret"}},
+			},
+			previous: []*http.Request{origin},
+			want:     ErrProtocol,
+		},
+		{
+			name:     "too many redirects",
+			request:  &http.Request{URL: mustURL(t, "https://registry.example/v2/team/api")},
+			previous: []*http.Request{origin, origin, origin},
+			want:     ErrProtocol,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := safeRedirect(test.request, test.previous)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("safeRedirect() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolverRegistryBasicAuthentication(t *testing.T) {
+	t.Parallel()
+
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	configRaw, configDescriptor := configForTest(t, platform)
+	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
+	server, requests := newAuthenticatedRegistryServer(
+		t,
+		testUsername,
+		testPassword,
+		manifestRaw,
+		manifestDescriptor,
+		configRaw,
+		toOCIDescriptor(configDescriptor),
+	)
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	options := Options{
+		Credentials: func(context.Context, string) (Credentials, error) {
+			return Credentials{Username: testUsername, Password: testPassword}, nil
+		},
+	}
+	resolver := newResolver(testRepositoryFactory(t, server.Client()), options.Credentials)
+
+	result, err := resolver.Resolve(
+		context.Background(),
+		sourceForTest(t, host+"/team/api"),
+		platform,
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if result.ReferenceDigest.String() != manifestDescriptor.Digest.String() ||
+		result.ImageConfig.String() != configDescriptor.Digest.String() {
+		t.Fatalf("Resolve() = %#v", result)
+	}
+
+	for _, path := range requests() {
+		if strings.Contains(path, "/blobs/") && !strings.HasSuffix(path, configDescriptor.Digest.String()) {
+			t.Fatalf("resolver fetched layer path %q", path)
+		}
+	}
+}
+
+func TestResolverRegistryAuthenticationFailure(t *testing.T) {
+	t.Parallel()
+
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	configRaw, configDescriptor := configForTest(t, platform)
+	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
+	server, _ := newAuthenticatedRegistryServer(
+		t,
+		testUsername,
+		testPassword,
+		manifestRaw,
+		manifestDescriptor,
+		configRaw,
+		toOCIDescriptor(configDescriptor),
+	)
+	host := strings.TrimPrefix(server.URL, "https://")
+	resolver := newResolver(
+		testRepositoryFactory(t, server.Client()),
+		func(context.Context, string) (Credentials, error) {
+			return Credentials{Username: testUsername, Password: "wrong"}, nil
+		},
+	)
+
+	_, err := resolver.Resolve(context.Background(), sourceForTest(t, host+"/team/api"), platform)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestResolverRegistryBearerAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const accessToken = "test-access-token"
+
+	platform := domain.Platform{OS: testOSLinux, Architecture: testArchitectureAMD64}
+	configRaw, configDescriptor := configForTest(t, platform)
+	manifestRaw, manifestDescriptor := manifestForTest(t, configDescriptor)
+	server, tokenRequests := newBearerRegistryServer(
+		t,
+		accessToken,
+		manifestRaw,
+		manifestDescriptor,
+		configRaw,
+		toOCIDescriptor(configDescriptor),
+	)
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	resolver := newResolver(
+		testRepositoryFactory(t, server.Client()),
+		func(context.Context, string) (Credentials, error) {
+			return Credentials{Username: testUsername, Password: testPassword}, nil
+		},
+	)
+
+	result, err := resolver.Resolve(context.Background(), sourceForTest(t, host+"/team/api"), platform)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if result.ReferenceDigest.String() != manifestDescriptor.Digest.String() || tokenRequests.Load() != 1 {
+		t.Fatalf("Resolve() = %#v, token requests = %d", result, tokenRequests.Load())
+	}
+}
+
+func newBearerRegistryServer(
+	t *testing.T,
+	accessToken string,
+	manifestRaw []byte,
+	manifestDescriptor ocispec.Descriptor,
+	configRaw []byte,
+	configDescriptor ocispec.Descriptor,
+) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	tokenRequests := new(atomic.Int64)
+
+	var server *httptest.Server
+
+	server = httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/token" {
+			username, password, basic := request.BasicAuth()
+			if !basic || username != testUsername || password != testPassword {
+				response.WriteHeader(http.StatusUnauthorized)
+
+				return
+			}
+
+			tokenRequests.Add(1)
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"access_token":"` + accessToken + `"}`))
+
+			return
+		}
+
+		if request.Header.Get("Authorization") != "Bearer "+accessToken {
+			response.Header().Set(
+				"WWW-Authenticate",
+				`Bearer realm="`+server.URL+`/token",service="registry.test",scope="repository:team/api:pull"`,
+			)
+			response.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		switch request.URL.Path {
+		case "/v2/team/api/manifests/latest":
+			writeRegistryContent(response, manifestRaw, manifestDescriptor)
+		case "/v2/team/api/blobs/" + configDescriptor.Digest.String():
+			writeRegistryContent(response, configRaw, configDescriptor)
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	return server, tokenRequests
+}
+
+func testRepositoryFactory(t *testing.T, httpClient *http.Client) repositoryFactory {
+	t.Helper()
+
+	return func(
+		_ context.Context,
+		reference registry.Reference,
+		value Credentials,
+	) (Repository, error) {
+		repository, err := remote.NewRepository(reference.Registry + "/" + reference.Repository)
+		if err != nil {
+			return nil, fmt.Errorf("create test registry repository: %w", err)
+		}
+
+		repository.Client = &auth.Client{
+			Client: httpClient,
+			Credential: auth.StaticCredential(reference.Registry, auth.Credential{
+				Username: value.Username,
+				Password: value.Password,
+			}),
+			Cache: auth.NewCache(),
+		}
+		repository.ManifestMediaTypes = acceptedManifestMediaTypes()
+		repository.MaxMetadataBytes = maximumManifestBytes
+
+		return repository, nil
+	}
+}
+
+func newAuthenticatedRegistryServer(
+	t *testing.T,
+	username string,
+	password string,
+	manifestRaw []byte,
+	manifestDescriptor ocispec.Descriptor,
+	configRaw []byte,
+	configDescriptor ocispec.Descriptor,
+) (*httptest.Server, func() []string) {
+	t.Helper()
+
+	wantAuthorization := "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
+
+	var mutex sync.Mutex
+
+	var requests []string
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		mutex.Lock()
+
+		requests = append(requests, request.URL.Path)
+		mutex.Unlock()
+
+		if request.Header.Get("Authorization") != wantAuthorization {
+			response.Header().Set("Content-Type", "application/json")
+			response.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+			response.WriteHeader(http.StatusUnauthorized)
+			_, _ = response.Write([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"denied"}]}`))
+
+			return
+		}
+
+		switch request.URL.Path {
+		case "/v2/team/api/manifests/latest":
+			writeRegistryContent(response, manifestRaw, manifestDescriptor)
+		case "/v2/team/api/blobs/" + configDescriptor.Digest.String():
+			writeRegistryContent(response, configRaw, configDescriptor)
+		default:
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(http.StatusNotFound)
+			_, _ = response.Write([]byte(`{"errors":[{"code":"MANIFEST_UNKNOWN","message":"missing"}]}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	return server, func() []string {
+		mutex.Lock()
+		defer mutex.Unlock()
+
+		return slices.Clone(requests)
+	}
+}
+
+func writeRegistryContent(response http.ResponseWriter, raw []byte, descriptorValue ocispec.Descriptor) {
+	response.Header().Set("Content-Type", descriptorValue.MediaType)
+	response.Header().Set("Docker-Content-Digest", descriptorValue.Digest.String())
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(raw)
+}
+
+func mustURL(t *testing.T, value string) *url.URL {
+	t.Helper()
+
+	parsed, err := url.Parse(value)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", value, err)
+	}
+
+	return parsed
+}
