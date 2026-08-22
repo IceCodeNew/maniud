@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	composeDockerRuntime  = string(maniud.RuntimeDocker)
-	composePodmanRuntime  = string(maniud.RuntimePodman)
-	composeNerdctlRuntime = string(maniud.RuntimeNerdctl)
+	composeDockerRuntime     = string(maniud.RuntimeDocker)
+	composePodmanRuntime     = string(maniud.RuntimePodman)
+	composeContainerdRuntime = string(maniud.RuntimeContainerd)
 )
 
 type maniudExtension struct {
@@ -113,9 +113,22 @@ func internalRuntime(value maniud.Runtime) (domain.RuntimeKind, bool) {
 		return domain.RuntimeDocker, true
 	case maniud.RuntimePodman:
 		return domain.RuntimePodman, true
-	case maniud.RuntimeNerdctl:
+	case maniud.RuntimeContainerd:
 		return domain.RuntimeContainerd, true
 	default:
 		return "", false
+	}
+}
+
+func extensionRuntime(value domain.RuntimeKind) maniud.Runtime {
+	switch value {
+	case domain.RuntimeDocker:
+		return maniud.RuntimeDocker
+	case domain.RuntimePodman:
+		return maniud.RuntimePodman
+	case domain.RuntimeContainerd:
+		return maniud.RuntimeContainerd
+	default:
+		panic("encode validated runtime kind")
 	}
 }

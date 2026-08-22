@@ -29,7 +29,7 @@ func TestProjectSelectsRuntimeFromValidatedServiceMetadata(t *testing.T) {
 		{name: "plain Compose", maniud: "", want: domain.RuntimeDocker},
 		{name: "explicit Docker", maniud: "docker", want: domain.RuntimeDocker},
 		{name: "Podman", maniud: composePodmanRuntime, want: domain.RuntimePodman},
-		{name: "nerdctl image runtime", maniud: composeNerdctlRuntime, want: domain.RuntimeContainerd},
+		{name: "containerd", maniud: composeContainerdRuntime, want: domain.RuntimeContainerd},
 		{name: "metadata for another service", maniud: "other", wantErr: true},
 	}
 	for _, test := range tests {

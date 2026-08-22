@@ -14,6 +14,11 @@ import (
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
 )
 
+const (
+	runtimeTestCreateCommand    = "create"
+	runtimeTestWorkingDirectory = "/workspace"
+)
+
 func TestRenderRuntimeProducesStrictCompose(t *testing.T) {
 	t.Parallel()
 
@@ -44,7 +49,7 @@ func TestRenderRuntimeProducesStrictCompose(t *testing.T) {
 		}
 	}
 	project, err := Load(context.Background(), Source{
-		Content: rendered, WorkingDir: "/workspace",
+		Content: rendered, WorkingDir: runtimeTestWorkingDirectory,
 		Environment: map[string]string{}, Profiles: nil,
 	})
 	if err != nil {
@@ -58,17 +63,52 @@ func TestRenderRuntimeProducesStrictCompose(t *testing.T) {
 	testRuntimeRenderBoundaries(t, projection, image, digest)
 }
 
+func TestRenderNerdctlInputSelectsContainerdRuntime(t *testing.T) {
+	t.Parallel()
+
+	projection, err := runtimeargv.Parse([]string{
+		"nerdctl", runtimeTestCreateCommand, "example.com/team/image:1",
+	}, "service", runtimeTestWorkingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := domain.Hash([]byte("nerdctl runtime target"))
+	image := domain.ImageIdentity{
+		Origin: domain.ImageOriginRegistry, Reference: "example.com/team/image:1@" + digest.String(),
+		ReferenceDigest: digest, Platform: projection.Platform(),
+	}
+
+	rendered, err := RenderRuntime(context.Background(), projection, image, runtimeTestWorkingDirectory)
+	if err != nil {
+		t.Fatalf("RenderRuntime() error = %v", err)
+	}
+	if !strings.Contains(string(rendered), "runtime: containerd") ||
+		strings.Contains(string(rendered), "runtime: nerdctl") {
+		t.Fatalf("RenderRuntime() = %s", rendered)
+	}
+	project, err := Load(context.Background(), Source{
+		Content: rendered, WorkingDir: runtimeTestWorkingDirectory, Environment: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runtimeKind, runtimeErr := project.Runtime("service")
+	if runtimeErr != nil || runtimeKind != domain.RuntimeContainerd {
+		t.Fatalf("Runtime() = %q, %v", runtimeKind, runtimeErr)
+	}
+}
+
 func TestRenderRuntimeRoundTripsSharedWorkload(t *testing.T) {
 	t.Parallel()
 
 	projection, err := runtimeargv.Parse([]string{
-		composePodmanRuntime, "create", "--cpus=1.5", "--memory=512m", "--restart=always",
+		composePodmanRuntime, runtimeTestCreateCommand, "--cpus=1.5", "--memory=512m", "--restart=always",
 		"--cap-add=net_admin", "--dns=1.1.1.1", "--device=/dev/fuse:/dev/fuse:rw",
 		"--tmpfs=/cache:ro,size=2m", "--ulimit=nofile=1024:2048", "--env=FOO=bar",
 		"--label=team=platform", "--publish=127.0.0.1:8080:80", "--security-opt=no-new-privileges",
 		"--volume=/host/data:/data:ro", "--health-cmd=true", "--health-interval=30s",
 		"example.com/team/image:1", testServeCommand,
-	}, "service", "/workspace")
+	}, "service", runtimeTestWorkingDirectory)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -86,12 +126,12 @@ func TestRenderRuntimeRoundTripsSharedWorkload(t *testing.T) {
 	}
 	want.Entrypoint = []string{testInitEntrypoint}
 
-	rendered, err := RenderRuntime(context.Background(), projection, image, "/workspace")
+	rendered, err := RenderRuntime(context.Background(), projection, image, runtimeTestWorkingDirectory)
 	if err != nil {
 		t.Fatalf("RenderRuntime() error = %v", err)
 	}
 	project, err := Load(context.Background(), Source{
-		Content: rendered, WorkingDir: "/workspace", Environment: map[string]string{},
+		Content: rendered, WorkingDir: runtimeTestWorkingDirectory, Environment: map[string]string{},
 	})
 	if err != nil {
 		t.Fatalf("Load(%s) error = %v", rendered, err)

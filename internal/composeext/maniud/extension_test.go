@@ -28,7 +28,7 @@ func TestCodecRoundTripsRuntimeAndArchiveProof(t *testing.T) {
 	proof := validProof()
 	extension := Extension{Services: map[string]Service{
 		"archive": {Runtime: RuntimeDocker, ArchiveProof: &proof},
-		"worker":  {Runtime: RuntimeNerdctl},
+		"worker":  {Runtime: RuntimeContainerd},
 	}}
 	raw, err := Encode(extension)
 	if err != nil {

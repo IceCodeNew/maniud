@@ -19,7 +19,7 @@ const (
 // rejected value.
 var ErrInvalid = errors.New("x-maniud extension is invalid")
 
-// Runtime identifies the runtime that originally produced a service.
+// Runtime identifies the runtime that executes a service.
 type Runtime string
 
 const (
@@ -27,8 +27,8 @@ const (
 	RuntimeDocker Runtime = "docker"
 	// RuntimePodman selects Podman Libpod.
 	RuntimePodman Runtime = "podman"
-	// RuntimeNerdctl selects the native containerd adapter for nerdctl input.
-	RuntimeNerdctl Runtime = "nerdctl"
+	// RuntimeContainerd selects the native containerd adapter.
+	RuntimeContainerd Runtime = "containerd"
 )
 
 // Extension is one decoded x-maniud document.
@@ -152,7 +152,7 @@ func encodeService(service Service) (map[string]any, error) {
 }
 
 func validRuntime(value Runtime) bool {
-	return value == RuntimeDocker || value == RuntimePodman || value == RuntimeNerdctl
+	return value == RuntimeDocker || value == RuntimePodman || value == RuntimeContainerd
 }
 
 func exactMapping(raw any, key string) (map[string]any, bool) {

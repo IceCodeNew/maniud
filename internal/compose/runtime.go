@@ -41,10 +41,11 @@ func RenderRuntime(
 		return nil, fmt.Errorf("bind runtime environment files: %w", err)
 	}
 	var extensions map[string]any
-	if runtimeName := projection.Runtime(); runtimeName != "" && runtimeName != composeDockerRuntime {
+	runtimeKind := extensionRuntime(projection.Runtime())
+	if runtimeKind != maniud.RuntimeDocker {
 		extensions = mustEncodeManiudRuntime(
 			workload.ServiceName,
-			maniud.Runtime(runtimeName),
+			runtimeKind,
 		)
 	}
 

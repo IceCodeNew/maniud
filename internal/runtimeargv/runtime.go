@@ -23,7 +23,7 @@ type Projection struct {
 	platform         domain.Platform
 	warnings         []Warning
 	environmentFiles []string
-	runtime          string
+	runtime          domain.RuntimeKind
 }
 
 // Parse validates and projects one complete runtime create/run argv.
@@ -75,12 +75,29 @@ func newProjection(
 	if err != nil {
 		return Projection{}, ErrInvalid
 	}
+	runtimeKind, valid := targetRuntime(runtime)
+	if !valid {
+		return Projection{}, ErrInvalid
+	}
 
 	return Projection{
 		spec: spec.Clone(), source: source, platform: platform,
 		warnings:         append([]Warning(nil), warnings...),
-		environmentFiles: append([]string(nil), environmentFiles...), runtime: runtime,
+		environmentFiles: append([]string(nil), environmentFiles...), runtime: runtimeKind,
 	}, nil
+}
+
+func targetRuntime(sourceClient string) (domain.RuntimeKind, bool) {
+	switch sourceClient {
+	case "", publicargv.RuntimeDocker:
+		return domain.RuntimeDocker, true
+	case publicargv.RuntimePodman:
+		return domain.RuntimePodman, true
+	case publicargv.RuntimeNerdctl:
+		return domain.RuntimeContainerd, true
+	default:
+		return "", false
+	}
 }
 
 // Source returns the normalized registry source named by the command.
@@ -108,8 +125,8 @@ func (projection Projection) EnvironmentFiles() []string {
 	return append([]string(nil), projection.environmentFiles...)
 }
 
-// Runtime returns the source client for provenance metadata.
-func (projection Projection) Runtime() string {
+// Runtime returns the execution runtime selected by the source client.
+func (projection Projection) Runtime() domain.RuntimeKind {
 	return projection.runtime
 }
 
