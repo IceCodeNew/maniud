@@ -206,6 +206,7 @@ func TestContainerdNilBoundaries(t *testing.T) {
 	t.Parallel()
 
 	var nilClient *Client
+	nilClient.CloseIdleConnections()
 	if err := nilClient.Close(); err != nil {
 		t.Fatalf("Close(nil) = %v", err)
 	}
