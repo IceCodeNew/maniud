@@ -2,6 +2,7 @@ package domain
 
 import "testing"
 
+//nolint:funlen // Keeping every stable public failure in one table makes contract drift visible.
 func TestFailuresExposeStableOperatorContracts(t *testing.T) {
 	t.Parallel()
 
@@ -28,6 +29,38 @@ func TestFailuresExposeStableOperatorContracts(t *testing.T) {
 			message:    "operation interrupted; rerun the same command to resume",
 			retryable:  false,
 			exitStatus: 130,
+		},
+		{
+			name:       "apply failed",
+			failure:    ApplyFailed(false),
+			code:       ErrorApplyFailed,
+			message:    applyFailedMessage,
+			retryable:  false,
+			exitStatus: 1,
+		},
+		{
+			name:       "apply unavailable",
+			failure:    ApplyFailed(true),
+			code:       ErrorApplyFailed,
+			message:    applyFailedMessage,
+			retryable:  true,
+			exitStatus: 1,
+		},
+		{
+			name:       "generation failed",
+			failure:    GenerationFailed(false),
+			code:       ErrorGenerationFailed,
+			message:    generationFailedMessage,
+			retryable:  false,
+			exitStatus: 1,
+		},
+		{
+			name:       "generation unavailable",
+			failure:    GenerationFailed(true),
+			code:       ErrorGenerationFailed,
+			message:    generationFailedMessage,
+			retryable:  true,
+			exitStatus: 1,
 		},
 		{
 			name:       "unavailable",
