@@ -45,7 +45,7 @@ func TestProjectionBindsImmutableImage(t *testing.T) {
 func assertProjectionMetadata(t *testing.T, projection Projection) {
 	t.Helper()
 
-	if projection.Name() != "service" || projection.Runtime() != publicargv.RuntimeNerdctl ||
+	if projection.Name() != "service" || projection.Runtime() != domain.RuntimeContainerd ||
 		projection.Source().String() != "docker.io/team/app:1" || len(projection.EnvironmentFiles()) != 0 ||
 		len(projection.Warnings()) != 0 {
 		t.Fatalf("Projection = %#v", projection)
@@ -63,6 +63,11 @@ func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
 	}
 	if _, err := newProjection(domain.WorkloadSpec{}, "", domain.Platform{}, nil, nil, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("newProjection(zero) error = %v", err)
+	}
+	if _, err := newProjection(
+		domain.WorkloadSpec{}, wrapperImage, domain.Platform{}, nil, nil, "invalid",
+	); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("newProjection(runtime) error = %v", err)
 	}
 
 	projection, err := ParseSource(wrapperImage, "service")
@@ -100,11 +105,26 @@ func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
 func TestProjectionSelectsClientAdapter(t *testing.T) {
 	t.Parallel()
 
-	if _, err := Parse([]string{
+	dockerProjection, err := Parse([]string{
 		publicargv.RuntimeDocker, publicargv.OperationCreate, wrapperImage,
-	}, "", wrapperWorkingDirectory); err != nil {
+	}, "", wrapperWorkingDirectory)
+	if err != nil {
 		t.Fatalf("Parse(valid Docker) error = %v", err)
 	}
+	if dockerProjection.Runtime() != domain.RuntimeDocker {
+		t.Fatalf("Docker projection runtime = %q", dockerProjection.Runtime())
+	}
+
+	podmanProjection, err := Parse([]string{
+		publicargv.RuntimePodman, publicargv.OperationCreate, wrapperImage,
+	}, "", wrapperWorkingDirectory)
+	if err != nil {
+		t.Fatalf("Parse(valid Podman) error = %v", err)
+	}
+	if podmanProjection.Runtime() != domain.RuntimePodman {
+		t.Fatalf("Podman projection runtime = %q", podmanProjection.Runtime())
+	}
+
 	if _, err := Parse([]string{
 		publicargv.RuntimeNerdctl, publicargv.OperationCreate,
 		"--health-cmd=true", "--health-start-interval=1s", wrapperImage,

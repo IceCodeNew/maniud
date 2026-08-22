@@ -30,6 +30,14 @@ func TestRemainingPureValidationBranches(t *testing.T) {
 	if _, valid := internalRuntime(maniud.Runtime("invalid")); valid {
 		t.Fatal("unknown runtime provenance accepted")
 	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("invalid internal runtime did not trip the invariant")
+			}
+		}()
+		extensionRuntime(domain.RuntimeKind("invalid"))
+	}()
 	if _, valid := internalManiudExtension(maniud.Extension{Services: map[string]maniud.Service{
 		apiService: {Runtime: maniud.Runtime("invalid")},
 	}}); valid {
@@ -86,7 +94,7 @@ func TestRenderRuntimeRejectsEnvironmentFileAtOutputDirectory(t *testing.T) {
 
 	workingDirectory := composeTestWorkingDirectory
 	projection, err := runtimeargv.Parse([]string{
-		composeDockerRuntime, "create", "--env-file=" + workingDirectory, "example.test/image:1",
+		composeDockerRuntime, runtimeTestCreateCommand, "--env-file=" + workingDirectory, "example.test/image:1",
 	}, "service", workingDirectory)
 	if err != nil {
 		t.Fatal(err)
