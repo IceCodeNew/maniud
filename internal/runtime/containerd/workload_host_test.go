@@ -81,6 +81,10 @@ func TestPrepareHostWorkloadAndRuntimeMountIdentity(t *testing.T) {
 		len(prepared.Configuration.Control.Mounts) != 2 || prepared.Configuration.OCI.Linux == nil {
 		t.Fatalf("prepared configuration = %#v", prepared.Configuration)
 	}
+	source, sourceErr := containerdconfig.Decode(configuration)
+	if sourceErr != nil || !reflect.DeepEqual(source, desired.WorkloadSpec) {
+		t.Fatalf("source configuration mutated = %#v, %v", source, sourceErr)
+	}
 	for _, name := range []string{"hostname", "hosts", "resolv.conf"} {
 		if _, statErr := os.Stat(filepath.Join(workloadStateDirectory(options, identifier), name)); statErr != nil {
 			t.Fatalf("generated %s: %v", name, statErr)
@@ -550,6 +554,11 @@ func TestPrepareHostWorkloadFailureMatrix(t *testing.T) {
 func TestConfigureHostWorkloadFailureMatrix(t *testing.T) {
 	t.Parallel()
 
+	if _, err := configureOwnedHostWorkload(
+		domain.WorkloadSpec{}, t.TempDir(), testSourcePath, nil,
+	); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("configureOwnedHostWorkload(invalid) = %v", err)
+	}
 	desired := testContainerdDesiredWorkload(t)
 	configuration := testContainerdConfiguration(t, desired)
 	for index := range configuration.OCI.Linux.Namespaces {
