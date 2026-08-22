@@ -105,9 +105,6 @@ func TestLinuxHostDeviceAndNamespaceBoundaries(t *testing.T) {
 	if filepathDir("/one") != "/" || filepathDir("one") != "." {
 		t.Fatal("filepathDir() root or relative policy drift")
 	}
-	if err := copyVolumeInitialContents(context.Background(), nil, nil, nil); !errors.Is(err, ErrProtocol) {
-		t.Fatalf("copyVolumeInitialContents(empty) = %v", err)
-	}
 	if err := copyVolumeInitialContents(
 		context.Background(), []mount.Mount{{Type: bindMountType, Source: t.TempDir()}},
 		[]domain.RuntimeMount{{Source: t.TempDir(), Target: testStateMount}},

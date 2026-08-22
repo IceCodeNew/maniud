@@ -722,6 +722,9 @@ func TestLocalWorkloadHostTemporaryRootfs(t *testing.T) {
 func TestCopyVolumeInitialContentsRejectsUnsafeAndUnwritableTargets(t *testing.T) {
 	t.Parallel()
 
+	if err := copyVolumeInitialContents(context.Background(), nil, nil, nil); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("copyVolumeInitialContents(empty) = %v", err)
+	}
 	rootfs := t.TempDir()
 	withRootfs := func(
 		_ context.Context,
