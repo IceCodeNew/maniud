@@ -441,15 +441,8 @@ func (parser *argvParser) addTypedWarning(code, option, reason string) {
 	parser.warnings = append(parser.warnings, Warning{Code: code, Option: option, Reason: reason})
 }
 
-func (parser *argvParser) setCommand(arguments []string) bool {
-	for _, value := range arguments {
-		if !validArgument(value) {
-			return false
-		}
-	}
+func (parser *argvParser) setCommand(arguments []string) {
 	parser.service.Command = append([]string(nil), arguments...)
-
-	return true
 }
 
 func (parser *argvParser) finish(explicitName string, source imageref.Source) (Projection, error) {

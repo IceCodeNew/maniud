@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# > 1)); then
+	printf 'usage: %s [maniud-binary]\n' "$0" >&2
+	exit 2
+fi
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+temporary_dir="$(cd "$(mktemp -d)" && pwd -P)"
+trap 'rm -rf "$temporary_dir"' EXIT
+
+binary="${1:-$temporary_dir/maniud}"
+if (($# == 0)); then
+	"$repo_root/scripts/build-maniud" "$binary"
+elif [[ ! -x "$binary" ]]; then
+	printf 'maniud binary is not executable: %s\n' "$binary" >&2
+	exit 2
+fi
+
+version="$("$binary" --version)"
+if [[ ! "$version" =~ ^maniud\ ((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)|[0-9]{8}(-dirty)?-g[0-9a-f]{12})$ ]]; then
+	printf 'unexpected maniud version: %s\n' "$version" >&2
+	exit 1
+fi
+
+archive="$temporary_dir/hello.tar"
+python3 - "$archive" <<'PY'
+import hashlib
+import io
+import json
+import sys
+import tarfile
+
+archive_path = sys.argv[1]
+layer = b"layer"
+config = json.dumps(
+    {
+        "architecture": "amd64",
+        "os": "linux",
+        "rootfs": {
+            "type": "layers",
+            "diff_ids": [f"sha256:{hashlib.sha256(layer).hexdigest()}"],
+        },
+        "config": {"Entrypoint": ["/init"], "Cmd": ["serve"]},
+    },
+    separators=(",", ":"),
+    sort_keys=True,
+).encode()
+manifest = json.dumps(
+    [
+        {
+            "Config": "config.json",
+            "RepoTags": ["example.invalid/hello:1"],
+            "Layers": ["layer.tar"],
+        }
+    ],
+    separators=(",", ":"),
+    sort_keys=True,
+).encode()
+
+with tarfile.open(archive_path, "w", format=tarfile.USTAR_FORMAT) as archive:
+    for name, content in (
+        ("manifest.json", manifest),
+        ("config.json", config),
+        ("layer.tar", layer),
+    ):
+        member = tarfile.TarInfo(name)
+        member.mode = 0o600
+        member.mtime = 0
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
+PY
+chmod 0600 "$archive"
+
+source_repository="$temporary_dir/source"
+mkdir -p "$source_repository/services"
+git -C "$source_repository" init --quiet --initial-branch=main
+
+gen_output="$temporary_dir/gen.json"
+if ! (
+	cd "$source_repository"
+	"$binary" gen \
+		--name hello \
+		--output services/hello.yaml \
+		--json \
+		"docker-archive:$archive:example.invalid/hello:1" >"$gen_output"
+); then
+	cat "$gen_output" >&2
+	exit 1
+fi
+python3 - "$gen_output" "$source_repository/services/hello.yaml" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+if result.get("path") != "services/hello.yaml" or result.get("status") != "generated":
+    raise SystemExit(f"unexpected gen result: {result!r}")
+if not result.get("import_command", "").startswith("docker image load --input "):
+    raise SystemExit(f"missing archive import guidance: {result!r}")
+if not os.path.isfile(sys.argv[2]):
+    raise SystemExit("gen did not create the Compose file")
+PY
+
+git -C "$source_repository" add -- services/hello.yaml
+git -C "$source_repository" \
+	-c user.name='maniud e2e' \
+	-c user.email='maniud-e2e@example.invalid' \
+	-c commit.gpgsign=false \
+	commit --quiet -m 'add generated service'
+
+state_home="$temporary_dir/state"
+mkdir -m 0700 "$state_home"
+apply_output="$temporary_dir/apply.json"
+set +e
+(
+	cd "$source_repository"
+	env \
+		DOCKER_HOST="unix://$temporary_dir/missing-docker.sock" \
+		HOME="$temporary_dir/home" \
+		XDG_STATE_HOME="$state_home" \
+		"$binary" apply --dry-run services/hello.yaml >"$apply_output"
+)
+apply_status=$?
+set -e
+if ((apply_status != 1)); then
+	printf 'apply smoke returned %d, want 1\n' "$apply_status" >&2
+	exit 1
+fi
+python3 - "$apply_output" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+expected = {
+    "code": "apply_failed",
+    "message": "apply validation failed",
+    "retryable": True,
+}
+if result != expected:
+    raise SystemExit(f"unexpected apply failure: {result!r}")
+PY
+
+remote_repository="$temporary_dir/origin.git"
+gitops_repository="$temporary_dir/gitops"
+git init --bare --quiet "$remote_repository"
+git init --quiet --initial-branch=master "$gitops_repository"
+mkdir "$gitops_repository/services"
+: >"$gitops_repository/services/.keep"
+git -C "$gitops_repository" add -- services/.keep
+git -C "$gitops_repository" \
+	-c user.name='maniud e2e' \
+	-c user.email='maniud-e2e@example.invalid' \
+	-c commit.gpgsign=false \
+	commit --quiet -m 'initialize desired state'
+git -C "$gitops_repository" remote add origin "$remote_repository"
+git -C "$gitops_repository" push --quiet --set-upstream origin master
+
+shared_environment=(HOME="$temporary_dir/home" XDG_STATE_HOME="$state_home")
+env "${shared_environment[@]}" "$binary" gitops init "$gitops_repository"
+
+daemon_output="$temporary_dir/daemon.log"
+python3 - "$binary" "$temporary_dir/home" "$state_home" "$daemon_output" <<'PY'
+import os
+import subprocess
+import sys
+import time
+
+environment = os.environ.copy()
+environment["HOME"] = sys.argv[2]
+environment["XDG_STATE_HOME"] = sys.argv[3]
+daemon = None
+try:
+    with open(sys.argv[4], "w", encoding="utf-8") as output:
+        daemon = subprocess.Popen(
+            [sys.argv[1], "daemon", "start", "--interval", "300"],
+            env=environment,
+            stdout=output,
+        )
+        lock = os.path.join(sys.argv[3], "maniud", "daemon.lock")
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                ready = os.path.getsize(lock) > 0
+            except FileNotFoundError:
+                ready = False
+            if ready:
+                break
+            if daemon.poll() is not None:
+                raise SystemExit(f"daemon start exited before acquiring its lock: {daemon.returncode}")
+            if time.monotonic() >= deadline:
+                raise SystemExit("daemon start did not acquire its lock")
+            time.sleep(0.01)
+        stopped = subprocess.run(
+            [sys.argv[1], "daemon", "stop"],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        status = daemon.wait(timeout=10)
+finally:
+    if daemon is not None and daemon.poll() is None:
+        daemon.terminate()
+        try:
+            daemon.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            daemon.kill()
+            daemon.wait()
+if stopped.returncode != 0 or stopped.stdout != "Daemon stopped.\n":
+    raise SystemExit(f"daemon stop returned {stopped.returncode}, {stopped.stdout!r}, {stopped.stderr!r}")
+if status != 0:
+    raise SystemExit(f"daemon start returned {status}, want 0")
+PY
+
+doctor_output="$temporary_dir/doctor.json"
+env "${shared_environment[@]}" "$binary" doctor --reindex-backups >"$doctor_output"
+python3 - "$doctor_output" false <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+expected_replaced = sys.argv[2] == "true"
+if result.get("entries") != [] or result.get("replaced") is not expected_replaced:
+    raise SystemExit(f"unexpected doctor result: {result!r}")
+if not result.get("root", "").endswith("/maniud/backups"):
+    raise SystemExit(f"unexpected backup root: {result!r}")
+PY
+
+env "${shared_environment[@]}" "$binary" doctor --reindex-backups --confirm >"$doctor_output"
+python3 - "$doctor_output" true <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+expected_replaced = sys.argv[2] == "true"
+if result.get("entries") != [] or result.get("replaced") is not expected_replaced:
+    raise SystemExit(f"unexpected doctor result: {result!r}")
+if not result.get("root", "").endswith("/maniud/backups"):
+    raise SystemExit(f"unexpected backup root: {result!r}")
+PY
+
+printf '%s\n' 'five-command executable smoke passed'

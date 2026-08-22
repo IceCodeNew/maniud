@@ -58,9 +58,6 @@ func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
 	if _, err := Parse(nil, "", wrapperWorkingDirectory); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Parse(nil) error = %v", err)
 	}
-	if _, err := ParseSource("bad@@reference", ""); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("ParseSource(invalid) error = %v", err)
-	}
 	if _, err := newProjection(domain.WorkloadSpec{}, "", domain.Platform{}, nil, nil, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("newProjection(zero) error = %v", err)
 	}
@@ -70,7 +67,7 @@ func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
 		t.Fatalf("newProjection(runtime) error = %v", err)
 	}
 
-	projection, err := ParseSource(wrapperImage, "service")
+	projection, err := ParseSource("docker://"+wrapperImage, "service")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +96,47 @@ func TestProjectionRejectsInvalidInputAndImageProof(t *testing.T) {
 	}
 	if !strings.HasPrefix(valid.Reference, "docker.io/") {
 		t.Fatalf("normalized reference = %q", valid.Reference)
+	}
+}
+
+func TestParseSourceRejectsInvalidRuntimeQualification(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{
+		"docker://bad@@reference",
+		wrapperImage,
+		"unknown://" + wrapperImage,
+	} {
+		if _, err := ParseSource(value, ""); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ParseSource(%q) error = %v", value, err)
+		}
+	}
+}
+
+func TestParseSourceSelectsQualifiedRuntime(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		prefix  string
+		runtime domain.RuntimeKind
+	}{
+		{prefix: "docker://", runtime: domain.RuntimeDocker},
+		{prefix: "podman://", runtime: domain.RuntimePodman},
+		{prefix: "containerd://", runtime: domain.RuntimeContainerd},
+	} {
+		projection, err := ParseSource(test.prefix+wrapperImage, "service")
+		if err != nil || projection.Runtime() != test.runtime || projection.Source().String() != "docker.io/team/app:1" {
+			t.Fatalf("ParseSource(%q) = %#v, %v", test.prefix, projection, err)
+		}
+	}
+}
+
+func TestTargetRuntimeDefaultsToDocker(t *testing.T) {
+	t.Parallel()
+
+	defaultRuntime, valid := targetRuntime("")
+	if !valid || defaultRuntime != domain.RuntimeDocker {
+		t.Fatalf("targetRuntime(empty) = %q, %t", defaultRuntime, valid)
 	}
 }
 

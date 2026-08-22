@@ -229,6 +229,11 @@ func TestDockerInspectValidationBoundaries(t *testing.T) {
 	if _, valid := dockerWorkloadFromInspect(spec.ContainerName, config, host); valid {
 		t.Fatal("bare observed environment entry accepted")
 	}
+	config.Env = nil
+	config.ArgsEscaped = true
+	if _, valid := dockerWorkloadFromInspect(spec.ContainerName, config, host); !valid {
+		t.Fatal("Linux-irrelevant ArgsEscaped metadata was rejected")
+	}
 }
 
 func TestDockerInspectRoundTripsPortsAndTimeouts(t *testing.T) {

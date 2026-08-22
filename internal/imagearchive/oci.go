@@ -106,7 +106,11 @@ func readOCIPlatformManifest(
 	if err != nil {
 		return emptyDescriptor, emptyManifest, false, err
 	}
-	descriptorValue, err := selectOCIDescriptor(index.Manifests, selectedPlatform)
+	descriptorValues, err := resolveOCIIndexDescriptors(ctx, file, members, index.Manifests)
+	if err != nil {
+		return emptyDescriptor, emptyManifest, false, err
+	}
+	descriptorValue, err := selectOCIDescriptor(descriptorValues, selectedPlatform)
 	if err != nil {
 		return emptyDescriptor, emptyManifest, false, err
 	}
@@ -120,6 +124,53 @@ func readOCIPlatformManifest(
 	}
 
 	return descriptorValue, imageManifest, true, nil
+}
+
+func resolveOCIIndexDescriptors(
+	ctx context.Context,
+	file *os.File,
+	members map[string]member,
+	values []descriptor,
+) ([]descriptor, error) {
+	nestedDescriptor, hasNestedIndex := nestedIndexDescriptor(values)
+	if !hasNestedIndex {
+		return values, nil
+	}
+	if !validDescriptor(nestedDescriptor, maximumManifestBytes) {
+		return nil, ErrInvalidArchive
+	}
+	raw, err := descriptorPayload(ctx, file, members, nestedDescriptor, maximumManifestBytes)
+	if err != nil {
+		return nil, err
+	}
+	nested, err := decodeOCIIndex(raw)
+	if err != nil {
+		return nil, err
+	}
+	if containsIndexDescriptor(nested.Manifests) {
+		return nil, ErrInvalidArchive
+	}
+
+	return nested.Manifests, nil
+}
+
+func nestedIndexDescriptor(values []descriptor) (descriptor, bool) {
+	if len(values) != 1 || values[0].Platform != nil {
+		return descriptor{}, false
+	}
+	value := values[0]
+
+	return value, value.MediaType == dockerIndexMediaType || value.MediaType == ociIndexMediaType
+}
+
+func containsIndexDescriptor(values []descriptor) bool {
+	for _, value := range values {
+		if value.MediaType == dockerIndexMediaType || value.MediaType == ociIndexMediaType {
+			return true
+		}
+	}
+
+	return false
 }
 
 func decodeOCIIndex(raw []byte) (indexDocument, error) {

@@ -24,7 +24,18 @@ type streamSpool struct {
 // AnalyzeStream validates a bounded Docker save stream containing exactly one
 // selected image. The stream is spooled into an owner-private temporary
 // directory so the regular-file archive validator remains the sole parser.
-func AnalyzeStream(ctx context.Context, input io.Reader) (analysis Analysis, returnErr error) {
+func AnalyzeStream(ctx context.Context, input io.Reader) (Analysis, error) {
+	return AnalyzeStreamVisit(ctx, input, nil)
+}
+
+// AnalyzeStreamVisit validates a Docker save stream, then lets visit read the
+// validated owner-private spool before it is removed. The visitor must not
+// retain the path or open files after returning.
+func AnalyzeStreamVisit(
+	ctx context.Context,
+	input io.Reader,
+	visit func(context.Context, string) error,
+) (analysis Analysis, returnErr error) {
 	if input == nil {
 		return Analysis{}, ErrInvalidArchive
 	}
@@ -44,8 +55,17 @@ func AnalyzeStream(ctx context.Context, input io.Reader) (analysis Analysis, ret
 	}
 
 	source := Source{path: spool.path, selector: "@0", strictSingle: true}
+	analysis, err = Analyze(ctx, source)
+	if err != nil {
+		return Analysis{}, err
+	}
+	if visit != nil {
+		if err = visit(ctx, spool.path); err != nil {
+			return Analysis{}, fmt.Errorf("visit validated Docker archive: %w", err)
+		}
+	}
 
-	return Analyze(ctx, source)
+	return analysis, nil
 }
 
 func createStreamSpool() (streamSpool, error) {

@@ -3,6 +3,8 @@
 package runtimeargv
 
 import (
+	"strings"
+
 	"github.com/IceCodeNew/maniud/containerconfig/nerdctl"
 	publicargv "github.com/IceCodeNew/maniud/containerconfig/runtimeargv"
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -50,16 +52,33 @@ func Parse(arguments []string, explicitName, workingDirectory string) (Projectio
 	)
 }
 
-// ParseSource validates one registry source and derives a minimal service.
+// ParseSource validates one runtime-qualified registry source and derives a minimal service.
 func ParseSource(value, explicitName string) (Projection, error) {
-	parsed, err := publicargv.ParseSource(value, explicitName)
+	runtimeKind, source, found := strings.Cut(value, "://")
+	if !found || source == "" {
+		return Projection{}, ErrInvalid
+	}
+
+	var sourceClient string
+	switch runtimeKind {
+	case string(domain.RuntimeDocker):
+		sourceClient = publicargv.RuntimeDocker
+	case string(domain.RuntimePodman):
+		sourceClient = publicargv.RuntimePodman
+	case string(domain.RuntimeContainerd):
+		sourceClient = publicargv.RuntimeNerdctl
+	default:
+		return Projection{}, ErrInvalid
+	}
+
+	parsed, err := publicargv.ParseSource(source, explicitName)
 	if err != nil {
 		return Projection{}, ErrInvalid
 	}
 
 	return newProjection(
 		parsed.Spec(), parsed.Source().String(), parsed.Platform(), parsed.Warnings(),
-		parsed.EnvironmentFiles(), parsed.Runtime(),
+		parsed.EnvironmentFiles(), sourceClient,
 	)
 }
 

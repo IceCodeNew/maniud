@@ -185,6 +185,13 @@ func TestRepositoryCollectorMalformedShapes(t *testing.T) {
 	if collectBindMounts("bad", ".", new([]string)) || collectBindMounts([]any{1}, ".", new([]string)) {
 		t.Fatal("bind shape")
 	}
+	for _, source := range []string{"//srv/data", "/srv/${DATA}"} {
+		if collectBindMounts([]any{map[string]any{
+			"type": composeBindMountType, "source": source, "target": runtimeTestDataTarget,
+		}}, ".", new([]string)) {
+			t.Fatalf("absolute bind source accepted %q", source)
+		}
+	}
 	for _, raw := range []any{"", "/abs", "a:b", "$A", "~user/a", 1} {
 		if _, ok := resolveRepositoryPath(raw, "."); ok {
 			t.Fatalf("path accepted %#v", raw)

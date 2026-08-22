@@ -103,7 +103,7 @@ func dockerWorkloadFromInspect(
 
 func validObservedDockerConfig(config *containertypes.Config) bool {
 	return config.Domainname == "" && !config.AttachStdin && !config.AttachStdout && !config.AttachStderr &&
-		!config.StdinOnce && !config.ArgsEscaped && !config.NetworkDisabled && len(config.OnBuild) == 0
+		!config.StdinOnce && !config.NetworkDisabled && len(config.OnBuild) == 0
 }
 
 //nolint:cyclop,gocyclo // Every rejected field is an unsupported API configuration surface.

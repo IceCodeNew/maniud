@@ -29,17 +29,30 @@ func RenderRuntime(
 	image domain.ImageIdentity,
 	workingDirectory string,
 ) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("render runtime Compose: %w", err)
-	}
 	workload, err := projection.Workload(image)
 	if err != nil {
 		return nil, fmt.Errorf("bind runtime Compose: %w", err)
 	}
-	for _, mount := range workload.Mounts {
-		if mount.Kind == domain.MountBind {
-			return nil, fmt.Errorf("bind runtime Compose: %w", runtimeargv.ErrInvalid)
-		}
+
+	return RenderResolvedRuntime(ctx, projection, image, workload, workingDirectory)
+}
+
+// RenderResolvedRuntime serializes a runtime projection after application policy has
+// added defaults to its already image-bound workload.
+func RenderResolvedRuntime(
+	ctx context.Context,
+	projection runtimeargv.Projection,
+	image domain.ImageIdentity,
+	workload domain.WorkloadSpec,
+	workingDirectory string,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("render runtime Compose: %w", err)
+	}
+	base, err := projection.Workload(image)
+	if err != nil || workload.ServiceName != base.ServiceName ||
+		workload.ContainerName != base.ContainerName || workload.Platform != base.Platform {
+		return nil, fmt.Errorf("bind runtime Compose: %w", runtimeargv.ErrInvalid)
 	}
 	environmentFiles, err := runtimeEnvironmentFiles(projection.EnvironmentFiles(), workingDirectory)
 	if err != nil {
@@ -73,9 +86,6 @@ func RenderArchive(
 	explicitName string,
 	workingDirectory string,
 ) ([]byte, string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, "", fmt.Errorf("render archive Compose: %w", err)
-	}
 	name, err := analysis.ServiceName(explicitName)
 	if err != nil {
 		return nil, "", fmt.Errorf("select archive service: %w", err)
@@ -84,27 +94,47 @@ func RenderArchive(
 		ServiceName: name, ContainerName: name, Platform: analysis.Identity.Platform,
 		NetworkMode: composeBridgeNetwork,
 	}, analysis.Identity)
+	rendered, err := RenderResolvedArchive(ctx, analysis, workload, workingDirectory)
+
+	return rendered, name, err
+}
+
+// RenderResolvedArchive serializes an analyzed archive after application policy has
+// added defaults to its already image-bound workload.
+func RenderResolvedArchive(
+	ctx context.Context,
+	analysis imagearchive.Analysis,
+	workload domain.WorkloadSpec,
+	workingDirectory string,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("render archive Compose: %w", err)
+	}
+	name := workload.ServiceName
+	if name == "" || workload.ContainerName != name || workload.Platform != analysis.Identity.Platform {
+		return nil, ErrInvalidSource
+	}
 	proof := runtimeArchiveProof(analysis)
 	extensions, err := encodeManiudService(
 		name,
 		maniud.Service{Runtime: maniud.RuntimeDocker, ArchiveProof: &proof},
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("encode archive extension: %w", err)
+		return nil, fmt.Errorf("encode archive extension: %w", err)
 	}
 	rendered, err := composecodec.Encode(ctx, workload, composecodec.EncodeOptions{
 		Image: analysis.ComposeReference, WorkingDirectory: workingDirectory, ProjectName: name,
 		PullPolicy: "never", Extensions: extensions,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("render archive Compose: %w", err)
+		return nil, fmt.Errorf("render archive Compose: %w", err)
 	}
 	err = validateRenderedArchive(ctx, rendered, workingDirectory, name, workload)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	return rendered, name, nil
+	return rendered, nil
 }
 
 func validateRenderedArchive(

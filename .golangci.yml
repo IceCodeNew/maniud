@@ -48,7 +48,9 @@ linters:
             - "!**/internal/compose/*.go"
             - "!**/internal/composeext/maniud/*.go"
             - "!**/internal/imageref/*.go"
+            - "!**/internal/imagerootfs/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/internal/cli/parse.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/containerd/*.go"
             - "!**/containerconfig/docker/*.go"
@@ -59,6 +61,14 @@ linters:
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+        cli-syntax-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/cli/parse.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/alecthomas/kong
         public-imageref:
           list-mode: strict
           files:
@@ -119,6 +129,15 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/opencontainers/go-digest
+        image-rootfs:
+          list-mode: strict
+          files:
+            - "**/internal/imagerootfs/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/google/go-containerregistry
+            - github.com/moby/sys/user
         registry:
           list-mode: strict
           files:

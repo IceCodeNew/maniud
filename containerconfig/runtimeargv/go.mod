@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.6
 
 require (
+	github.com/IceCodeNew/maniud/argv v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig v0.1.0
 	github.com/IceCodeNew/maniud/imageref v0.1.0
 )
@@ -15,5 +16,7 @@ require (
 )
 
 replace github.com/IceCodeNew/maniud/containerconfig => ..
+
+replace github.com/IceCodeNew/maniud/argv => ../../argv
 
 replace github.com/IceCodeNew/maniud/imageref => ../../imageref

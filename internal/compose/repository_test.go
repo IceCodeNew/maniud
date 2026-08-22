@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const (
@@ -370,6 +372,59 @@ func TestCaptureRepositorySourceRequiresTrackedBindSource(t *testing.T) {
 		if !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("CaptureRepositorySource() error = %v", err)
 		}
+	}
+}
+
+func TestCaptureRepositorySourceLeavesAbsoluteBindsOnRuntimeHost(t *testing.T) {
+	t.Parallel()
+
+	content := []byte(`
+name: external-storage
+services:
+  api:
+    container_name: external-storage-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    volumes:
+      - type: bind
+        source: /srv/example/config
+        target: /config
+        read_only: true
+      - type: bind
+        source: /srv/example/data
+        target: /data
+`)
+	source, err := CaptureRepositorySource(
+		t.TempDir(),
+		testRootRepositoryEntry,
+		nil,
+		repositoryFixtureReader(map[string][]byte{testRootRepositoryEntry: content}),
+		func(path string) (RepositoryPathSnapshot, error) {
+			t.Fatalf("absolute bind %q was treated as a repository path", path)
+
+			return RepositoryPathSnapshot{}, errRepositoryFixture
+		},
+	)
+	if err != nil {
+		t.Fatalf("CaptureRepositorySource() error = %v", err)
+	}
+	if source.Repository == nil || len(source.Repository.RuntimePaths) != 0 {
+		t.Fatalf("CaptureRepositorySource() = %#v", source)
+	}
+	project, err := Load(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	workload, err := project.Workload(apiService, resolvedImageForService(t, project, apiService))
+	if err != nil {
+		t.Fatalf("Workload() error = %v", err)
+	}
+	want := []domain.Mount{
+		{Kind: domain.MountBind, Source: "/srv/example/config", Target: "/config", ReadOnly: true},
+		{Kind: domain.MountBind, Source: "/srv/example/data", Target: runtimeTestDataTarget},
+	}
+	if !reflect.DeepEqual(workload.Mounts, want) {
+		t.Fatalf("Workload() mounts = %#v, want %#v", workload.Mounts, want)
 	}
 }
 

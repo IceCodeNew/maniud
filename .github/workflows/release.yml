@@ -1,0 +1,433 @@
+name: Release
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to release
+        required: true
+        default: patch
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+concurrency:
+  group: maniud-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Select tested master revision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      resume-draft: ${{ steps.release.outputs.resume-draft }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify current master and exact-SHA checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/master ]]; then
+            printf 'Releases must be dispatched from master, not %s\n' "$GITHUB_REF" >&2
+            exit 1
+          fi
+          remote_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            printf 'master moved after this release run started: expected %s, found %s\n' \
+              "$GITHUB_SHA" "$remote_sha" >&2
+            exit 1
+          fi
+
+          read -r run_id run_sha run_event run_conclusion < <(
+            gh api --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+              -f branch=master \
+              -f event=push \
+              -f head_sha="$GITHUB_SHA" \
+              -f status=success \
+              -F per_page=1 \
+              --jq '.workflow_runs[0] | [.id, .head_sha, .event, .conclusion] | @tsv'
+          )
+          if [[ -z "${run_id:-}" || "$run_sha" != "$GITHUB_SHA" || \
+                "$run_event" != push || "$run_conclusion" != success ]]; then
+            printf 'Checks has no successful master push run for exact SHA %s\n' "$GITHUB_SHA" >&2
+            exit 1
+          fi
+          printf 'Using successful Checks run %s for %s\n' "$run_id" "$run_sha"
+      - name: Select next stable version
+        id: release
+        env:
+          RELEASE_BUMP: ${{ inputs.bump }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          draft_records="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.draft == true) | [.tag_name, .target_commitish] | @tsv'
+          )"
+          mapfile -t draft_releases < <(
+            grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)[[:space:]]' \
+              <<< "$draft_records" \
+              || true
+          )
+          if (( ${#draft_releases[@]} > 1 )); then
+            printf 'Refusing to choose between %d unfinished stable release drafts\n' \
+              "${#draft_releases[@]}" >&2
+            exit 1
+          fi
+
+          resume_draft=false
+          if (( ${#draft_releases[@]} == 1 )); then
+            IFS=$'\t' read -r tag target_commitish <<< "${draft_releases[0]}"
+            if [[ "$target_commitish" != "$GITHUB_SHA" ]]; then
+              printf 'Unfinished release draft %s targets %s instead of exact SHA %s\n' \
+                "$tag" "$target_commitish" "$GITHUB_SHA" >&2
+              exit 1
+            fi
+            version="${tag#v}"
+            resume_draft=true
+          else
+            while IFS= read -r candidate; do
+              if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                printf 'Exact master SHA %s is already tagged as %s\n' \
+                  "$GITHUB_SHA" "$candidate" >&2
+                exit 1
+              fi
+            done < <(git tag --points-at "$GITHUB_SHA" --list 'v*')
+
+            latest=
+            while IFS= read -r candidate; do
+              if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                latest="${candidate#v}"
+                break
+              fi
+            done < <(git tag --list 'v*' --sort=-version:refname)
+
+            if [[ -z "$latest" && "$RELEASE_BUMP" == patch ]]; then
+              version=0.1.0
+            else
+              latest="${latest:-0.0.0}"
+              IFS=. read -r major minor patch <<< "$latest"
+              case "$RELEASE_BUMP" in
+                major) version="$((major + 1)).0.0" ;;
+                minor) version="$major.$((minor + 1)).0" ;;
+                patch) version="$major.$minor.$((patch + 1))" ;;
+                *) printf 'unsupported release bump: %s\n' "$RELEASE_BUMP" >&2; exit 1 ;;
+              esac
+            fi
+            tag="v$version"
+            if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+              printf 'Refusing to reuse existing release tag %s\n' "$tag" >&2
+              exit 1
+            fi
+          fi
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            tag_type="$(git cat-file -t "refs/tags/$tag")"
+            tag_sha="$(git rev-parse "refs/tags/$tag")"
+            if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+              printf 'Release tag %s does not point directly to exact SHA %s\n' \
+                "$tag" "$GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
+          release_modules="$(scripts/list-release-modules)"
+          while IFS= read -r module; do
+            if [[ "$module" == . ]]; then
+              continue
+            fi
+            module_tag="$module/v$version"
+            if git rev-parse --verify "refs/tags/$module_tag" >/dev/null 2>&1; then
+              module_type="$(git cat-file -t "refs/tags/$module_tag")"
+              module_sha="$(git rev-parse "refs/tags/$module_tag")"
+              if [[ "$module_type" != commit || "$module_sha" != "$GITHUB_SHA" ]]; then
+                printf 'Module tag %s does not point directly to exact SHA %s\n' \
+                  "$module_tag" "$GITHUB_SHA" >&2
+                exit 1
+              fi
+            fi
+          done <<< "$release_modules"
+          printf 'tag=%s\nversion=%s\nresume-draft=%s\n' \
+            "$tag" "$version" "$resume_draft" >> "$GITHUB_OUTPUT"
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify public module dependency versions
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: scripts/check-release-module-version "$RELEASE_VERSION"
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            native: true
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            native: true
+          - runner: ubuntu-24.04
+            goos: darwin
+            goarch: amd64
+            native: false
+          - runner: macos-26
+            goos: darwin
+            goarch: arm64
+            native: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build CGO-free binary
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          TARGET_GOOS: ${{ matrix.goos }}
+        run: |
+          set -euo pipefail
+          name="maniud_${RELEASE_VERSION}_${TARGET_GOOS}_${TARGET_GOARCH}"
+          GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" \
+            scripts/build-maniud "$RUNNER_TEMP/$name" "$RELEASE_VERSION"
+      - name: Smoke native release binary
+        if: matrix.native
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          TARGET_GOOS: ${{ matrix.goos }}
+        run: |
+          test "$(go env GOOS)" = "$TARGET_GOOS"
+          test "$(go env GOARCH)" = "$TARGET_GOARCH"
+          test "$("$RUNNER_TEMP/maniud_${RELEASE_VERSION}_${TARGET_GOOS}_${TARGET_GOARCH}" --version)" = \
+            "maniud $RELEASE_VERSION"
+      - name: Upload release binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maniud-release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/maniud_${{ needs.preflight.outputs.version }}_${{ matrix.goos }}_${{ matrix.goarch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Attest and publish release
+    needs:
+      - preflight
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download release binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: maniud-release-*
+          merge-multiple: true
+      - name: Validate artifacts and write checksums
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          expected=(
+            "maniud_${RELEASE_VERSION}_darwin_amd64"
+            "maniud_${RELEASE_VERSION}_darwin_arm64"
+            "maniud_${RELEASE_VERSION}_linux_amd64"
+            "maniud_${RELEASE_VERSION}_linux_arm64"
+          )
+          mapfile -t actual < <(find dist -maxdepth 1 -type f -printf '%f\n' | sort)
+          if (( ${#actual[@]} != ${#expected[@]} )); then
+            printf 'expected %d release binaries, found %d\n' \
+              "${#expected[@]}" "${#actual[@]}" >&2
+            exit 1
+          fi
+          for index in "${!expected[@]}"; do
+            if [[ "${actual[index]}" != "${expected[index]}" ]]; then
+              printf 'unexpected release artifact: expected %s, found %s\n' \
+                "${expected[index]}" "${actual[index]}" >&2
+              exit 1
+            fi
+          done
+          (
+            cd dist
+            sha256sum "${expected[@]}" > SHA256SUMS
+          )
+      - name: Attest release assets
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/maniud_${{ needs.preflight.outputs.version }}_linux_amd64
+            dist/maniud_${{ needs.preflight.outputs.version }}_linux_arm64
+            dist/maniud_${{ needs.preflight.outputs.version }}_darwin_amd64
+            dist/maniud_${{ needs.preflight.outputs.version }}_darwin_arm64
+            dist/SHA256SUMS
+      - name: Save Sigstore bundle
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: cp "$BUNDLE" "dist/maniud_${RELEASE_VERSION}.sigstore.json"
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RESUME_DRAFT: ${{ needs.preflight.outputs.resume-draft }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "dist/maniud_${RELEASE_VERSION}_linux_amd64"
+            "dist/maniud_${RELEASE_VERSION}_linux_arm64"
+            "dist/maniud_${RELEASE_VERSION}_darwin_amd64"
+            "dist/maniud_${RELEASE_VERSION}_darwin_arm64"
+            dist/SHA256SUMS
+            "dist/maniud_${RELEASE_VERSION}.sigstore.json"
+          )
+          for asset in "${assets[@]}"; do
+            test -f "$asset"
+          done
+          remote_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            printf 'master moved before publication: expected %s, found %s\n' \
+              "$GITHUB_SHA" "$remote_sha" >&2
+            exit 1
+          fi
+          lookup_tag() {
+            local response
+            local status_line
+
+            response="$(
+              gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$1" \
+                --jq '[.object.type, .object.sha] | @tsv' 2>&1
+            )" || true
+            status_line="${response%%$'\n'*}"
+            case "$status_line" in
+              HTTP/*" 200 "*) printf '%s\n' "${response##*$'\n'}" ;;
+              HTTP/*" 404 "*) return 1 ;;
+              *) return 2 ;;
+            esac
+          }
+          release_modules="$(scripts/list-release-modules)"
+          while IFS= read -r module; do
+            if [[ "$module" == . ]]; then
+              continue
+            fi
+            module_tag="$module/v$RELEASE_VERSION"
+            lookup_status=0
+            tag_record="$(lookup_tag "$module_tag")" || lookup_status=$?
+            case "$lookup_status" in
+              0)
+                read -r tag_type tag_sha <<< "$tag_record"
+                if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+                  printf 'Module tag %s does not point directly to exact SHA %s\n' \
+                    "$module_tag" "$GITHUB_SHA" >&2
+                  exit 1
+                fi
+                ;;
+              1)
+                gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                  -f ref="refs/tags/$module_tag" \
+                  -f sha="$GITHUB_SHA" >/dev/null
+                ;;
+              *)
+                printf 'Unable to inspect module tag %s\n' "$module_tag" >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$release_modules"
+          if [[ "$RESUME_DRAFT" == false ]]; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "maniud $RELEASE_TAG" \
+              --generate-notes
+          fi
+          lookup_status=0
+          tag_record="$(lookup_tag "$RELEASE_TAG")" || lookup_status=$?
+          case "$lookup_status" in
+            0)
+              read -r tag_type tag_sha <<< "$tag_record"
+              if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+                printf 'Release tag %s does not point directly to exact SHA %s\n' \
+                  "$RELEASE_TAG" "$GITHUB_SHA" >&2
+                exit 1
+              fi
+              ;;
+            1)
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$RELEASE_TAG" \
+                -f sha="$GITHUB_SHA" >/dev/null
+              ;;
+            *)
+              printf 'Unable to inspect release tag %s\n' "$RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+          release_json="$RUNNER_TEMP/release.json"
+          gh release view "$RELEASE_TAG" --json assets,isDraft,tagName > "$release_json"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            '.isDraft == true and .tagName == $tag and
+             all(.assets[]; .state == "uploaded" and .size > 0)' \
+            "$release_json" >/dev/null
+          expected=(
+            SHA256SUMS
+            "maniud_${RELEASE_VERSION}.sigstore.json"
+            "maniud_${RELEASE_VERSION}_darwin_amd64"
+            "maniud_${RELEASE_VERSION}_darwin_arm64"
+            "maniud_${RELEASE_VERSION}_linux_amd64"
+            "maniud_${RELEASE_VERSION}_linux_arm64"
+          )
+          mapfile -t actual < <(jq -r '.assets | sort_by(.name)[].name' "$release_json")
+          if (( ${#actual[@]} != ${#expected[@]} )); then
+            printf 'expected %d uploaded release assets, found %d\n' \
+              "${#expected[@]}" "${#actual[@]}" >&2
+            exit 1
+          fi
+          for index in "${!expected[@]}"; do
+            if [[ "${actual[index]}" != "${expected[index]}" ]]; then
+              printf 'unexpected uploaded asset: expected %s, found %s\n' \
+                "${expected[index]}" "${actual[index]}" >&2
+              exit 1
+            fi
+          done
+          gh release edit "$RELEASE_TAG" --draft=false
