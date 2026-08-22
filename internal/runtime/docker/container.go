@@ -254,17 +254,6 @@ func validRestartPolicy(policy containertypes.RestartPolicy) bool {
 	return containertypes.ValidateRestartPolicy(policy) == nil
 }
 
-func normalizeRestartPolicy(policy containertypes.RestartPolicy) containertypes.RestartPolicy {
-	if policy.Name == "" {
-		return containertypes.RestartPolicy{
-			Name:              containertypes.RestartPolicyDisabled,
-			MaximumRetryCount: 0,
-		}
-	}
-
-	return policy
-}
-
 func validContainerReference(reference string) bool {
 	return validContainerID(reference) || validContainerName(reference)
 }

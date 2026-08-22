@@ -1,10 +1,7 @@
 package docker
 
 import (
-	"context"
-	"errors"
 	"math"
-	"net/http"
 	"net/netip"
 	"strings"
 	"testing"
@@ -14,12 +11,18 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 
-	"github.com/IceCodeNew/maniud/internal/application"
-	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/containerconfig"
 )
 
-func testCreateOptions() application.WorkloadCreateOptions {
-	return application.WorkloadCreateOptions{CopyImageVolumes: true}
+const (
+	testContainerImage    = "docker.io/example/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dockerTestHealthCMD   = "CMD"
+	dockerQueryTrue       = "true"
+	dockerTestTmpfsTarget = "/tmp"
+)
+
+func testCreateOptions() CreateOptions {
+	return CreateOptions{ImageReference: testContainerImage, CopyImageVolumes: true}
 }
 
 //nolint:gocognit,gocyclo,cyclop,funlen,maintidx // One matrix covers independent invalid configuration boundaries.
@@ -33,7 +36,7 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 		t.Fatal("invalid map or environment accepted")
 	}
 	for _, labels := range [][]string{{""}, {badText + "=x"}, {"a=" + badText}, {"a=1", "a=2"}} {
-		if _, valid := dockerLabels(labels, nil); valid {
+		if _, valid := dockerLabels(labels); valid {
 			t.Fatalf("dockerLabels(%q) accepted", labels)
 		}
 	}
@@ -57,7 +60,7 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 		t.Fatal("zero restart retries accepted")
 	}
 
-	badExposed := [][]domain.ExposedPort{
+	badExposed := [][]containerconfig.ExposedPort{
 		{{TargetPort: 0, Protocol: dockerProtocolTCP}}, {{TargetPort: 1, Protocol: "bad"}},
 	}
 	for _, value := range badExposed {
@@ -65,7 +68,7 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 			t.Fatalf("dockerPorts(%v) accepted", value)
 		}
 	}
-	badPorts := [][]domain.PortBinding{
+	badPorts := [][]containerconfig.PortBinding{
 		{{TargetPort: 1, PublishedPort: 0, Protocol: dockerProtocolTCP}},
 		{{TargetPort: 0, PublishedPort: 1, Protocol: dockerProtocolTCP}},
 		{{TargetPort: 1, PublishedPort: 1, Protocol: "sctp"}},
@@ -79,7 +82,7 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 		}
 	}
 	for _, ip := range []string{"2001:db8::1", "192.0.2.1"} {
-		bindings, _, valid := dockerPorts(nil, []domain.PortBinding{{
+		bindings, _, valid := dockerPorts(nil, []containerconfig.PortBinding{{
 			HostIP: ip, PublishedPort: 2, TargetPort: 1, Protocol: dockerProtocolUDP,
 		}})
 		if !valid || len(bindings) != 1 {
@@ -90,60 +93,61 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 		t.Fatal("noncanonical DNS accepted")
 	}
 
-	if _, valid := dockerTmpfs([]domain.TmpfsMount{{Target: ""}}); valid {
+	if _, valid := dockerTmpfs([]containerconfig.TmpfsMount{{Target: ""}}); valid {
 		t.Fatal("empty tmpfs target accepted")
 	}
-	if _, valid := dockerTmpfs([]domain.TmpfsMount{{Target: "/x"}, {Target: "/x"}}); valid {
+	if _, valid := dockerTmpfs([]containerconfig.TmpfsMount{{Target: "/x"}, {Target: "/x"}}); valid {
 		t.Fatal("duplicate tmpfs target accepted")
 	}
-	if _, valid := dockerDevices([]domain.DeviceMapping{{Permissions: "z"}}); valid {
+	if _, valid := dockerDevices([]containerconfig.DeviceMapping{{Permissions: "z"}}); valid {
 		t.Fatal("invalid device accepted")
 	}
-	if _, valid := dockerUlimits([]domain.Ulimit{{Name: "x", Soft: 2, Hard: 1}}); valid {
+	if _, valid := dockerUlimits([]containerconfig.Ulimit{{Name: "x", Soft: 2, Hard: 1}}); valid {
 		t.Fatal("invalid ulimit accepted")
 	}
-	for _, value := range [][]domain.Mount{
-		{{Target: ""}}, {{Kind: domain.MountBind, Target: "/x"}},
-		{{Kind: domain.MountVolume, Source: "named", Target: "/x"}}, {{Kind: domain.MountKind(99), Target: "/x"}},
+	for _, value := range [][]containerconfig.Mount{
+		{{Target: ""}}, {{Kind: containerconfig.MountBind, Target: "/x"}},
+		{{Kind: containerconfig.MountVolume, Source: "named", Target: "/x"}},
+		{{Kind: containerconfig.MountKind(99), Target: "/x"}},
 	} {
 		if _, _, valid := dockerMounts(value); valid {
 			t.Fatalf("dockerMounts(%v) accepted", value)
 		}
 	}
-	volumes, _, valid := dockerMounts([]domain.Mount{{Kind: domain.MountBind, Source: "/a", Target: "/b"}})
+	volumes, _, valid := dockerMounts([]containerconfig.Mount{{
+		Kind: containerconfig.MountBind, Source: "/a", Target: "/b",
+	}})
 	if !valid || volumes != nil {
 		t.Fatal("bind-only mounts rejected")
 	}
 	if mounts := appendNoCopyVolumes(nil, nil); mounts != nil {
 		t.Fatalf("appendNoCopyVolumes(nil) = %#v", mounts)
 	}
-	workload := validApplicationWorkload(t)
-	workload.Mounts = []domain.Mount{{Kind: domain.MountVolume, Target: "/data"}}
-	request, valid := dockerCreateConfiguration(
-		workload, testTransaction, application.WorkloadCreateOptions{CopyImageVolumes: false},
-	)
+	workload := completeDockerWorkloadSpec()
+	workload.Mounts = []containerconfig.Mount{{Kind: containerconfig.MountVolume, Target: "/data"}}
+	request, err := Encode(workload, CreateOptions{ImageReference: testContainerImage, CopyImageVolumes: false})
 	config := request.Config
 	host := request.HostConfig
-	if !valid || config == nil || host == nil ||
+	if err != nil || config == nil || host == nil ||
 		len(config.Volumes) != 0 || len(host.Mounts) != 1 ||
 		host.Mounts[0].VolumeOptions == nil || !host.Mounts[0].VolumeOptions.NoCopy {
 		t.Fatalf("no-copy volume create = %#v", request)
 	}
 
 	retry := 0
-	for _, value := range []*domain.Healthcheck{
+	for _, value := range []*containerconfig.Healthcheck{
 		{Disabled: true, Test: []string{dockerTestHealthCMD, dockerQueryTrue}}, {Interval: "bad"}, {Retries: &retry},
 	} {
 		if _, valid := dockerHealthcheck(value); valid {
 			t.Fatalf("dockerHealthcheck(%v) accepted", value)
 		}
 	}
-	disabledHealthcheck, valid := dockerHealthcheck(&domain.Healthcheck{Disabled: true})
+	disabledHealthcheck, valid := dockerHealthcheck(&containerconfig.Healthcheck{Disabled: true})
 	if !valid || disabledHealthcheck == nil || len(disabledHealthcheck.Test) != 1 ||
 		disabledHealthcheck.Test[0] != dockerHealthcheckNone {
 		t.Fatal("disabled healthcheck rejected")
 	}
-	healthcheck, valid := dockerHealthcheck(&domain.Healthcheck{
+	healthcheck, valid := dockerHealthcheck(&containerconfig.Healthcheck{
 		Test: []string{dockerTestHealthCMD, dockerQueryTrue},
 	})
 	if !valid || healthcheck == nil || healthcheck.Retries != 0 {
@@ -164,15 +168,9 @@ func TestDockerConfigurationValidationBoundaries(t *testing.T) {
 	}
 
 	spec := completeDockerWorkloadSpec()
-	reserved := validApplicationWorkload(t)
-	reserved.WorkloadSpec = spec
-	reserved.Labels = []string{domain.LabelService + "=reserved"}
-	if _, accepted := dockerCreateConfiguration(reserved, testTransaction, testCreateOptions()); accepted {
-		t.Fatal("create accepted reserved label")
-	}
-	invalidHost := validApplicationWorkload(t)
+	invalidHost := spec.Clone()
 	invalidHost.Hostname = tooLong
-	if _, accepted := dockerCreateConfiguration(invalidHost, testTransaction, testCreateOptions()); accepted {
+	if _, err := Encode(invalidHost, testCreateOptions()); err == nil {
 		t.Fatal("create accepted invalid spec")
 	}
 }
@@ -200,10 +198,10 @@ func TestDockerInspectValidationBoundaries(t *testing.T) {
 	expected.Cgroup = ""
 	observed.Restart = "no"
 	expected.Restart = ""
-	if !dockerConfigurationMatches(observed, expected) {
+	if !Equivalent(observed, expected) {
 		t.Fatal("Docker defaults did not canonicalize")
 	}
-	canonical := canonicalDockerPointers(domain.WorkloadSpec{
+	canonical := canonicalDockerPointers(containerconfig.Spec{
 		StdinOpen: &falseValue, ReadOnly: &falseValue, TTY: &falseValue,
 		OOMScoreAdj: &zero, Init: &falseValue, OOMKillDisable: &falseValue,
 	})
@@ -212,14 +210,16 @@ func TestDockerInspectValidationBoundaries(t *testing.T) {
 	}
 	explicitInit := expected.Clone()
 	explicitInit.Init = &falseValue
-	if dockerConfigurationMatches(observed, explicitInit) {
+	if Equivalent(observed, explicitInit) {
 		t.Fatal("dockerConfigurationMatches() treated daemon-default init as explicit false")
 	}
-	canonicalDockerOrder(&domain.WorkloadSpec{
-		Devices: []domain.DeviceMapping{{Target: "/b"}, {Target: "/a"}},
-		Tmpfs:   []domain.TmpfsMount{{Target: "/b"}, {Target: "/a"}},
-		Ulimits: []domain.Ulimit{{Name: "b"}, {Name: "a"}},
-	})
+	firstDNS := expected.Clone()
+	firstDNS.DNS = []string{"192.0.2.1", "192.0.2.2"}
+	secondDNS := firstDNS.Clone()
+	secondDNS.DNS[0], secondDNS.DNS[1] = secondDNS.DNS[1], secondDNS.DNS[0]
+	if Equivalent(firstDNS, secondDNS) {
+		t.Fatal("Docker comparison ignored DNS resolver priority")
+	}
 }
 
 func TestDockerInspectRoundTripsPortsAndTimeouts(t *testing.T) {
@@ -228,13 +228,13 @@ func TestDockerInspectRoundTripsPortsAndTimeouts(t *testing.T) {
 	spec := completeDockerWorkloadSpec()
 	second := spec.Clone()
 	second.ExposedPorts = append(second.ExposedPorts,
-		domain.ExposedPort{TargetPort: 1, Protocol: "sctp"},
-		domain.ExposedPort{TargetPort: 1, Protocol: dockerProtocolUDP})
+		containerconfig.ExposedPort{TargetPort: 1, Protocol: "sctp"},
+		containerconfig.ExposedPort{TargetPort: 1, Protocol: dockerProtocolUDP})
 	second.Ports = append(second.Ports,
-		domain.PortBinding{
+		containerconfig.PortBinding{
 			HostIP: "2001:db8::1", PublishedPort: 2, TargetPort: 1, Protocol: dockerProtocolUDP,
 		})
-	labels, valid := dockerLabels(second.Labels, nil)
+	labels, valid := dockerLabels(second.Labels)
 	if !valid {
 		t.Fatal("labels rejected")
 	}
@@ -243,7 +243,7 @@ func TestDockerInspectRoundTripsPortsAndTimeouts(t *testing.T) {
 		t.Fatal("IPv6/SCTP configuration rejected")
 	}
 	got, valid := dockerWorkloadFromInspect(second.ContainerName, cfg2, host2)
-	if !valid || !dockerConfigurationMatches(got, second) {
+	if !valid || !Equivalent(got, second) {
 		t.Fatal("IPv6/SCTP inspection did not round trip")
 	}
 	zeroTimeout := 0
@@ -360,16 +360,52 @@ func TestDockerObservedRuntimePolicyBoundaries(t *testing.T) {
 	}
 }
 
-func TestCreateWorkloadFailsClosedWhenDTOCannotBeEncoded(t *testing.T) {
+func TestPublicValidationErrorsRemainValueFree(t *testing.T) {
 	t.Parallel()
 
-	workload := validApplicationWorkload(t)
-	workload.Hostname = strings.Repeat("x", maximumDockerTextBytes+1)
-	client := connectedTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("invalid DTO reached Docker")
-	}))
-	_, err := client.CreateWorkload(context.Background(), workload, testTransaction, testCreateOptions())
-	if !errors.Is(err, ErrUnsupportedWorkload) {
-		t.Fatalf("CreateWorkload() error = %v", err)
+	workload := completeDockerWorkloadSpec()
+	if err := Validate(workload, CreateOptions{}); err == nil || strings.Contains(err.Error(), testContainerImage) {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func completeDockerWorkloadSpec() containerconfig.Spec {
+	weight := 500
+	oomScore := 100
+	pids := int64(128)
+	stopTimeout := int64(15)
+	truth := true
+	retries := 3
+
+	return containerconfig.Spec{
+		ServiceName: "example-api", ContainerName: "example-api",
+		Platform:   containerconfig.Platform{OS: "linux", Architecture: "amd64"},
+		Entrypoint: []string{"/init"}, Command: []string{"serve"}, NetworkMode: dockerNetworkMode,
+		BlkioWeight: &weight, CgroupParent: "parent", Cgroup: "private", CPUs: "1.5", Hostname: testWorkloadName,
+		MemoryBytes: 512 << 20, OOMScoreAdj: &oomScore, PidsLimit: &pids, Restart: "on-failure:3",
+		SharedMemoryBytes: 32 << 20, StopSignal: "SIGTERM", StopTimeout: &stopTimeout,
+		User: "1000:1000", WorkingDirectory: "/work", CapAdd: []string{"NET_ADMIN"},
+		CapDrop: []string{"MKNOD"}, DNS: []string{"1.1.1.1"}, DNSOptions: []string{"rotate"},
+		DNSSearch: []string{"example.test"}, Devices: []containerconfig.DeviceMapping{{
+			Source: "/dev/fuse", Target: "/dev/fuse", Permissions: "rw",
+		}}, ExtraHosts: []string{"host=192.0.2.1"}, GroupAdd: []string{"100"},
+		Sysctls:     map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
+		Tmpfs:       []containerconfig.TmpfsMount{{Target: dockerTestTmpfsTarget, Options: []string{"rw", "size=1048576"}}},
+		Ulimits:     []containerconfig.Ulimit{{Name: "nofile", Soft: 1024, Hard: 2048}},
+		Environment: []string{"A=one", "B=two"}, Labels: []string{"team=platform"},
+		ExposedPorts: []containerconfig.ExposedPort{
+			{TargetPort: 80, Protocol: dockerProtocolTCP},
+			{TargetPort: 53, Protocol: dockerProtocolUDP},
+		},
+		Ports:           []containerconfig.PortBinding{{PublishedPort: 8080, TargetPort: 80, Protocol: dockerProtocolTCP}},
+		NoNewPrivileges: true, Mounts: []containerconfig.Mount{
+			{Kind: containerconfig.MountBind, Source: "/host/data", Target: "/data", ReadOnly: true},
+			{Kind: containerconfig.MountVolume, Target: "/state"},
+		},
+		Init: &truth, StdinOpen: &truth, OOMKillDisable: &truth, ReadOnly: &truth, TTY: &truth,
+		Healthcheck: &containerconfig.Healthcheck{
+			Test: []string{dockerTestHealthCMD, dockerQueryTrue}, Interval: "30s", Timeout: "5s", Retries: &retries,
+			StartPeriod: "10s", StartInterval: "1s",
+		},
 	}
 }

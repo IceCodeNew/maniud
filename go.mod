@@ -7,6 +7,7 @@ toolchain go1.26.6
 require (
 	github.com/IceCodeNew/maniud/containerconfig v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/compose v0.1.0
+	github.com/IceCodeNew/maniud/containerconfig/docker v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/nerdctl v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv v0.1.0
 	github.com/IceCodeNew/maniud/imageref v0.1.0
@@ -46,6 +47,7 @@ require (
 replace (
 	github.com/IceCodeNew/maniud/containerconfig => ./containerconfig
 	github.com/IceCodeNew/maniud/containerconfig/compose => ./containerconfig/compose
+	github.com/IceCodeNew/maniud/containerconfig/docker => ./containerconfig/docker
 	github.com/IceCodeNew/maniud/containerconfig/nerdctl => ./containerconfig/nerdctl
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ./containerconfig/runtimeargv
 	github.com/IceCodeNew/maniud/imageref => ./imageref

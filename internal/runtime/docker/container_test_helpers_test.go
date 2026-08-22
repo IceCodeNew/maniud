@@ -10,6 +10,7 @@ import (
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
@@ -40,7 +41,13 @@ const (
 	testOtherValue           = "other"
 	testProcessCommand       = "serve"
 	testOversizedCase        = "oversized"
+	dockerProtocolTCP        = "tcp"
+	dockerProtocolUDP        = "udp"
 )
+
+func testCreateOptions() application.WorkloadCreateOptions {
+	return application.WorkloadCreateOptions{CopyImageVolumes: true}
+}
 
 func testContainerEntrypoint() []string {
 	return []string{"/usr/local/bin/api"}
