@@ -10,6 +10,7 @@ require (
 	github.com/IceCodeNew/maniud/containerconfig/containerd v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/docker v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/nerdctl v0.1.0
+	github.com/IceCodeNew/maniud/containerconfig/podman v0.1.0
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv v0.1.0
 	github.com/IceCodeNew/maniud/imageref v0.1.0
 	github.com/compose-spec/compose-go/v2 v2.14.0
@@ -75,6 +76,7 @@ replace (
 	github.com/IceCodeNew/maniud/containerconfig/containerd => ./containerconfig/containerd
 	github.com/IceCodeNew/maniud/containerconfig/docker => ./containerconfig/docker
 	github.com/IceCodeNew/maniud/containerconfig/nerdctl => ./containerconfig/nerdctl
+	github.com/IceCodeNew/maniud/containerconfig/podman => ./containerconfig/podman
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ./containerconfig/runtimeargv
 	github.com/IceCodeNew/maniud/imageref => ./imageref
 )
