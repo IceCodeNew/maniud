@@ -113,6 +113,14 @@ func newSSHClientConnection( //nolint:ireturn // x/crypto requires its Conn inte
 	authority string,
 	config *ssh.ClientConfig,
 ) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	select {
+	case <-ctx.Done():
+		_ = raw.Close()
+
+		return nil, nil, nil, fmt.Errorf("establish Docker SSH connection: %w", ctx.Err())
+	default:
+	}
+
 	result := make(chan sshConnectionResult, 1)
 
 	go func() {
