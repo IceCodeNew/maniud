@@ -68,6 +68,10 @@ type WorkloadTransitionRuntime interface {
 	ProbeWorkloadTransition(ctx context.Context, transition WorkloadTransition) (WorkloadTransitionProbe, error)
 }
 
+type incompleteWorkloadTransitionRuntime interface {
+	ResumeIncompleteWorkloadTransition(ctx context.Context, transition WorkloadTransition) error
+}
+
 // WorkloadTransitionProbe is either a proven missing postcondition or one
 // exact observed workload.
 type WorkloadTransitionProbe struct {
@@ -76,8 +80,9 @@ type WorkloadTransitionProbe struct {
 }
 
 type workloadTransitionEffect struct {
-	runtime    WorkloadTransitionRuntime
-	transition WorkloadTransition
+	runtime      WorkloadTransitionRuntime
+	transition   WorkloadTransition
+	resumeNeeded bool
 }
 
 func runWorkloadTransition(
@@ -96,7 +101,7 @@ func runWorkloadTransition(
 	}
 
 	intent := workloadTransitionIntent(sequence, transition)
-	effect := workloadTransitionEffect{runtime: runtime, transition: transition}
+	effect := &workloadTransitionEffect{runtime: runtime, transition: transition}
 
 	return runRuntimeEffect(ctx, journal, identifier, intent, effect)
 }
@@ -109,7 +114,7 @@ func workloadTransitionIntent(sequence int64, transition WorkloadTransition) sto
 	}
 }
 
-func (effect workloadTransitionEffect) Apply(ctx context.Context) error {
+func (effect *workloadTransitionEffect) Apply(ctx context.Context) error {
 	err := effect.runtime.ApplyWorkloadTransition(ctx, effect.transition)
 	if err != nil {
 		return fmt.Errorf("apply workload transition: %w", err)
@@ -118,8 +123,9 @@ func (effect workloadTransitionEffect) Apply(ctx context.Context) error {
 	return nil
 }
 
-func (effect workloadTransitionEffect) Probe(ctx context.Context) (EffectPostcondition, error) {
+func (effect *workloadTransitionEffect) Probe(ctx context.Context) (EffectPostcondition, error) {
 	var empty EffectPostcondition
+	effect.resumeNeeded = false
 
 	probe, err := effect.runtime.ProbeWorkloadTransition(ctx, effect.transition)
 	if err != nil {
@@ -140,22 +146,57 @@ func (effect workloadTransitionEffect) Probe(ctx context.Context) (EffectPostcon
 			Satisfied: true,
 		}, nil
 	}
-
-	if probe.State != WorkloadEffectProbeObserved ||
-		(probe.Workload != effect.transition.Before && probe.Workload != effect.transition.After) {
+	if probe.State != WorkloadEffectProbeObserved {
 		return empty, ErrConflictingState
 	}
+	postcondition, incomplete, valid := observedWorkloadTransition(effect.transition, probe.Workload)
+	if !valid {
+		return empty, ErrConflictingState
+	}
+	effect.resumeNeeded = incomplete
 
-	satisfied := effect.transition.Kind != WorkloadTransitionRemove && probe.Workload == effect.transition.After
+	return postcondition, nil
+}
+
+func (effect *workloadTransitionEffect) incomplete() bool {
+	return effect.resumeNeeded
+}
+
+func (effect *workloadTransitionEffect) resumeIncomplete(ctx context.Context) error {
+	runtime, ok := effect.runtime.(incompleteWorkloadTransitionRuntime)
+	if !ok {
+		return ErrConflictingState
+	}
+	if err := runtime.ResumeIncompleteWorkloadTransition(ctx, effect.transition); err != nil {
+		return fmt.Errorf("resume incomplete workload transition: %w", err)
+	}
+
+	return nil
+}
+
+func observedWorkloadTransition(
+	transition WorkloadTransition,
+	workload ExistingWorkload,
+) (EffectPostcondition, bool, bool) {
+	removing := transition.Before
+	removing.Lifecycle = WorkloadLifecycleRemoving
+	if transition.Kind == WorkloadTransitionRemove && workload == removing {
+		return workloadTransitionPostcondition(transition, false), true, true
+	}
+	if workload != transition.Before && workload != transition.After {
+		return EffectPostcondition{}, false, false
+	}
+
+	satisfied := transition.Kind != WorkloadTransitionRemove && workload == transition.After
 	state := byte(workloadTransitionBefore)
 	if satisfied {
 		state = workloadTransitionAfter
 	}
 
 	return EffectPostcondition{
-		Digest:    workloadTransitionDigest(state, effect.transition, probe.Workload),
+		Digest:    workloadTransitionDigest(state, transition, workload),
 		Satisfied: satisfied,
-	}, nil
+	}, false, true
 }
 
 func validWorkloadTransition(transition WorkloadTransition) bool {

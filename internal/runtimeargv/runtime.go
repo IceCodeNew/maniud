@@ -3,6 +3,7 @@
 package runtimeargv
 
 import (
+	"github.com/IceCodeNew/maniud/containerconfig/nerdctl"
 	publicargv "github.com/IceCodeNew/maniud/containerconfig/runtimeargv"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
@@ -27,6 +28,17 @@ type Projection struct {
 
 // Parse validates and projects one complete runtime create/run argv.
 func Parse(arguments []string, explicitName, workingDirectory string) (Projection, error) {
+	if len(arguments) > 0 && arguments[0] == publicargv.RuntimeNerdctl {
+		command, err := nerdctl.Parse(arguments, explicitName, workingDirectory)
+		if err != nil {
+			return Projection{}, ErrInvalid
+		}
+
+		return newProjection(
+			command.Spec, command.Image.String(), command.Spec.Platform,
+			command.Warnings, command.EnvironmentFiles, publicargv.RuntimeNerdctl,
+		)
+	}
 	parsed, err := publicargv.Parse(arguments, explicitName, workingDirectory)
 	if err != nil {
 		return Projection{}, ErrInvalid
