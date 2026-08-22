@@ -208,7 +208,7 @@ func (backend *nativeWorkloadBackendV1) deleteTask(ctx context.Context, identifi
 	if err != nil {
 		return classifyRPCError(err)
 	}
-	if response.GetID() != identifier {
+	if response.GetID() != "" && response.GetID() != identifier {
 		return ErrProtocol
 	}
 

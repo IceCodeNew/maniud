@@ -160,6 +160,30 @@ func TestNativeWorkloadReadAndTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestNativeTaskLifecycleContainerIdentity(t *testing.T) {
+	t.Parallel()
+
+	process := &tasktypes.Process{ID: testWorkloadName, Status: tasktypes.Status_RUNNING}
+	backend := &nativeWorkloadBackendV1{tasks: fakeTasksAPI{get: func(
+		*tasksapi.GetRequest,
+	) (*tasksapi.GetResponse, error) {
+		return &tasksapi.GetResponse{Process: process}, nil
+	}}}
+	for _, containerID := range []string{"", testWorkloadName} {
+		process.ContainerID = containerID
+		lifecycle, found, err := backend.taskLifecycle(context.Background(), testWorkloadName)
+		if err != nil || !found || lifecycle != application.WorkloadLifecycleRunning {
+			t.Fatalf("taskLifecycle(container ID %q) = %v, %t, %v", containerID, lifecycle, found, err)
+		}
+	}
+	process.ContainerID = testOtherValue
+	if _, _, err := backend.taskLifecycle(
+		context.Background(), testWorkloadName,
+	); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("taskLifecycle(conflicting container ID) = %v", err)
+	}
+}
+
 //nolint:cyclop // The test mutates independent managed-container evidence fields.
 func TestNativeManagedContainerEvidence(t *testing.T) {
 	t.Parallel()

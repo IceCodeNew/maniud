@@ -213,6 +213,12 @@ func TestNativeTaskDeleteEvidence(t *testing.T) {
 		t.Fatalf("deleteTask() = %v", err)
 	}
 	backend.tasks = fakeTasksAPI{delete: func(*tasksapi.DeleteTaskRequest) (*tasksapi.DeleteResponse, error) {
+		return &tasksapi.DeleteResponse{}, nil
+	}}
+	if err := backend.deleteTask(context.Background(), identifier); err != nil {
+		t.Fatalf("deleteTask(empty task ID) = %v", err)
+	}
+	backend.tasks = fakeTasksAPI{delete: func(*tasksapi.DeleteTaskRequest) (*tasksapi.DeleteResponse, error) {
 		return &tasksapi.DeleteResponse{ID: testOtherValue}, nil
 	}}
 	if err := backend.deleteTask(context.Background(), identifier); !errors.Is(err, ErrProtocol) {
