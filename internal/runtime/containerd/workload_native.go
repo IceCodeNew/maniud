@@ -429,7 +429,8 @@ func (backend *nativeWorkloadBackendV1) taskLifecycle(
 		return application.WorkloadLifecycleUnknown, false, classifyRPCError(err)
 	}
 	process := response.GetProcess()
-	if process == nil || process.GetContainerID() != identifier || process.GetID() != identifier {
+	if process == nil || process.GetID() != identifier ||
+		process.GetContainerID() != "" && process.GetContainerID() != identifier {
 		return application.WorkloadLifecycleUnknown, false, ErrProtocol
 	}
 	lifecycle, err := taskLifecycle(process.GetStatus(), true)
