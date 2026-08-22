@@ -43,6 +43,7 @@ linters:
           files:
             - $all
             - "!**/imageref/*.go"
+            - "!**/internal/backup/*.go"
             - "!**/internal/store/*.go"
             - "!**/internal/compose/*.go"
             - "!**/internal/composeext/maniud/*.go"
@@ -108,6 +109,15 @@ linters:
             - github.com/opencontainers/image-spec
             - golang.org/x/sys
             - oras.land/oras-go/v2
+        backup:
+          list-mode: strict
+          files:
+            - "**/internal/backup/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/sys
+            - golang.org/x/text
     # Public adapter modules use repository-relative replacements only while
     # this monorepo develops and tests a shared release version.
     gomoddirectives:
