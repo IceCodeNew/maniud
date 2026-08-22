@@ -100,6 +100,8 @@ maniud apply --dry-run compose.yaml web
 Docker uses `DOCKER_HOST`; the default is
 `unix:///var/run/docker.sock`. Podman uses `CONTAINER_HOST`, then
 `XDG_RUNTIME_DIR/podman/podman.sock`, and finally its rootful or user socket.
+Containerd requires an explicit local Unix socket in `CONTAINERD_ADDRESS` and
+namespace in `CONTAINERD_NAMESPACE`.
 Plain `tcp://` Docker endpoints emit an `insecure_remote_engine` warning before
 use and are intended only for an operator-controlled VPN and firewall. TLS from
 Docker environment variables is not configured in phase one.

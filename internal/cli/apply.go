@@ -15,6 +15,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/registry"
+	containerdruntime "github.com/IceCodeNew/maniud/internal/runtime/containerd"
 	dockerruntime "github.com/IceCodeNew/maniud/internal/runtime/docker"
 	podmanruntime "github.com/IceCodeNew/maniud/internal/runtime/podman"
 	"github.com/IceCodeNew/maniud/internal/store"
@@ -79,26 +80,7 @@ func defaultApplyDependencies(
 			return loadTrackedComposeSource(ctx, path, workingDirectory, environment, filepath.Dir(statePath))
 		},
 		openRuntime: func(ctx context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-			switch runtimeKind {
-			case domain.RuntimeDocker:
-				client, openErr := openDockerApplyRuntime(ctx, environment, stderr)
-				if openErr != nil {
-					return nil, openErr
-				}
-
-				return client, nil
-			case domain.RuntimePodman:
-				client, openErr := openPodmanApplyRuntime(ctx, environment)
-				if openErr != nil {
-					return nil, openErr
-				}
-
-				return client, nil
-			case domain.RuntimeContainerd:
-				return nil, application.ErrInvalidRequest
-			default:
-				return nil, application.ErrInvalidRequest
-			}
+			return openApplyRuntime(ctx, runtimeKind, environment, stderr)
 		},
 		openReader: func(ctx context.Context) (applyTransactionReader, error) {
 			return store.OpenReader(ctx, statePath)
@@ -116,6 +98,40 @@ func defaultApplyDependencies(
 		},
 		images: resolver,
 	}, nil
+}
+
+//nolint:ireturn // Runtime selection intentionally returns the application boundary.
+func openApplyRuntime(
+	ctx context.Context,
+	runtimeKind domain.RuntimeKind,
+	environment map[string]string,
+	stderr io.Writer,
+) (applyRuntime, error) {
+	switch runtimeKind {
+	case domain.RuntimeDocker:
+		client, err := openDockerApplyRuntime(ctx, environment, stderr)
+		if err != nil {
+			return nil, err
+		}
+
+		return client, nil
+	case domain.RuntimePodman:
+		client, err := openPodmanApplyRuntime(ctx, environment)
+		if err != nil {
+			return nil, err
+		}
+
+		return client, nil
+	case domain.RuntimeContainerd:
+		client, err := openContainerdApplyRuntime(ctx, environment)
+		if err != nil {
+			return nil, err
+		}
+
+		return client, nil
+	default:
+		return nil, application.ErrInvalidRequest
+	}
 }
 
 func openDockerApplyRuntime(
@@ -146,6 +162,22 @@ func openPodmanApplyRuntime(
 	client, _, err := podmanruntime.Connect(ctx, socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("connect Podman runtime: %w", err)
+	}
+
+	return client, nil
+}
+
+func openContainerdApplyRuntime(
+	ctx context.Context,
+	environment map[string]string,
+) (*containerdruntime.Client, error) {
+	client, err := containerdruntime.Connect(
+		ctx,
+		environment[containerdAddressEnvironment],
+		environment[containerdNamespaceEnvironment],
+	)
+	if err != nil {
+		return nil, fmt.Errorf("connect containerd runtime: %w", err)
 	}
 
 	return client, nil

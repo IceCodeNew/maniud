@@ -16,6 +16,11 @@ import (
 	"strings"
 	"testing"
 
+	introspectionapi "github.com/containerd/containerd/api/services/introspection/v1" //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
+	versionapi "github.com/containerd/containerd/api/services/version/v1"             //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
+	"google.golang.org/grpc"                                                          //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
+	"google.golang.org/protobuf/types/known/emptypb"                                  //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
+
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -1116,7 +1121,31 @@ func TestDefaultApplyDependenciesOpenPodmanRuntime(t *testing.T) {
 	runtimeAdapter.CloseIdleConnections()
 }
 
-func TestDefaultApplyDependenciesRejectsUnsupportedAndInvalidPodmanRuntime(t *testing.T) {
+func TestDefaultApplyDependenciesOpenContainerdRuntime(t *testing.T) {
+	t.Parallel()
+
+	socketPath := startApplyContainerdServer(t)
+	dependencies, err := defaultApplyDependencies(map[string]string{
+		homeKey:                        t.TempDir(),
+		xdgStateHomeKey:                t.TempDir(),
+		containerdAddressEnvironment:   "unix://" + socketPath,
+		containerdNamespaceEnvironment: "maniud-test",
+	}, io.Discard, os.Getwd)
+	if err != nil {
+		t.Fatalf("defaultApplyDependencies() error = %v", err)
+	}
+
+	runtimeAdapter, err := dependencies.openRuntime(context.Background(), domain.RuntimeContainerd)
+	if err != nil {
+		t.Fatalf("openRuntime(containerd) error = %v", err)
+	}
+	if runtimeAdapter == nil {
+		t.Fatal("openRuntime(containerd) returned a nil adapter")
+	}
+	runtimeAdapter.CloseIdleConnections()
+}
+
+func TestDefaultApplyDependenciesRejectsInvalidRuntimes(t *testing.T) {
 	t.Parallel()
 
 	dependencies, err := defaultApplyDependencies(map[string]string{homeKey: t.TempDir()}, io.Discard, os.Getwd)
@@ -1125,7 +1154,7 @@ func TestDefaultApplyDependenciesRejectsUnsupportedAndInvalidPodmanRuntime(t *te
 	}
 	var runtimeAdapter applyRuntime
 	runtimeAdapter, err = dependencies.openRuntime(context.Background(), domain.RuntimeContainerd)
-	if runtimeAdapter != nil || !errors.Is(err, application.ErrInvalidRequest) {
+	if runtimeAdapter != nil || err == nil {
 		t.Fatalf("openRuntime(containerd) = %#v, %v", runtimeAdapter, err)
 	}
 	runtimeAdapter, err = dependencies.openRuntime(context.Background(), domain.RuntimeKind("invalid"))
@@ -1145,6 +1174,62 @@ func TestDefaultApplyDependenciesRejectsUnsupportedAndInvalidPodmanRuntime(t *te
 			t.Fatalf("openRuntime(Podman %q) = %#v, %v", host, runtimeAdapter, err)
 		}
 	}
+}
+
+type applyContainerdVersionServer struct {
+	versionapi.UnimplementedVersionServer
+}
+
+func (*applyContainerdVersionServer) Version(
+	context.Context,
+	*emptypb.Empty,
+) (*versionapi.VersionResponse, error) {
+	return &versionapi.VersionResponse{Version: "2.3.4", Revision: "test"}, nil
+}
+
+type applyContainerdIntrospectionServer struct {
+	introspectionapi.UnimplementedIntrospectionServer
+}
+
+func (*applyContainerdIntrospectionServer) Server(
+	context.Context,
+	*emptypb.Empty,
+) (*introspectionapi.ServerResponse, error) {
+	return &introspectionapi.ServerResponse{UUID: "maniud-test", Pid: 42, Pidns: 84}, nil
+}
+
+func startApplyContainerdServer(t *testing.T) string {
+	t.Helper()
+
+	directory, err := os.MkdirTemp("/tmp", "maniud-") //nolint:usetesting // Darwin test paths must fit sockaddr_un.
+	if err != nil {
+		t.Fatalf("create containerd test socket directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	path := filepath.Join(directory, "containerd.sock")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
+	if err != nil {
+		t.Fatalf("listen on containerd test socket: %v", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = listener.Close()
+		t.Fatalf("protect containerd test socket: %v", err)
+	}
+	server := grpc.NewServer()
+	versionapi.RegisterVersionServer(server, &applyContainerdVersionServer{})
+	introspectionapi.RegisterIntrospectionServer(server, &applyContainerdIntrospectionServer{})
+	done := make(chan struct{})
+	go func() {
+		_ = server.Serve(listener)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+		<-done
+	})
+
+	return path
 }
 
 func startApplyPodmanServer(t *testing.T) string {
