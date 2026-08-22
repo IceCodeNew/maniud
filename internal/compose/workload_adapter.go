@@ -1,0 +1,27 @@
+package compose
+
+import (
+	composetypes "github.com/compose-spec/compose-go/v2/types"
+
+	composecodec "github.com/IceCodeNew/maniud/containerconfig/compose"
+	"github.com/IceCodeNew/maniud/internal/domain"
+)
+
+func workloadSpecFromService(
+	service composetypes.ServiceConfig,
+	platform domain.Platform,
+	pathFrom string,
+	pathTo string,
+) (domain.WorkloadSpec, error) {
+	spec, err := composecodec.FromService(
+		service,
+		platform,
+		composecodec.PathMapping{From: pathFrom, To: pathTo},
+		composecodec.ServiceOptions{AllowPullPolicy: service.PullPolicy != ""},
+	)
+	if err != nil {
+		return domain.WorkloadSpec{}, ErrInvalidSource
+	}
+
+	return spec, nil
+}
