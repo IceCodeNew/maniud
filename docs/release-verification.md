@@ -8,13 +8,28 @@ not rerun tests when a tag is created.
 The workflow calculates the next stable SemVer tag from existing
 `vMAJOR.MINOR.PATCH` tags and the selected major, minor, or patch bump. The tag
 points directly to the tested master commit; publication does not add a release
-commit.
+commit. With no existing stable tag, the default patch selection starts the
+shared module version at `0.1.0`.
+
+Every public Go module uses that same version and commit. The tested master
+revision must already require that version for every dependency between modules
+in this repository. Prepare those `go.mod` changes before dispatching Release;
+normal master Checks test them. The preflight rejects stale or mixed internal
+versions.
+
+Before publishing the root release, the workflow creates a lightweight
+`MODULE/vMAJOR.MINOR.PATCH` tag for each tracked nested `go.mod`, in module
+dependency order. A retry accepts an existing module tag only when it points
+directly to the same tested commit. This includes `containerconfig`, `imageref`,
+and each independently importable adapter module. After staging the draft, the
+workflow creates or verifies the lightweight root tag against that commit.
 
 The workflow stages a draft release before uploading assets. It validates the
 complete nonempty asset set, then publishes the draft as the final visibility
 step. If a run stops after creating the draft, a later dispatch from the same
 master SHA resumes that draft and replaces its assets. A draft that points to a
-different commit blocks publication for operator review.
+different commit blocks publication for operator review. A master commit that
+already has a stable root tag cannot start another release.
 
 ## Platform qualification
 
