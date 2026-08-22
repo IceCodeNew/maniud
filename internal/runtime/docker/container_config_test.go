@@ -74,6 +74,33 @@ func TestDockerConfigurationRoundTripsCompleteWorkloadSpec(t *testing.T) {
 	}
 }
 
+func TestDockerConfigurationKeepsOwnershipPolicyInternal(t *testing.T) {
+	t.Parallel()
+
+	workload := validApplicationWorkload(t)
+	workload.Labels = []string{domain.LabelService + "=reserved"}
+	if _, valid := dockerCreateConfiguration(workload, testTransaction, testCreateOptions()); valid {
+		t.Fatal("dockerCreateConfiguration() accepted a project ownership label")
+	}
+
+	workload = validApplicationWorkload(t)
+	workload.Hostname = string([]byte{0xff})
+	if _, valid := dockerCreateConfiguration(workload, testTransaction, testCreateOptions()); valid {
+		t.Fatal("dockerCreateConfiguration() accepted an invalid public adapter value")
+	}
+
+	labels, valid := dockerLabels([]string{"flag"}, nil)
+	if !valid || labels["flag"] != "" {
+		t.Fatalf("dockerLabels(flag) = %#v, %t", labels, valid)
+	}
+	if _, valid := dockerLabels([]string{"a=1", "a=2"}, nil); valid {
+		t.Fatal("dockerLabels() accepted duplicate labels")
+	}
+	if validProcessArguments([]string{"bad\x00argument"}) {
+		t.Fatal("validProcessArguments() accepted NUL")
+	}
+}
+
 func TestDockerWorkloadInspectRejectsUnsupportedConfiguration(t *testing.T) {
 	t.Parallel()
 

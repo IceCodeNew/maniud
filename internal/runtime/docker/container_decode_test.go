@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -145,12 +146,25 @@ func TestDecodeContainerNormalizesSupportedRestartPolicies(t *testing.T) {
 			payload.HostConfig.RestartPolicy = test.policy
 
 			observed, valid := decodeContainer(testContainerName, payload)
-			want, wantValid := dockerObservedRestart(test.want)
-			if !valid || !wantValid || observed.WorkloadSpec.Restart != want {
+			want := restartPolicyString(test.want)
+			if !valid || observed.WorkloadSpec.Restart != want {
 				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed.WorkloadSpec.Restart, valid)
 			}
 		})
 	}
+}
+
+func restartPolicyString(policy containertypes.RestartPolicy) string {
+	name := policy.Name
+	if name == "" {
+		name = containertypes.RestartPolicyDisabled
+	}
+	value := string(name)
+	if policy.MaximumRetryCount != 0 {
+		value += ":" + strconv.Itoa(policy.MaximumRetryCount)
+	}
+
+	return value
 }
 
 func TestDecodeContainerRejectsConflictingReference(t *testing.T) {
