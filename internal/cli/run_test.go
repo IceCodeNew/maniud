@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -12,7 +13,16 @@ import (
 )
 
 const (
-	invalidInputJSON = "{\"code\":\"invalid_input\",\"message\":" +
+	testArchitectureAMD64 = "amd64"
+	testDockerRuntime     = "docker"
+	testImageSource       = "image:1"
+	testInvalidValue      = "invalid"
+	testPlatformAMD64     = "linux/amd64"
+	testRegistrySource    = "example.invalid/api:1"
+	testRelativePath      = "relative"
+	testServiceName       = "service"
+	testWorkingDirectory  = "/workspace"
+	invalidInputJSON      = "{\"code\":\"invalid_input\",\"message\":" +
 		"\"command arguments are invalid; run 'maniud --help' for supported syntax\",\"retryable\":false}\n"
 	internalErrorJSON = "{\"code\":\"internal_error\",\"message\":" +
 		"\"command is unavailable in this build\",\"retryable\":false}\n"
@@ -21,6 +31,12 @@ const (
 )
 
 var errClosedOutput = errors.New("closed output")
+
+type unavailableInvocation struct{}
+
+func (unavailableInvocation) kind() command {
+	return "unavailable"
+}
 
 func TestRunPublicTransport(t *testing.T) {
 	t.Parallel()
@@ -47,19 +63,20 @@ func TestRunPublicTransport(t *testing.T) {
 			name:       "version",
 			args:       []string{versionOption},
 			wantStatus: 0,
-			wantOutput: "maniud dev\n",
+			wantOutput: "maniud " + currentVersion() + "\n",
 		},
 		{
-			name:       "invalid",
+			name:       testInvalidValue,
 			args:       []string{"prepare"},
 			wantStatus: 1,
 			wantOutput: invalidInputJSON,
 		},
 		{
-			name:       "valid skeleton",
+			name:       "missing apply source",
 			args:       []string{string(commandApply), composeFileValue},
 			wantStatus: 1,
-			wantOutput: internalErrorJSON,
+			wantOutput: "{\"code\":\"apply_failed\",\"message\":" +
+				"\"apply validation failed\",\"retryable\":false}\n",
 		},
 	}
 
@@ -86,9 +103,9 @@ func TestRunTreatsRuntimeHelpAsInput(t *testing.T) {
 
 	var output bytes.Buffer
 	status := Run(context.Background(), []string{
-		string(commandGen), runtimeArgumentsSeparator, dockerRuntimeValue, runOperation, helpOption,
+		string(commandGen), runtimeArgumentsSeparator, testDockerRuntime, runOperation, helpOption,
 	}, nil, &output, io.Discard)
-	if status != 1 || output.String() != internalErrorJSON {
+	if status != 1 || !strings.Contains(output.String(), `"code":"generation_failed"`) {
 		t.Fatalf("Run(runtime help) = %d, %q", status, output.String())
 	}
 }
@@ -137,6 +154,94 @@ func TestRunHelpPages(t *testing.T) {
 		if output.String() != test.want {
 			t.Fatalf("Run(%q) output = %q, want %q", test.args, output.String(), test.want)
 		}
+	}
+}
+
+func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		args  []string
+		getwd func() (string, error)
+	}{
+		{
+			name: "working directory failure",
+			args: []string{string(commandGen), imageValue},
+			getwd: func() (string, error) {
+				return "", errClosedOutput
+			},
+		},
+		{
+			name:  "generation failure",
+			args:  []string{string(commandGen), "\x00"},
+			getwd: func() (string, error) { return testWorkingDirectory, nil },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			output := new(bytes.Buffer)
+			status := runProduction(
+				context.Background(), test.args, output, io.Discard, map[string]string{}, test.getwd,
+			)
+			if status != 1 || !strings.Contains(output.String(), `"code":"generation_failed"`) {
+				t.Fatalf("runProduction() = %d, %q", status, output.String())
+			}
+		})
+	}
+}
+
+func TestRunProductionWiresLongRunningCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := [][]string{
+		{gitOpsCommand, initCommand, testRelativePath},
+		{string(commandDaemon), "--once"},
+		{string(commandDoctor), reindexBackupsOption},
+	}
+	for _, arguments := range commands {
+		var output bytes.Buffer
+		status := runProduction(
+			t.Context(), arguments, &output, io.Discard, map[string]string{}, os.Getwd,
+		)
+		if status != 1 {
+			t.Fatalf("runProduction(%v) = %d, %q", arguments, status, output.String())
+		}
+	}
+}
+
+func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
+	t.Parallel()
+
+	tests := []invocation{
+		{arguments: gitOpsInitInvocation{}},
+		{arguments: daemonInvocation{}},
+		{arguments: doctorInvocation{}},
+	}
+	for _, parsed := range tests {
+		var output bytes.Buffer
+		status := dispatchParsedCommand(
+			parsed, &output, nil,
+			func(genInvocation) error { return nil },
+			func(applyInvocation) error { return nil },
+			func(gitOpsInitInvocation) error { return nil },
+			func(daemonInvocation) error { return nil },
+			func(doctorInvocation) error { return nil },
+		)
+		if status != 0 || output.Len() != 0 {
+			t.Fatalf("dispatchParsedCommand(%T) = %d, %q", parsed.arguments, status, output.String())
+		}
+	}
+
+	var output bytes.Buffer
+	status := dispatchParsedCommand(
+		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil,
+	)
+	if status != 1 || output.String() != internalErrorJSON {
+		t.Fatalf("dispatchParsedCommand(unavailable) = %d, %q", status, output.String())
 	}
 }
 

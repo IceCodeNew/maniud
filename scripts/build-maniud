@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# < 1 || $# > 2)); then
+	printf 'usage: %s OUTPUT [RELEASE_VERSION]\n' "$0" >&2
+	exit 2
+fi
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+output="$1"
+release="${2:-}"
+ldflags=''
+if [[ "$output" != /* ]]; then
+	output="$(pwd -P)/$output"
+fi
+
+if [[ -n "$release" ]]; then
+	if [[ ! "$release" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+		printf 'release version is not stable SemVer: %s\n' "$release" >&2
+		exit 2
+	fi
+	ldflags="-s -w -X github.com/IceCodeNew/maniud/internal/cli.releaseVersion=$release"
+else
+	revision="$(git -C "$repo_root" rev-parse --verify HEAD)"
+	committed="$(TZ=UTC git -C "$repo_root" show -s --format=%cd --date=format-local:%Y%m%d HEAD)"
+	modified=''
+	if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=normal)" ]]; then
+		modified='-dirty'
+	fi
+	development="$committed$modified-g${revision:0:12}"
+	ldflags="-X github.com/IceCodeNew/maniud/internal/cli.developmentVersion=$development"
+fi
+
+(
+	cd "$repo_root"
+	CGO_ENABLED=0 go build -buildvcs=true -trimpath -ldflags "$ldflags" -o "$output" ./cmd/maniud
+)

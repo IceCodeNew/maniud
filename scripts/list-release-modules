@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+release_order=(
+	containerconfig
+	imageref
+	containerconfig/compose
+	containerconfig/containerd
+	containerconfig/docker
+	containerconfig/podman
+	containerconfig/runtimeargv
+	containerconfig/nerdctl
+)
+
+if ! diff --brief \
+	<(printf '%s\n' "${release_order[@]}" | LC_ALL=C sort) \
+	<("$repository_root/scripts/list-go-modules" | sed '/^\.$/d') >/dev/null; then
+	printf '%s\n' 'The public module release order does not cover every tracked nested go.mod.' >&2
+	exit 1
+fi
+
+printf '%s\n' "${release_order[@]}"

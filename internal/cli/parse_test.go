@@ -7,11 +7,12 @@ import (
 )
 
 const (
+	applyServiceValue  = "api"
 	composeFileValue   = "compose.yaml"
 	generatedFileValue = "service.yaml"
 	imageValue         = "image"
 	repositoryValue    = "repo"
-	dockerRuntimeValue = "docker"
+	createOperation    = "create"
 	runOperation       = "run"
 	unknownValue       = "unknown"
 	unknownOption      = "--unknown"
@@ -28,12 +29,14 @@ func TestParseAcceptedCommands(t *testing.T) {
 	}{
 		{
 			name: "generate",
-			args: []string{string(commandGen), imageValue, nameOption, "service", "--output=" + generatedFileValue},
+			args: []string{
+				string(commandGen), imageValue, nameOption, testServiceName, "--output=" + generatedFileValue,
+			},
 			want: invocation{
 				arguments: genInvocation{
 					source:      imageValue,
 					runtimeArgs: nil,
-					name:        "service",
+					name:        testServiceName,
 					output:      generatedFileValue,
 				},
 				debug: false,
@@ -54,9 +57,9 @@ func TestParseAcceptedCommands(t *testing.T) {
 		},
 		{
 			name: "apply one service",
-			args: []string{string(commandApply), composeFileValue, "api", dryRunOption},
+			args: []string{string(commandApply), composeFileValue, applyServiceValue, dryRunOption},
 			want: invocation{
-				arguments: applyInvocation{compose: composeFileValue, service: "api", dryRun: true},
+				arguments: applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: true},
 				debug:     false,
 			},
 		},
@@ -80,7 +83,7 @@ func TestParseAcceptedCommands(t *testing.T) {
 			name: "gitops default branch",
 			args: []string{gitOpsCommand, initCommand, repositoryValue},
 			want: invocation{
-				arguments: gitOpsInitInvocation{repository: repositoryValue, branch: "main"},
+				arguments: gitOpsInitInvocation{repository: repositoryValue, branch: defaultGitOpsBranch},
 				debug:     false,
 			},
 		},
@@ -102,12 +105,11 @@ func TestParseAcceptedCommands(t *testing.T) {
 		},
 		{
 			name: "doctor confirms reindex",
-			args: []string{string(commandDoctor), configOption + "=config.toml", reindexBackupsOption, confirmOption},
+			args: []string{string(commandDoctor), reindexBackupsOption, confirmOption},
 			want: invocation{
 				arguments: doctorInvocation{
 					reindexBackups: true,
 					confirm:        true,
-					config:         "config.toml",
 					state:          "",
 				},
 				debug: false,
@@ -120,7 +122,6 @@ func TestParseAcceptedCommands(t *testing.T) {
 				arguments: doctorInvocation{
 					reindexBackups: true,
 					confirm:        false,
-					config:         "",
 					state:          "state.db",
 				},
 				debug: true,
@@ -158,7 +159,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandGen)},
 		{string(commandGen), "one", "two"},
 		{string(commandGen), imageValue, "--"},
-		{string(commandGen), imageValue, "--", dockerRuntimeValue, runOperation, imageValue},
+		{string(commandGen), imageValue, "--", testDockerRuntime, runOperation, imageValue},
 		{string(commandGen), "--"},
 		{string(commandGen), imageValue, nameOption},
 		{string(commandGen), imageValue, nameOption, outputOption, generatedFileValue},
@@ -173,7 +174,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{gitOpsCommand, initCommand, repositoryValue, unknownOption},
 		{string(commandDaemon), "extra"},
 		{string(commandDaemon), unknownOption},
-		{string(commandDaemon), intervalOption, "invalid"},
+		{string(commandDaemon), intervalOption, testInvalidValue},
 		{string(commandDaemon), intervalOption, "NaN"},
 		{string(commandDaemon), intervalOption, "+Inf"},
 		{string(commandDaemon), intervalOption, "0"},
@@ -182,7 +183,7 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandDoctor)},
 		{string(commandDoctor), reindexBackupsOption, "extra"},
 		{string(commandDoctor), reindexBackupsOption + "=true"},
-		{string(commandDoctor), reindexBackupsOption, configOption},
+		{string(commandDoctor), reindexBackupsOption, "--config", "config.toml"},
 		{string(commandDoctor), reindexBackupsOption, unknownOption},
 	}
 
@@ -202,7 +203,7 @@ func TestRequestedHelpRejectsUnknownPaths(t *testing.T) {
 		{versionOption},
 		{unknownValue, helpOption},
 		{gitOpsCommand, unknownValue, helpOption},
-		{string(commandGen), runtimeArgumentsSeparator, dockerRuntimeValue, runOperation, helpOption},
+		{string(commandGen), runtimeArgumentsSeparator, testDockerRuntime, runOperation, helpOption},
 	}
 	for _, args := range tests {
 		help, ok := requestedHelp(args)
