@@ -1,0 +1,39 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "renovate/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      !startsWith(github.head_ref, 'renovate/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Orb setup needs the user's signing key, Nowledge Mem credentials, and
+      # Amp's supervised-service API. CI validates its checked-in syntax without
+      # copying those workstation credentials into GitHub.
+      - name: Check shell scripts
+        run: |
+          bash -n .agents/setup .agents/resume .agents/tool-versions.sh
+          shellcheck .agents/setup .agents/resume .agents/tool-versions.sh
+      - name: Check Renovate configuration syntax
+        run: jq empty renovate.json
