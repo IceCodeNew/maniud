@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+(
+	cd "$repository_root"
+	git ls-files -z -- ':(glob)**/go.mod' |
+		while IFS= read -r -d '' module_file; do
+			dirname "$module_file"
+		done
+) | LC_ALL=C sort -u
