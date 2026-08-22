@@ -15,12 +15,15 @@ const (
 )
 
 type transitionRuntimeFixture struct {
-	events     *[]string
-	applied    bool
-	transition WorkloadTransition
-	probe      WorkloadTransitionProbe
-	applyErr   error
-	probeErr   error
+	events             *[]string
+	applied            bool
+	resumed            bool
+	transition         WorkloadTransition
+	probe              WorkloadTransitionProbe
+	probeAfterApply    *WorkloadTransitionProbe
+	probeErrAfterApply error
+	applyErr           error
+	probeErr           error
 }
 
 func (runtime *transitionRuntimeFixture) ApplyWorkloadTransition(
@@ -30,8 +33,23 @@ func (runtime *transitionRuntimeFixture) ApplyWorkloadTransition(
 	*runtime.events = append(*runtime.events, eventEffect)
 	runtime.applied = true
 	runtime.transition = transition
+	if runtime.probeAfterApply != nil {
+		runtime.probe = *runtime.probeAfterApply
+	}
+	if runtime.probeErrAfterApply != nil {
+		runtime.probeErr = runtime.probeErrAfterApply
+	}
 
 	return runtime.applyErr
+}
+
+func (runtime *transitionRuntimeFixture) ResumeIncompleteWorkloadTransition(
+	ctx context.Context,
+	transition WorkloadTransition,
+) error {
+	runtime.resumed = true
+
+	return runtime.ApplyWorkloadTransition(ctx, transition)
 }
 
 func (runtime *transitionRuntimeFixture) ProbeWorkloadTransition(
@@ -103,6 +121,135 @@ func TestRunWorkloadTransitionCompletesResolvedNegativeResult(t *testing.T) {
 		journal.action.State != store.ActionStateCompleted {
 		t.Fatalf("runWorkloadTransition(before) = %#v, %v", got, err)
 	}
+}
+
+func TestRunWorkloadRemovalResumesIncompleteUnknownEffect(t *testing.T) {
+	t.Parallel()
+
+	transition := testWorkloadTransitions()[2]
+	identifier := store.TransactionID{1}
+	journal := imageEffectJournal(store.ActionStateEffectOutcomeUnknown)
+	missing := WorkloadTransitionProbe{State: WorkloadEffectProbeMissing}
+	removing := transition.Before
+	removing.Lifecycle = WorkloadLifecycleRemoving
+	runtime := &transitionRuntimeFixture{
+		events: &journal.events,
+		probe: WorkloadTransitionProbe{
+			State: WorkloadEffectProbeObserved, Workload: removing,
+		},
+		probeAfterApply: &missing,
+	}
+
+	got, err := runWorkloadTransition(context.Background(), journal, identifier, 1, transition, runtime)
+	if err != nil || !got.Satisfied || !runtime.applied || !runtime.resumed ||
+		journal.action.State != store.ActionStateCompleted ||
+		!equalEvents(journal.events, []string{
+			eventIntent, eventProbe, eventFence, eventEffect, eventProbe, eventComplete,
+		}) {
+		t.Fatalf(
+			"runWorkloadTransition(incomplete remove) = %#v, %v, runtime %#v, events %q",
+			got, err, runtime, journal.events,
+		)
+	}
+}
+
+func TestRunWorkloadRemovalRetainsUnknownEffectWhenResumeIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	transition := testWorkloadTransitions()[2]
+	identifier := store.TransactionID{1}
+	journal := imageEffectJournal(store.ActionStateIntent)
+	removing := transition.Before
+	removing.Lifecycle = WorkloadLifecycleRemoving
+	runtime := &transitionRuntimeFixture{
+		events: &journal.events,
+		probe: WorkloadTransitionProbe{
+			State: WorkloadEffectProbeObserved, Workload: removing,
+		},
+		applyErr: errTestBoundary,
+	}
+
+	got, err := runWorkloadTransition(context.Background(), journal, identifier, 1, transition, runtime)
+	if !errors.Is(err, errTestBoundary) || got != emptyEffectPostcondition() || !runtime.applied ||
+		journal.action.State != store.ActionStateEffectOutcomeUnknown ||
+		!equalEvents(journal.events, []string{
+			eventIntent, eventFence, eventUnknown, eventEffect, eventProbe, eventFence, eventEffect, eventProbe,
+		}) {
+		t.Fatalf(
+			"runWorkloadTransition(persistent remove failure) = %#v, %v, runtime %#v, events %q",
+			got, err, runtime, journal.events,
+		)
+	}
+}
+
+func TestRunWorkloadRemovalContainsResumeBoundaryFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		fenceErr error
+		probeErr error
+		events   []string
+	}{
+		{
+			name: eventFence, fenceErr: errTestBoundary,
+			events: []string{eventIntent, eventProbe, eventFence},
+		},
+		{
+			name: "resumed probe", probeErr: errTestBoundary,
+			events: []string{eventIntent, eventProbe, eventFence, eventEffect, eventProbe},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			transition := testWorkloadTransitions()[2]
+			removing := transition.Before
+			removing.Lifecycle = WorkloadLifecycleRemoving
+			journal := imageEffectJournal(store.ActionStateEffectOutcomeUnknown)
+			journal.failures[eventFence] = test.fenceErr
+			runtime := &transitionRuntimeFixture{
+				events: &journal.events,
+				probe: WorkloadTransitionProbe{
+					State: WorkloadEffectProbeObserved, Workload: removing,
+				},
+				probeErrAfterApply: test.probeErr,
+			}
+
+			got, err := runWorkloadTransition(
+				context.Background(), journal, store.TransactionID{1}, 1, transition, runtime,
+			)
+			if !errors.Is(err, errTestBoundary) || got != emptyEffectPostcondition() ||
+				journal.action.State != store.ActionStateEffectOutcomeUnknown ||
+				!equalEvents(journal.events, test.events) {
+				t.Fatalf("runWorkloadTransition(%s) = %#v, %v, events %q", test.name, got, err, journal.events)
+			}
+		})
+	}
+}
+
+func TestWorkloadRemovalRejectsResumeWithoutRuntimeSupport(t *testing.T) {
+	t.Parallel()
+
+	effect := &workloadTransitionEffect{
+		runtime: &transitionRuntimeWithoutResume{}, transition: testWorkloadTransitions()[2], resumeNeeded: true,
+	}
+	if err := effect.resumeIncomplete(context.Background()); !errors.Is(err, ErrConflictingState) {
+		t.Fatalf("resumeIncomplete() = %v", err)
+	}
+}
+
+type transitionRuntimeWithoutResume struct{}
+
+func (*transitionRuntimeWithoutResume) ApplyWorkloadTransition(context.Context, WorkloadTransition) error {
+	return nil
+}
+
+func (*transitionRuntimeWithoutResume) ProbeWorkloadTransition(
+	context.Context,
+	WorkloadTransition,
+) (WorkloadTransitionProbe, error) {
+	return WorkloadTransitionProbe{}, nil
 }
 
 func TestWorkloadTransitionEffectRejectsUnprovenPostconditions(t *testing.T) {
