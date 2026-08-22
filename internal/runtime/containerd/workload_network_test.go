@@ -3,7 +3,6 @@ package containerd
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/containernetworking/cni/libcni"
@@ -12,10 +11,12 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+const testCNIAliasesCapability = "aliases"
+
 type fakeNetworkExecutor struct {
 	cached        []byte
 	cachedRuntime *libcni.RuntimeConf
-	plugins       []string
+	capabilities  []string
 	cacheErr      error
 	validateErr   error
 	addErr        error
@@ -68,7 +69,7 @@ func (executor *fakeNetworkExecutor) ValidateNetworkList(
 	context.Context,
 	*libcni.NetworkConfigList,
 ) ([]string, error) {
-	return executor.plugins, executor.validateErr
+	return executor.capabilities, executor.validateErr
 }
 
 func testCNINetwork(executor networkExecutor) *cniNetwork {
@@ -88,11 +89,18 @@ func testCNINetwork(executor networkExecutor) *cniNetwork {
 func TestCNINetworkInspectAndRuntimeProjection(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeNetworkExecutor{plugins: []string{defaultCNINetworkName, "portmap"}}
+	executor := &fakeNetworkExecutor{
+		capabilities: []string{cniPortMappingsCapability, testCNIAliasesCapability},
+	}
 	network := testCNINetwork(executor)
 	digest, err := network.Inspect(context.Background())
 	if err != nil || digest == (domain.Digest{}) {
 		t.Fatalf("Inspect() = %v, %v", digest, err)
+	}
+	executor.capabilities = []string{testCNIAliasesCapability, cniPortMappingsCapability}
+	reorderedDigest, err := network.Inspect(context.Background())
+	if err != nil || reorderedDigest != digest {
+		t.Fatalf("Inspect(reordered capabilities) = %v, %v", reorderedDigest, err)
 	}
 	networkNamespace := "/netns/" + testContainerValue
 	configuration, runtime, err := network.runtimeConfiguration(
@@ -108,11 +116,6 @@ func TestCNINetworkInspectAndRuntimeProjection(t *testing.T) {
 	if !valid || len(mappings) != 1 || mappings[0].HostPort != 8080 || mappings[0].ContainerPort != 80 {
 		t.Fatalf("runtimeConfiguration(port mappings) = %#v", runtime.CapabilityArgs)
 	}
-	first := slicesClone([]string{"a"})
-	first[0] = "changed"
-	if slicesClone(nil) != nil || reflect.DeepEqual(first, []string{"a"}) {
-		t.Fatal("slicesClone() did not clone or preserve nil")
-	}
 	network.load = func(string, string) (*libcni.NetworkConfigList, error) {
 		return nil, errContainerdTest
 	}
@@ -125,7 +128,7 @@ func TestCNINetworkInspectAndRuntimeProjection(t *testing.T) {
 func TestCNINetworkLifecycleAndFailures(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeNetworkExecutor{plugins: []string{defaultCNINetworkName}}
+	executor := &fakeNetworkExecutor{capabilities: []string{cniPortMappingsCapability}}
 	network := testCNINetwork(executor)
 	ctx := context.Background()
 	if err := network.Ensure(ctx, "container", "/netns/container", nil); err != nil ||
@@ -214,8 +217,13 @@ func TestCNINetworkConfigurationRejectsIncompleteAndUnavailableInputs(t *testing
 	}
 	network = testCNINetwork(executor)
 	if _, err := network.Inspect(context.Background()); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("Inspect(no plugins) = %v", err)
+		t.Fatalf("Inspect(no capabilities) = %v", err)
 	}
+	executor.capabilities = []string{testCNIAliasesCapability}
+	if _, err := network.Inspect(context.Background()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Inspect(missing port mappings capability) = %v", err)
+	}
+	executor.capabilities = []string{cniPortMappingsCapability}
 	executor.validateErr = errContainerdTest
 	if _, err := network.Inspect(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Inspect(validation failure) = %v", err)

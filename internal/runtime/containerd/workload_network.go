@@ -3,6 +3,7 @@ package containerd
 import (
 	"context"
 	"io"
+	"slices"
 
 	"github.com/containernetworking/cni/libcni"
 	"github.com/containernetworking/cni/pkg/invoke"
@@ -12,7 +13,10 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
-const containerdNetworkInterface = "eth0"
+const (
+	containerdNetworkInterface = "eth0"
+	cniPortMappingsCapability  = "portMappings"
+)
 
 type networkExecutor interface {
 	AddNetworkList(
@@ -64,7 +68,7 @@ func newCNINetwork(options WorkloadOptions) *cniNetwork {
 		configDirectory: options.CNIConfigDirectory,
 		networkName:     options.CNINetworkName,
 		executor: libcni.NewCNIConfigWithCacheDir(
-			slicesClone(options.CNIPluginDirectories), options.CNICacheDirectory, executor,
+			slices.Clone(options.CNIPluginDirectories), options.CNICacheDirectory, executor,
 		),
 		load: libcni.LoadNetworkConf,
 	}
@@ -75,15 +79,17 @@ func (network *cniNetwork) Inspect(ctx context.Context) (domain.Digest, error) {
 	if err != nil {
 		return domain.Digest{}, err
 	}
-	plugins, err := network.executor.ValidateNetworkList(ctx, configuration)
-	if err != nil || len(plugins) == 0 {
+	capabilities, err := network.executor.ValidateNetworkList(ctx, configuration)
+	if err != nil || !slices.Contains(capabilities, cniPortMappingsCapability) {
 		return domain.Digest{}, ErrUnavailable
 	}
+	capabilities = slices.Clone(capabilities)
+	slices.Sort(capabilities)
 	value := appendContainerdString([]byte{1}, configuration.Name)
 	value = appendContainerdString(value, configuration.CNIVersion)
 	value = appendContainerdString(value, string(configuration.Bytes))
-	for _, plugin := range plugins {
-		value = appendContainerdString(value, plugin)
+	for _, capability := range capabilities {
+		value = appendContainerdString(value, capability)
 	}
 
 	return domain.Hash(value), nil
@@ -220,14 +226,4 @@ func (network *cniNetwork) configuration() (*libcni.NetworkConfigList, error) {
 	}
 
 	return configuration, nil
-}
-
-func slicesClone(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	clone := make([]string, len(values))
-	copy(clone, values)
-
-	return clone
 }
