@@ -153,15 +153,29 @@ func prepareHostWorkload(
 		}
 	}
 
-	configuration, err = configureHostWorkload(
-		configuration, spec, stateDirectory, workloadNetworkNamespace(options, identifier), runtimeMounts,
+	runtimeConfiguration, err := configureOwnedHostWorkload(
+		spec, stateDirectory, workloadNetworkNamespace(options, identifier), runtimeMounts,
 	)
 	if err != nil {
 		return preparedHostWorkload{}, err
 	}
 	complete = true
 
-	return preparedHostWorkload{Configuration: configuration, RuntimeMounts: runtimeMounts}, nil
+	return preparedHostWorkload{Configuration: runtimeConfiguration, RuntimeMounts: runtimeMounts}, nil
+}
+
+func configureOwnedHostWorkload(
+	spec domain.WorkloadSpec,
+	stateDirectory string,
+	networkNamespace string,
+	runtimeMounts []domain.RuntimeMount,
+) (containerdconfig.Configuration, error) {
+	configuration, err := containerdconfig.Encode(spec)
+	if err != nil {
+		return containerdconfig.Configuration{}, ErrProtocol
+	}
+
+	return configureHostWorkload(configuration, spec, stateDirectory, networkNamespace, runtimeMounts)
 }
 
 func configureHostWorkload(
