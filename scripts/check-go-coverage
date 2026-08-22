@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# > 1)); then
-	printf 'usage: %s [cover-profile]\n' "$0" >&2
-	exit 2
-fi
+packages_file=""
+profile_argument=""
+while (($# > 0)); do
+	case "$1" in
+	--packages-from)
+		if (($# < 2)) || [[ -z "$2" ]]; then
+			printf '%s\n' '--packages-from requires a package-list file' >&2
+			exit 2
+		fi
+		packages_file="$(realpath "$2")"
+		shift 2
+		;;
+	-*)
+		printf 'unknown option: %s\n' "$1" >&2
+		exit 2
+		;;
+	*)
+		if [[ -n "$profile_argument" ]]; then
+			printf 'usage: %s [--packages-from file] [cover-profile]\n' "$0" >&2
+			exit 2
+		fi
+		profile_argument="$1"
+		shift
+		;;
+	esac
+done
 
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
-profile="${1:-$temporary_dir/statements.cover}"
+profile="${profile_argument:-$temporary_dir/statements.cover}"
 test_cgo=0
 if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
 	test_cgo=1
@@ -28,12 +50,21 @@ for module_number in "${!module_names[@]}"; do
 		coverage_patterns=(./internal/...)
 	fi
 	coverage_packages=()
-	while IFS= read -r coverage_package; do
-		coverage_packages+=("$coverage_package")
-	done < <(
-		cd "$module_directory"
-		GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
-	)
+	if [[ -n "$packages_file" ]]; then
+		while IFS= read -r coverage_package; do
+			coverage_packages+=("$coverage_package")
+		done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
+	else
+		while IFS= read -r coverage_package; do
+			coverage_packages+=("$coverage_package")
+		done < <(
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
+		)
+	fi
+	if ((${#coverage_packages[@]} == 0)); then
+		continue
+	fi
 	coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
 	module_profile="$temporary_dir/statements-$module_number.cover"
 	module_profiles+=("$module_profile")
@@ -48,7 +79,7 @@ for module_number in "${!module_names[@]}"; do
 	fi
 	(
 		cd "$module_directory"
-		GOWORK=off CGO_ENABLED="$test_cgo" go test "${test_args[@]}" ./...
+		GOWORK=off CGO_ENABLED="$test_cgo" go test "${test_args[@]}" "${coverage_packages[@]}"
 	)
 	module_path="$(cd "$module_directory" && GOWORK=off go list -m -f '{{.Path}}')"
 	absolute_module_profile="$temporary_dir/absolute-$module_number.cover"
@@ -61,6 +92,11 @@ for module_number in "${!module_names[@]}"; do
   ' "$module_profile" >"$absolute_module_profile"
 	mv "$absolute_module_profile" "$module_profile"
 done
+
+if ((${#module_profiles[@]} == 0)); then
+	printf '%s\n' 'no packages selected for coverage' >&2
+	exit 1
+fi
 
 absolute_profile="$temporary_dir/statements-absolute.cover"
 {
@@ -125,9 +161,6 @@ tar --exclude=.git --exclude=.amp -cf - . | tar -xf - -C "$source_copy"
 
 	: >"$temporary_dir/packages.tsv"
 	: >"$temporary_dir/coverage-directories.txt"
-	: >"$temporary_dir/current-package-manifests.tsv"
-	: >"$temporary_dir/baseline-package-manifests.tsv"
-	baseline_goarch="${MANIUD_BRANCH_BASELINE_GOARCH:-$(go env GOARCH)}"
 	for module_name in "${module_names[@]}"; do
 		module_directory="$(cd "$source_copy/$module_name" && pwd -P)"
 		python3 - "$module_directory/go.mod" "$module_directory" <<'PY'
@@ -149,72 +182,31 @@ PY
 		if [[ "$module_name" == "." ]]; then
 			coverage_patterns=(./internal/...)
 		fi
+		coverage_packages=()
+		if [[ -n "$packages_file" ]]; then
+			while IFS= read -r coverage_package; do
+				coverage_packages+=("$coverage_package")
+			done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
+		else
+			coverage_packages=("${coverage_patterns[@]}")
+		fi
+		if ((${#coverage_packages[@]} == 0)); then
+			continue
+		fi
 		(
 			cd "$module_directory"
 			GOWORK=off CGO_ENABLED="$test_cgo" go list -f \
 				'{{.Dir}}{{"\t"}}{{join .GoFiles "\t"}}{{"\t"}}{{join .CgoFiles "\t"}}{{"\t"}}{{join .TestGoFiles "\t"}}{{"\t"}}{{join .XTestGoFiles "\t"}}' \
-				./...
+				"${coverage_packages[@]}"
 		) >>"$temporary_dir/packages.tsv"
-		if [[ -n "${MANIUD_BRANCH_BASELINE_GOOS:-}" ]]; then
-			manifest_template='{{.ImportPath}}{{"\t"}}{{.Dir}}{{"\t"}}{{join .GoFiles ","}}{{"\t"}}{{join .CgoFiles ","}}{{"\t"}}{{join .TestGoFiles ","}}{{"\t"}}{{join .XTestGoFiles ","}}'
-			(
-				cd "$module_directory"
-				GOWORK=off CGO_ENABLED="$test_cgo" go list -f "$manifest_template" "${coverage_patterns[@]}"
-			) | awk -v module_directory="$module_directory" '{ print module_directory "\t" $0 }' \
-				>>"$temporary_dir/current-package-manifests.tsv"
-			(
-				cd "$module_directory"
-				GOWORK=off GOARCH="$baseline_goarch" \
-					GOOS="$MANIUD_BRANCH_BASELINE_GOOS" CGO_ENABLED="$test_cgo" \
-					go list -f "$manifest_template" "${coverage_patterns[@]}"
-			) | awk -v module_directory="$module_directory" '{ print module_directory "\t" $0 }' \
-				>>"$temporary_dir/baseline-package-manifests.tsv"
-		else
-			while IFS= read -r coverage_directory; do
-				printf '%s\t%s\n' "$module_directory" "$coverage_directory" \
-					>>"$temporary_dir/coverage-directories.txt"
-			done < <(
-				cd "$module_directory"
-				GOWORK=off CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' "${coverage_patterns[@]}"
-			)
-		fi
+		while IFS= read -r coverage_directory; do
+			printf '%s\t%s\n' "$module_directory" "$coverage_directory" \
+				>>"$temporary_dir/coverage-directories.txt"
+		done < <(
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' "${coverage_packages[@]}"
+		)
 	done
-	if [[ -n "${MANIUD_BRANCH_BASELINE_GOOS:-}" ]]; then
-		python3 - \
-			"$temporary_dir/baseline-package-manifests.tsv" \
-			"$temporary_dir/current-package-manifests.tsv" \
-			>"$temporary_dir/coverage-directories.txt" <<'PY'
-import csv
-from pathlib import Path
-import sys
-
-
-def read_manifests(filename):
-    with open(filename, encoding="utf-8", newline="") as stream:
-        return list(csv.reader(stream, delimiter="\t"))
-
-
-def reads_platform(package_directory, selected_filenames):
-    for filenames in selected_filenames:
-        for filename in filenames.split(","):
-            if not filename:
-                continue
-            contents = (Path(package_directory) / filename).read_text(encoding="utf-8")
-            if "runtime.GOOS" in contents or "runtime.GOARCH" in contents:
-                return True
-    return False
-
-
-baseline = {row[1]: row[3:] for row in read_manifests(sys.argv[1])}
-for row in read_manifests(sys.argv[2]):
-    if reads_platform(row[2], row[3:]) or baseline.get(row[1]) != row[3:]:
-        print(row[0], row[2], sep="\t")
-PY
-		printf 'branch coverage packages differing from %s/%s: %d\n' \
-			"$MANIUD_BRANCH_BASELINE_GOOS" \
-			"$baseline_goarch" \
-			"$(wc -l <"$temporary_dir/coverage-directories.txt")"
-	fi
 	while IFS=$'\t' read -r package_dir selected_files; do
 		selected_files=$'\t'"$selected_files"$'\t'
 		shopt -s nullglob
