@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strings"
 
 	contentapi "github.com/containerd/containerd/api/services/content/v1"
 	imagesapi "github.com/containerd/containerd/api/services/images/v1"
@@ -93,15 +94,9 @@ func (repository *imageRepository) FetchReference(
 ) (ocispec.Descriptor, io.ReadCloser, error) {
 	var target ocispec.Descriptor
 	err := repository.client.checked(ctx, func(requestContext context.Context) error {
-		response, err := repository.client.images.Get(requestContext, &imagesapi.GetImageRequest{
-			Name: repository.source.String(),
-		})
-		if err != nil {
-			return classifyRPCError(err)
-		}
-		image := response.GetImage()
-		if image == nil || image.GetName() != repository.source.String() || image.GetTarget() == nil {
-			return ErrProtocol
+		image, imageErr := localImageRecord(requestContext, repository.client.images, repository.source)
+		if imageErr != nil {
+			return imageErr
 		}
 		target = apiDescriptor(image.GetTarget())
 
@@ -114,6 +109,43 @@ func (repository *imageRepository) FetchReference(
 	reader, err := repository.Fetch(ctx, target)
 
 	return target, reader, err
+}
+
+func containerdImageNames(source imageref.Source) []string {
+	exact := source.String()
+	tagged, _, pinned := strings.Cut(exact, "@")
+	if !pinned {
+		return []string{exact}
+	}
+
+	return []string{exact, tagged}
+}
+
+func localImageRecord(
+	ctx context.Context,
+	images imagesClient,
+	source imageref.Source,
+) (*imagesapi.Image, error) {
+	if images == nil {
+		return nil, ErrUnavailable
+	}
+	for _, name := range containerdImageNames(source) {
+		response, err := images.Get(ctx, &imagesapi.GetImageRequest{Name: name})
+		if status.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, classifyRPCError(err)
+		}
+		image := response.GetImage()
+		if image == nil || image.GetName() != name || image.GetTarget() == nil {
+			return nil, ErrProtocol
+		}
+
+		return image, nil
+	}
+
+	return nil, errNotFound
 }
 
 func (repository *imageRepository) Fetch(
