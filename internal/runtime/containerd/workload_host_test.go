@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/containerd/v2/pkg/archive"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	containerdconfig "github.com/IceCodeNew/maniud/containerconfig/containerd"
@@ -605,7 +606,11 @@ func TestConfigureHostWorkloadFailureMatrix(t *testing.T) {
 func TestPrivateFileAndHostAbsenceFailures(t *testing.T) {
 	t.Parallel()
 
-	if err := writePrivateFile("/proc/maniud-host-test", nil); !errors.Is(err, ErrUnavailable) {
+	root := testHostDirectory(t)
+	if err := writePrivateFileWith(
+		filepath.Join(root, testFileName), nil,
+		func(string, string) (*os.File, error) { return nil, errContainerdTest },
+	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("writePrivateFile(create failure) = %v", err)
 	}
 	temporary, err := os.CreateTemp(t.TempDir(), "closed-*")
@@ -621,8 +626,8 @@ func TestPrivateFileAndHostAbsenceFailures(t *testing.T) {
 		t.Fatalf("writePrivateFileContents(closed) = %v", err)
 	}
 
-	root := t.TempDir()
-	loop := filepath.Join(root, "loop")
+	loopRoot := t.TempDir()
+	loop := filepath.Join(loopRoot, "loop")
 	if err = os.Symlink("loop", loop); err != nil {
 		t.Fatal(err)
 	}
@@ -705,6 +710,13 @@ func TestLocalWorkloadHostTemporaryRootfs(t *testing.T) {
 	if err != nil || !called {
 		t.Fatalf("WithRootfs(empty) = %v, called %v", err, called)
 	}
+	err = withTemporaryRootfs(
+		context.Background(), nil, func(string) error { return nil },
+		func(context.Context, []mount.Mount, func(string) error) error { return errContainerdTest },
+	)
+	if !errors.Is(err, errContainerdTest) {
+		t.Fatalf("withTemporaryRootfs(failure) = %v", err)
+	}
 }
 
 func TestCopyVolumeInitialContentsRejectsUnsafeAndUnwritableTargets(t *testing.T) {
@@ -745,10 +757,59 @@ func TestCopyVolumeInitialContentsRejectsUnsafeAndUnwritableTargets(t *testing.T
 		context.Background(), []mount.Mount{{Type: bindMountType, Source: rootfs}},
 		[]domain.RuntimeMount{{Source: t.TempDir(), Target: testStateMount}}, withRootfs,
 		func(string) (os.FileInfo, error) { return nil, errContainerdTest },
+		copyVolumeContents,
 	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("copyVolumeInitialContents(stat failure) = %v", err)
 	}
+	if err := copyVolumeInitialContentsWith(
+		context.Background(), []mount.Mount{{Type: bindMountType, Source: rootfs}},
+		[]domain.RuntimeMount{{Source: t.TempDir(), Target: testStateMount}}, withRootfs,
+		os.Lstat, func(context.Context, string, string) error { return errContainerdTest },
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("copyVolumeInitialContents(copy failure) = %v", err)
+	}
 }
+
+func TestCopyVolumeContentsClassifiesArchiveFailures(t *testing.T) {
+	t.Parallel()
+
+	diff := func(context.Context, string, string, ...archive.WriteDiffOpt) io.ReadCloser {
+		return containerdTestReadCloser{Reader: strings.NewReader("archive")}
+	}
+	apply := func(context.Context, string, io.Reader, ...archive.ApplyOpt) (int64, error) {
+		return 0, nil
+	}
+	if err := copyVolumeContentsWith(context.Background(), "source", "destination", diff, apply); err != nil {
+		t.Fatalf("copyVolumeContentsWith() = %v", err)
+	}
+	apply = func(context.Context, string, io.Reader, ...archive.ApplyOpt) (int64, error) {
+		return 0, errContainerdTest
+	}
+	if err := copyVolumeContentsWith(
+		context.Background(), "source", "destination", diff, apply,
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("copyVolumeContentsWith(apply failure) = %v", err)
+	}
+	diff = func(context.Context, string, string, ...archive.WriteDiffOpt) io.ReadCloser {
+		return containerdTestReadCloser{Reader: strings.NewReader("archive"), closeErr: errContainerdTest}
+	}
+	apply = func(context.Context, string, io.Reader, ...archive.ApplyOpt) (int64, error) {
+		return 0, nil
+	}
+	if err := copyVolumeContentsWith(
+		context.Background(), "source", "destination", diff, apply,
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("copyVolumeContentsWith(close failure) = %v", err)
+	}
+}
+
+type containerdTestReadCloser struct {
+	io.Reader
+
+	closeErr error
+}
+
+func (reader containerdTestReadCloser) Close() error { return reader.closeErr }
 
 func TestArchiveFilesystemCancellationAndDirectoryTarget(t *testing.T) {
 	t.Parallel()

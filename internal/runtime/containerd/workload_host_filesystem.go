@@ -65,11 +65,19 @@ func validateSecureDirectory(
 }
 
 func writePrivateFile(path string, content []byte) error {
+	return writePrivateFileWith(path, content, os.CreateTemp)
+}
+
+func writePrivateFileWith(
+	path string,
+	content []byte,
+	createTemp func(string, string) (*os.File, error),
+) error {
 	directory := filepath.Dir(path)
 	if err := secureDirectory(directory); err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(directory, ".maniud-host-*")
+	temporary, err := createTemp(directory, ".maniud-host-*")
 	if err != nil {
 		return ErrUnavailable
 	}

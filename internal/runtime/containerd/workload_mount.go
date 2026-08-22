@@ -174,7 +174,9 @@ func copyVolumeInitialContents(
 	volumes []domain.RuntimeMount,
 	withRootfs func(context.Context, []mount.Mount, func(string) error) error,
 ) error {
-	return copyVolumeInitialContentsWith(ctx, mounts, volumes, withRootfs, os.Lstat)
+	return copyVolumeInitialContentsWith(
+		ctx, mounts, volumes, withRootfs, os.Lstat, copyVolumeContents,
+	)
 }
 
 func copyVolumeInitialContentsWith(
@@ -183,6 +185,7 @@ func copyVolumeInitialContentsWith(
 	volumes []domain.RuntimeMount,
 	withRootfs func(context.Context, []mount.Mount, func(string) error) error,
 	lstat func(string) (os.FileInfo, error),
+	copyContents func(context.Context, string, string) error,
 ) error {
 	if len(mounts) == 0 || withRootfs == nil {
 		return ErrProtocol
@@ -200,10 +203,7 @@ func copyVolumeInitialContentsWith(
 			if err != nil {
 				return ErrUnavailable
 			}
-			reader := archive.Diff(private, "", source)
-			_, applyErr := archive.Apply(private, volume.Source, reader)
-			closeErr := reader.Close()
-			if applyErr != nil || closeErr != nil {
+			if err = copyContents(private, source, volume.Source); err != nil {
 				return ErrUnavailable
 			}
 		}
@@ -211,6 +211,27 @@ func copyVolumeInitialContentsWith(
 		return nil
 	})
 	if err != nil {
+		return ErrUnavailable
+	}
+
+	return nil
+}
+
+func copyVolumeContents(ctx context.Context, source, destination string) error {
+	return copyVolumeContentsWith(ctx, source, destination, archive.Diff, archive.Apply)
+}
+
+func copyVolumeContentsWith(
+	ctx context.Context,
+	source string,
+	destination string,
+	diff func(context.Context, string, string, ...archive.WriteDiffOpt) io.ReadCloser,
+	apply func(context.Context, string, io.Reader, ...archive.ApplyOpt) (int64, error),
+) error {
+	reader := diff(ctx, "", source)
+	_, applyErr := apply(ctx, destination, reader)
+	closeErr := reader.Close()
+	if applyErr != nil || closeErr != nil {
 		return ErrUnavailable
 	}
 

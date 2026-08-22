@@ -61,7 +61,16 @@ func (localWorkloadHost) WithRootfs(
 	mounts []mount.Mount,
 	operation func(string) error,
 ) error {
-	if err := mount.WithTempMount(privateContainerdLogContext(ctx), mounts, operation); err != nil {
+	return withTemporaryRootfs(ctx, mounts, operation, mount.WithTempMount)
+}
+
+func withTemporaryRootfs(
+	ctx context.Context,
+	mounts []mount.Mount,
+	operation func(string) error,
+	temporaryMount func(context.Context, []mount.Mount, func(string) error) error,
+) error {
+	if err := temporaryMount(privateContainerdLogContext(ctx), mounts, operation); err != nil {
 		return fmt.Errorf("temporary rootfs mount: %w", err)
 	}
 
