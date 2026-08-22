@@ -171,10 +171,8 @@ jobs:
         run: |
           set -euo pipefail
           name="maniud_${RELEASE_VERSION}_${TARGET_GOOS}_${TARGET_GOARCH}"
-          ldflags="-s -w -X github.com/IceCodeNew/maniud/internal/cli.version=$RELEASE_VERSION"
-          CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" \
-            go build -buildvcs=true -trimpath -ldflags "$ldflags" \
-            -o "$RUNNER_TEMP/$name" ./cmd/maniud
+          GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" \
+            scripts/build-maniud "$RUNNER_TEMP/$name" "$RELEASE_VERSION"
       - name: Smoke native release binary
         if: matrix.native
         env:
