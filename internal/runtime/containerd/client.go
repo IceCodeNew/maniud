@@ -217,6 +217,12 @@ func (client *Client) Close() error {
 	return nil
 }
 
+// CloseIdleConnections releases the gRPC connection through the common
+// runtime cleanup contract.
+func (client *Client) CloseIdleConnections() {
+	_ = client.Close()
+}
+
 func endpointPath(address string) (string, bool) {
 	path := strings.TrimPrefix(address, "unix://")
 
