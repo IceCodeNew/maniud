@@ -10,6 +10,9 @@
   "env": {
     "GOPROXY": "https://golang.flatt.tech"
   },
+  "gomod": {
+    "managerFilePatterns": ["/(^|/)go\\.mod$/"]
+  },
   "customManagers": [
     {
       "description": "Update explicitly annotated tool versions",

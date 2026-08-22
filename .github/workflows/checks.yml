@@ -40,6 +40,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Read shared tool versions
         id: tool-versions
         run: |
@@ -74,7 +77,7 @@ jobs:
       # CI bounds it separately.
       - name: Run interprocedural nil analysis
         timeout-minutes: 12
-        run: nilaway -include-pkgs=github.com/IceCodeNew/maniud ./...
+        run: scripts/run-go-modules nilaway -include-pkgs=github.com/IceCodeNew/maniud ./...
       - name: Run tests, race detector, statement coverage, and branch coverage
         env:
           MANIUD_CI_RACE: 1
@@ -112,6 +115,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Verify native runner
         env:
           EXPECTED_GOOS: ${{ matrix.goos }}
@@ -119,21 +125,20 @@ jobs:
         run: |
           test "$(go env GOOS)" = "$EXPECTED_GOOS"
           test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
-      # Quality already runs every Linux test with coverage and the race detector.
-      # Darwin has distinct filesystem implementations and build-tagged tests.
+      # Quality tests the full repository on native linux/amd64. Darwin has
+      # distinct filesystem implementations and build-tagged tests, so this
+      # native darwin/arm64 runner repeats the coverage gates for those packages.
       - name: Install Darwin branch coverage tool
         if: matrix.goos == 'darwin'
         run: |
           source .agents/tool-versions.sh
           go install "github.com/rillig/gobco@v$GOBCO_VERSION"
-      - name: Test Darwin packages with race and coverage
+          printf '%s\n' "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Test platform-dependent Darwin packages with race and coverage
         if: matrix.goos == 'darwin'
         env:
           CGO_ENABLED: 1
-          MANIUD_CI_RACE: 1
-        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
-        with:
-          extra-args: go-coverage --all-files --stage manual
+        run: scripts/check-platform-go-coverage
       - name: Build without cgo
         env:
           CGO_ENABLED: 0
@@ -159,6 +164,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
       - name: Cross-build without cgo
         env:
           CGO_ENABLED: 0
