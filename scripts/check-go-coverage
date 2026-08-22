@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# > 1)); then
+	printf 'usage: %s [cover-profile]\n' "$0" >&2
+	exit 2
+fi
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "$temporary_dir"' EXIT
+profile="${1:-$temporary_dir/statements.cover}"
+if [[ "$profile" != /* ]]; then
+	profile="$PWD/$profile"
+fi
+test_cgo=0
+test_args=(-count=1 -covermode=atomic -coverpkg=./internal/... -coverprofile="$profile")
+if [[ "${MANIUD_CI_RACE:-0}" == 1 ]]; then
+	test_args=(-race "${test_args[@]}")
+	test_cgo=1
+fi
+
+(
+	cd "$repository_root"
+	CGO_ENABLED="$test_cgo" go test "${test_args[@]}" ./...
+	go tool cover -func="$profile"
+)
+
+read -r covered_statements total_statements < <(
+	awk '
+    NR > 1 {
+      statements[$1] = $2
+      if ($3 > 0) hit[$1] = 1
+    }
+    END {
+      for (block in statements) {
+        total += statements[block]
+        if (hit[block]) covered += statements[block]
+      }
+      print covered, total
+    }
+  ' "$profile"
+)
+if ((covered_statements != total_statements)); then
+	printf 'covered statements are %d/%d, want %d/%d\n' \
+		"$covered_statements" "$total_statements" "$total_statements" "$total_statements" >&2
+	exit 1
+fi
+
+if ! command -v gobco >/dev/null 2>&1; then
+	printf '%s\n' 'gobco is missing; rerun .agents/setup.' >&2
+	exit 1
+fi
+
+# Gobco v1.3.4 resolves ignored platform files before filtering build tags.
+# Use a disposable current-platform source tree so type checking sees exactly
+# the files selected by the Go toolchain. The original worktree stays untouched.
+source_copy="$temporary_dir/source"
+mkdir -p "$source_copy"
+(cd "$repository_root" && tar --exclude=.git --exclude=.amp -cf - .) | tar -xf - -C "$source_copy"
+(
+	cd "$source_copy"
+
+	CGO_ENABLED="$test_cgo" go list -f \
+		'{{.Dir}}{{"\t"}}{{join .GoFiles "\t"}}{{"\t"}}{{join .CgoFiles "\t"}}{{"\t"}}{{join .TestGoFiles "\t"}}{{"\t"}}{{join .XTestGoFiles "\t"}}' \
+		./... >"$temporary_dir/packages.tsv"
+	while IFS=$'\t' read -r package_dir selected_files; do
+		selected_files=$'\t'"$selected_files"$'\t'
+		shopt -s nullglob
+		for source_file in "$package_dir"/*.go; do
+			filename="$(basename "$source_file")"
+			if [[ "$selected_files" != *$'\t'"$filename"$'\t'* ]]; then
+				rm -f "$source_file"
+			fi
+		done
+		shopt -u nullglob
+	done <"$temporary_dir/packages.tsv"
+
+	covered_branches=0
+	total_branches=0
+	package_number=0
+	while IFS= read -r package_dir; do
+		stats="$temporary_dir/branches-$package_number.json"
+		log="$temporary_dir/branches-$package_number.log"
+		if ! CGO_ENABLED="$test_cgo" gobco -branch -stats "$stats" "$package_dir" >"$log" 2>&1; then
+			cat "$log" >&2
+			exit 1
+		fi
+		cat "$log"
+
+		read -r package_covered package_total < <(
+			python3 - "$stats" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    branches = json.load(stream)
+
+missing = []
+covered = 0
+for branch in branches:
+    true_count = branch["TrueCount"]
+    false_count = branch["FalseCount"]
+    covered += int(true_count > 0) + int(false_count > 0)
+    if true_count == 0 or false_count == 0:
+        missing.append(branch)
+
+if missing:
+    for branch in missing:
+        print(
+            f'uncovered branch at {branch["Start"]}: {branch["Code"]} '
+            f'(true={branch["TrueCount"]}, false={branch["FalseCount"]})',
+            file=sys.stderr,
+        )
+    raise SystemExit(1)
+
+print(covered, len(branches) * 2)
+PY
+		)
+		covered_branches=$((covered_branches + package_covered))
+		total_branches=$((total_branches + package_total))
+		package_number=$((package_number + 1))
+	done < <(CGO_ENABLED="$test_cgo" go list -f '{{.Dir}}' ./internal/...)
+
+	printf 'covered branch outcomes are %d/%d\n' "$covered_branches" "$total_branches"
+)
