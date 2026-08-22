@@ -125,6 +125,21 @@ func (canceledAfterWorkContext) Value(any) any {
 	return nil
 }
 
+type notifyingWriteConnection struct {
+	net.Conn
+
+	started chan<- struct{}
+}
+
+func (connection notifyingWriteConnection) Write(content []byte) (int, error) {
+	select {
+	case connection.started <- struct{}{}:
+	default:
+	}
+
+	return connection.Conn.Write(content) //nolint:wrapcheck // The fixture preserves the net.Conn contract.
+}
+
 func TestSSHEndpointNegotiatesDockerEngine(t *testing.T) {
 	t.Parallel()
 
@@ -780,6 +795,53 @@ func TestSSHHandshakeAndChannelCancellation(t *testing.T) {
 
 	for _, mode := range []sshServerMode{sshServerIgnoreChannel, sshServerIgnoreExec} {
 		assertSSHBlockedCancellation(t, mode)
+	}
+}
+
+func TestSSHHandshakeCancellationWhileBlocked(t *testing.T) {
+	t.Parallel()
+
+	left, right := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		_ = left.Close()
+		_ = right.Close()
+	})
+	writeStarted := make(chan struct{}, 1)
+	result := make(chan sshConnectionResult, 1)
+	go func() {
+		connection, channels, requests, err := newSSHClientConnection(
+			ctx,
+			notifyingWriteConnection{Conn: left, started: writeStarted},
+			testEngineHostname+":22",
+			&ssh.ClientConfig{ //nolint:exhaustruct // The blocked fixture never reaches host authentication.
+				User:            "blocked-test-user",
+				HostKeyCallback: func(string, net.Addr, ssh.PublicKey) error { return nil },
+			},
+		)
+		result <- sshConnectionResult{
+			connection: connection, channels: channels, requests: requests, err: err,
+		}
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SSH handshake did not reach the blocked write")
+	}
+	cancel()
+	var outcome sshConnectionResult
+	select {
+	case outcome = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("SSH handshake did not stop after cancellation")
+	}
+	if outcome.connection != nil || outcome.channels != nil || outcome.requests != nil {
+		t.Fatal("newSSHClientConnection(blocked cancellation) returned SSH resources")
+	}
+	if !errors.Is(outcome.err, context.Canceled) {
+		t.Fatalf("newSSHClientConnection(blocked cancellation) error = %v", outcome.err)
 	}
 }
 
