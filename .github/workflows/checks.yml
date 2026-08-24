@@ -97,6 +97,8 @@ jobs:
         with:
           tool_versions: ${{ steps.tool-versions.outputs.mise-tools }}
           cache: true
+      - name: Build Capslock with Go 1.27 SSA support
+        run: scripts/install-capslock
       - name: Scan repository history for secrets
         run: gitleaks git --redact --verbose
       - name: Run static and dependency policy hooks

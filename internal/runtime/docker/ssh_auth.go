@@ -88,8 +88,7 @@ func readPrivateKeyFile(filename string) ([]byte, error) {
 func parsePrivateKey(contents []byte, filename string, passphrase SSHKeyPassphrase) (loadedPrivateKey, error) {
 	signer, err := ssh.ParsePrivateKey(contents)
 
-	var missing *ssh.PassphraseMissingError
-	if !errors.As(err, &missing) {
+	if _, ok := errors.AsType[*ssh.PassphraseMissingError](err); !ok {
 		if err != nil {
 			return loadedPrivateKey{}, ErrInvalidEndpoint
 		}

@@ -18,6 +18,9 @@ func TestJSONScannerRejectsMalformedNestedValues(t *testing.T) {
 	if consumeObject(json.NewDecoder(bytes.NewBufferString(`"a"`))) {
 		t.Fatal("consumeObject(missing value) = true")
 	}
+	if consumeClosing(json.NewDecoder(bytes.NewReader(nil)), ']') {
+		t.Fatal("consumeClosing(empty) = true")
+	}
 	brokenKey := json.NewDecoder(bytes.NewBufferString(`{"`))
 	if _, err := brokenKey.Token(); err != nil {
 		t.Fatal(err)

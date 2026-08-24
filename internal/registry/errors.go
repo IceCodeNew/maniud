@@ -52,8 +52,7 @@ func classifyRemoteError(err error) error {
 		return ErrNotFound
 	}
 
-	var responseError *errcode.ErrorResponse
-	if errors.As(err, &responseError) {
+	if responseError, ok := errors.AsType[*errcode.ErrorResponse](err); ok {
 		return classifyResponseStatus(responseError.StatusCode)
 	}
 

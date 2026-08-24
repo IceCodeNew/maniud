@@ -439,8 +439,7 @@ func writeGenFailureHint(output io.Writer, err error) {
 	if output == nil {
 		return
 	}
-	var missing *generatedImageMissingError
-	if errors.As(err, &missing) {
+	if missing, ok := errors.AsType[*generatedImageMissingError](err); ok {
 		command := string(missing.runtime)
 		if missing.runtime == domain.RuntimeContainerd {
 			command = nerdctlRuntimeCommand
@@ -454,8 +453,7 @@ func writeGenFailureHint(output io.Writer, err error) {
 
 		return
 	}
-	var owner *bindPreparationOwnerError
-	if errors.As(err, &owner) {
+	if _, ok := errors.AsType[*bindPreparationOwnerError](err); ok {
 		_, _ = io.WriteString(
 			output,
 			"maniud: the pulled image does not contain a resolvable account for its configured user.\n",
