@@ -37,6 +37,11 @@ type RuntimeEffect interface {
 	Probe(ctx context.Context) (EffectPostcondition, error)
 }
 
+type incompleteEffectResumer interface {
+	incomplete() bool
+	resumeIncomplete(ctx context.Context) error
+}
+
 // EffectPostcondition is typed runtime evidence that resolves an uncertain
 // effect outcome. Satisfied reports whether it proves the intended result.
 type EffectPostcondition struct {
@@ -132,6 +137,15 @@ func recoverRuntimeEffect(
 		return completeRuntimeEffect(ctx, journal, identifier, sequence, postcondition, nil)
 	}
 
+	resumer, resumable := effect.(incompleteEffectResumer)
+	if resumable && resumer.incomplete() {
+		postcondition, err = resumeRuntimeEffect(ctx, journal, effect, postcondition, nil)
+		if err != nil {
+			return empty, err
+		}
+
+		return completeRuntimeEffect(ctx, journal, identifier, sequence, postcondition, nil)
+	}
 	if err := journal.Fence(ctx); err != nil {
 		return empty, fmt.Errorf("fence recovered runtime effect: %w", err)
 	}
@@ -157,6 +171,12 @@ func probeRuntimeEffect(
 
 	if postcondition.Digest == (domain.Digest{}) {
 		return empty, ErrConflictingState
+	}
+	if !postcondition.Satisfied {
+		postcondition, probeErr = resumeRuntimeEffect(ctx, journal, effect, postcondition, effectErr)
+		if probeErr != nil {
+			return empty, probeErr
+		}
 	}
 
 	return completeRuntimeEffect(ctx, journal, identifier, sequence, postcondition, effectErr)
@@ -190,6 +210,33 @@ func completeRuntimeEffect(
 	}
 
 	return postcondition, ErrConflictingState
+}
+
+func resumeRuntimeEffect(
+	ctx context.Context,
+	journal EffectJournal,
+	effect RuntimeEffect,
+	postcondition EffectPostcondition,
+	effectErr error,
+) (EffectPostcondition, error) {
+	var empty EffectPostcondition
+	resumer, resumable := effect.(incompleteEffectResumer)
+	if !resumable || !resumer.incomplete() {
+		return postcondition, nil
+	}
+	if err := journal.Fence(ctx); err != nil {
+		return empty, errors.Join(effectErr, fmt.Errorf("fence resumed runtime effect: %w", err))
+	}
+	resumeErr := resumer.resumeIncomplete(ctx)
+	resumedPostcondition, probeErr := effect.Probe(ctx)
+	if probeErr != nil {
+		return empty, errors.Join(effectErr, resumeErr, probeErr)
+	}
+	if !resumedPostcondition.Satisfied {
+		return empty, errors.Join(effectErr, resumeErr, ErrConflictingState)
+	}
+
+	return resumedPostcondition, nil
 }
 
 func actionMatchesIntent(
