@@ -1,4 +1,5 @@
 {
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:best-practices",
     "group:allNonMajor",
@@ -9,6 +10,18 @@
   "env": {
     "GOPROXY": "https://golang.flatt.tech"
   },
+  "customManagers": [
+    {
+      "description": "Update explicitly annotated tool versions",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.agents/tool-versions\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: versioning=(?<versioning>\\S+))?\\nreadonly [A-Z0-9_]+='(?<currentValue>[^']+)'"
+      ]
+    }
+  ],
   "packageRules": [
     {
       "matchPackageNames": ["*"],
