@@ -501,8 +501,6 @@ run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step 'Install and load gstack' install_gstack
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
 run_step 'Configure and verify Nowledge Mem' configure_nmem
-run_step 'Start and verify supervised container runtimes' \
-  sudo --preserve-env=NMEM_API_URL,NMEM_API_KEY \
-  --user "$(id -un)" --set-home "$repo_root/.agents/resume"
+run_step 'Start and verify supervised container runtimes' "$repo_root/.agents/resume"
 
 printf '%s\n' 'Orb setup complete.'

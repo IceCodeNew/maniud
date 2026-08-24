@@ -17,6 +17,19 @@ readonly DOCKER_GROUP='docker'
 readonly NERDCTL_BIN_DIR='/usr/local/bin'
 readonly NERDCTL_RUNTIME_PATH='/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin'
 
+if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
+  if [[ "${MANIUD_RESUME_GROUPS_REFRESHED:-}" == '1' ]]; then
+    printf 'The current user is missing the %s group; rerun .agents/setup.\n' \
+      "$DOCKER_GROUP" >&2
+    exit 1
+  fi
+  exec sudo \
+    --preserve-env=NMEM_API_URL,NMEM_API_KEY \
+    --user "$(id -un)" \
+    --set-home \
+    env MANIUD_RESUME_GROUPS_REFRESHED=1 "$repo_root/.agents/resume"
+fi
+
 require_equal() {
   local label="$1"
   local actual="$2"
@@ -141,11 +154,6 @@ require_equal 'nerdctl full bundle' \
   "$(/usr/local/bin/nerdctl --version | awk '{print $3}')" "$NERDCTL_VERSION"
 if ! docker compose version >/dev/null 2>&1; then
   printf '%s\n' 'Docker Compose development conformance oracle is missing; rerun .agents/setup.' >&2
-  exit 1
-fi
-if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
-  printf 'The current shell is missing the %s group; start a new shell after running .agents/setup.\n' \
-    "$DOCKER_GROUP" >&2
   exit 1
 fi
 
