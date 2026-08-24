@@ -33,7 +33,7 @@ hooks = [
 # Spell-check tracked text before the slower Go analyzers and tests.
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
-rev = "v1.48.0"
+rev = "v1.49.0"
 hooks = [
   { id = "typos" },
 ]
@@ -41,7 +41,7 @@ hooks = [
 # Zizmor checks workflow security policy; actionlint checks workflow syntax and expressions.
 [[repos]]
 repo = "https://github.com/woodruffw/zizmor-pre-commit"
-rev = "v1.26.1"
+rev = "v1.29.0"
 hooks = [
   { id = "zizmor" },
 ]

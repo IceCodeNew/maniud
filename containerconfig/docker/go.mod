@@ -2,11 +2,11 @@ module github.com/IceCodeNew/maniud/containerconfig/docker
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 require (
 	github.com/IceCodeNew/maniud/containerconfig v0.1.0
-	github.com/moby/moby/api v1.54.2
+	github.com/moby/moby/api v1.55.0
 )
 
 require (

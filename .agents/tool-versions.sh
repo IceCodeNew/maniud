@@ -20,7 +20,7 @@ if [[ -f "$GO_MOD_PATH" ]]; then
 fi
 readonly GO_VERSION
 # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.*)$
-readonly GOLANGCI_LINT_VERSION='2.12.2'
+readonly GOLANGCI_LINT_VERSION='2.13.1'
 # renovate: datasource=github-releases depName=google/capslock
 readonly CAPSLOCK_VERSION='v0.3.2'
 # NilAway and depaware do not publish stable releases; the Go datasource follows their latest pseudo-versions.
