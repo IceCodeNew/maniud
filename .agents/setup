@@ -352,6 +352,12 @@ install_golang() {
 }
 
 install_mise_tools() {
+  local binary
+  local command_name
+  local compiler
+  local tool_backend
+  local tool_version
+
   mise use --global uv
   mise use --global \
     ast-grep bun node@lts prek shellcheck shfmt \
@@ -365,6 +371,23 @@ install_mise_tools() {
     "npm:greptile" \
     "npm:openskills" \
     "pipx:nmem-cli"
+
+  while read -r command_name tool_backend; do
+    binary="$(mise which "$command_name")"
+    compiler="$(go version -m "$binary" | awk 'NR == 1 { print $NF }')"
+    if [[ "$compiler" != "$(go env GOVERSION)" ]]; then
+      tool_version="$(mise current "$tool_backend")"
+      mise uninstall "$tool_backend@$tool_version"
+      mise install "$tool_backend@$tool_version"
+    fi
+  done <<'GO_TOOLS'
+capslock go:github.com/google/capslock/cmd/capslock
+gobco go:github.com/rillig/gobco
+nilaway go:go.uber.org/nilaway/cmd/nilaway
+depaware go:github.com/tailscale/depaware
+gopatch go:github.com/uber-go/gopatch
+govulncheck go:golang.org/x/vuln/cmd/govulncheck
+GO_TOOLS
   mise reshim
 }
 
