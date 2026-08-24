@@ -327,16 +327,16 @@ content = path.read_text()
 marker_count = sum(line == marker for line in content.splitlines())
 
 if marker_count == 0:
-    separator = "" if not content else "\n" if content.endswith("\n") else "\n\n"
-    path.write_text(content + separator + correct_block)
-elif marker_count == 1 and correct_block in content:
     pass
+elif marker_count == 1 and correct_block in content:
+    content = content.replace(correct_block, "", 1).strip("\n")
 elif marker_count == 1 and old_block in content:
-    content = content.replace(old_block, "", 1)
-    separator = "" if not content else "\n" if content.endswith("\n") else "\n\n"
-    path.write_text(content + separator + correct_block)
+    content = content.replace(old_block, "", 1).strip("\n")
 else:
     raise SystemExit(f"Refusing to replace unrecognized or duplicate {marker!r} blocks")
+
+separator = "\n\n" if content else ""
+path.write_text(content + separator + correct_block)
 PY
 }
 
