@@ -21,6 +21,7 @@ import (
 const (
 	maximumConfigurationTextBytes = 4096
 	minimumHealthcheckDuration    = int64(time.Millisecond)
+	linuxOperatingSystem          = "linux"
 )
 
 // ErrInvalid reports image configuration outside maniud's supported schema.
@@ -134,7 +135,7 @@ func Decode(raw []byte, maximumBytes int64) (Evidence, error) {
 		return Evidence{}, ErrInvalid
 	}
 
-	processValue, err := decodeProcess(parsed.Config)
+	processValue, err := decodeProcess(parsed.Config, parsed.OS)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -255,23 +256,24 @@ func durationString(value int64) string {
 	return time.Duration(value).String()
 }
 
-func decodeProcess(raw json.RawMessage) (process, error) {
+func decodeProcess(raw json.RawMessage, operatingSystem string) (process, error) {
 	var value process
 	if len(raw) == 0 {
 		return value, nil
 	}
 
 	if !utf8.Valid(raw) || !jsonstrict.Decode(bytes.NewReader(raw), int64(len(raw)), &value) ||
-		!validProcess(value) {
+		!validProcess(value, operatingSystem) {
 		return process{}, ErrInvalid
 	}
 
 	return value, nil
 }
 
-func validProcess(value process) bool {
+func validProcess(value process, operatingSystem string) bool {
 	return validText(value.User) && validText(value.WorkingDir) && validText(value.StopSignal) &&
-		!value.ArgsEscaped && validProcessCollections(value) && validHealthcheck(value.Healthcheck)
+		(!value.ArgsEscaped || operatingSystem == linuxOperatingSystem) &&
+		validProcessCollections(value) && validHealthcheck(value.Healthcheck)
 }
 
 func validProcessCollections(value process) bool {

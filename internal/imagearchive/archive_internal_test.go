@@ -175,6 +175,10 @@ func testArchiveMemberBoundaries(t *testing.T) {
 		validMemberHeader(&tar.Header{Name: "x", Format: tar.FormatUSTAR, Typeflag: tar.TypeDir, Size: 1}) {
 		t.Fatal("invalid tar header accepted")
 	}
+	if !validMemberHeader(&tar.Header{Name: "blobs/sha256/", Format: tar.FormatUSTAR, Typeflag: tar.TypeDir}) ||
+		validMemberHeader(&tar.Header{Name: "blobs/../outside/", Format: tar.FormatUSTAR, Typeflag: tar.TypeDir}) {
+		t.Fatal("canonical Docker archive directory boundary failed")
+	}
 	link := &tar.Header{Name: strings.Repeat("a", 64) + "/layer.tar", Format: tar.FormatUSTAR,
 		Typeflag: tar.TypeSymlink, Linkname: "../" + strings.Repeat("b", 64) + ".tar"}
 	if !validMemberHeader(link) {
@@ -780,6 +784,11 @@ func testOCIIndexReadFailures(t *testing.T) {
 	t.Helper()
 
 	platformValue := domain.Platform{OS: linuxOperatingSystem, Architecture: amd64Architecture}
+	if _, err := resolveOCIIndexDescriptors(
+		context.Background(), nil, nil, []descriptor{{MediaType: ociIndexMediaType}},
+	); !errors.Is(err, ErrInvalidArchive) {
+		t.Fatalf("resolveOCIIndexDescriptors(invalid nested descriptor) error = %v", err)
+	}
 	if _, _, found, err := readOCIPlatformManifest(
 		context.Background(), nil, map[string]member{indexName: {kind: tar.TypeDir}}, platformValue,
 	); !errors.Is(err, ErrInvalidArchive) || found {
@@ -789,6 +798,20 @@ func testOCIIndexReadFailures(t *testing.T) {
 	malformed := []byte("not-json")
 	file := mustBytesFile(t, malformed)
 	defer closeTestFile(t, file)
+	malformedDigest := domain.Hash(malformed)
+	if _, err := resolveOCIIndexDescriptors(
+		context.Background(), file,
+		map[string]member{
+			"blobs/sha256/" + strings.TrimPrefix(malformedDigest.String(), "sha256:"): {
+				offset: 0, size: int64(len(malformed)), kind: tar.TypeReg,
+			},
+		},
+		[]descriptor{{
+			MediaType: ociIndexMediaType, Digest: malformedDigest.String(), Size: int64(len(malformed)),
+		}},
+	); !errors.Is(err, ErrInvalidArchive) {
+		t.Fatalf("resolveOCIIndexDescriptors(malformed nested index) error = %v", err)
+	}
 	indexMembers := map[string]member{indexName: {offset: 0, size: int64(len(malformed)), kind: tar.TypeReg}}
 	if _, _, found, err := readOCIPlatformManifest(
 		context.Background(), file, indexMembers, platformValue,

@@ -33,7 +33,12 @@ const (
 	configKey             = "config"
 	layersType            = "layers"
 	testOSLinux           = "linux"
+	schemaVersionKey      = "schemaVersion"
+	ociManifestTestType   = "application/vnd.oci.image.manifest.v1+json"
+	ociIndexTestType      = "application/vnd.oci.image.index.v1+json"
 )
+
+var errArchiveVisitorTest = errors.New("visitor failure")
 
 type tarMember struct {
 	name       string
@@ -52,12 +57,16 @@ type archiveFixture struct {
 }
 
 type fixtureOptions struct {
-	architecture   string
-	variant        string
-	withOCI        bool
-	untagged       bool
-	indexPlatform  string
-	indexMediaType string
+	architecture       string
+	variant            string
+	withOCI            bool
+	withNestedOCI      bool
+	untagged           bool
+	indexPlatform      string
+	indexMediaType     string
+	nestedTopCount     int
+	nestedDigestTamper bool
+	docker29           bool
 }
 
 func writeArchive(t *testing.T, directory string, members []tarMember, trailing []byte) (string, []byte) {
@@ -107,6 +116,13 @@ func newFixture(t *testing.T, options fixtureOptions) archiveFixture {
 	t.Helper()
 
 	layer := []byte("real layer bytes")
+	process := map[string]any{
+		"Entrypoint": []string{"/init"},
+		"Cmd":        []string{"serve"},
+	}
+	if options.docker29 {
+		process["ArgsEscaped"] = true
+	}
 	config := mustJSON(t, map[string]any{
 		architectureKey: options.architecture,
 		osKey:           testOSLinux,
@@ -114,22 +130,31 @@ func newFixture(t *testing.T, options fixtureOptions) archiveFixture {
 		rootFSKey: map[string]any{
 			typeKey: layersType, diffIDsKey: []string{digest(layer)},
 		},
-		configKey: map[string]any{
-			"Entrypoint": []string{"/init"},
-			"Cmd":        []string{"serve"},
-		},
+		configKey: process,
 	})
 	tags := []string{testArchiveTag}
 	if options.untagged {
 		tags = nil
 	}
+	configName := "config.json"
+	layerName := "layer.tar"
+	if options.docker29 {
+		configName = blobName(config)
+		layerName = blobName(layer)
+	}
 	manifest := mustJSON(t, []map[string]any{{
-		"Config": "config.json", "RepoTags": tags, "Layers": []string{"layer.tar"},
+		"Config": configName, "RepoTags": tags, "Layers": []string{layerName},
 	}})
 	members := []tarMember{
 		{name: manifestMember, body: manifest},
-		{name: "config.json", body: config},
-		{name: "layer.tar", body: layer},
+		{name: configName, body: config},
+		{name: layerName, body: layer},
+	}
+	if options.docker29 {
+		members = append([]tarMember{
+			{name: "blobs/", kind: tar.TypeDir},
+			{name: "blobs/sha256/", kind: tar.TypeDir},
+		}, members...)
 	}
 	if options.withOCI {
 		members = append(members, ociMembers(t, options, config, layer)...)
@@ -142,9 +167,26 @@ func newFixture(t *testing.T, options fixtureOptions) archiveFixture {
 func ociMembers(t *testing.T, options fixtureOptions, config, layer []byte) []tarMember {
 	t.Helper()
 
-	manifest := mustJSON(t, map[string]any{
-		"schemaVersion": 2,
-		mediaTypeKey:    "application/vnd.oci.image.manifest.v1+json",
+	manifest := ociManifestFixture(t, config, layer)
+	index := ociPlatformIndexFixture(t, options, manifest)
+	indexMembers := ociIndexMembers(t, options, index)
+	contentMembers := []tarMember{{name: blobName(manifest), body: manifest}}
+	if !options.docker29 {
+		contentMembers = append(contentMembers,
+			tarMember{name: blobName(config), body: config},
+			tarMember{name: blobName(layer), body: layer},
+		)
+	}
+
+	return append(indexMembers, contentMembers...)
+}
+
+func ociManifestFixture(t *testing.T, config, layer []byte) []byte {
+	t.Helper()
+
+	return mustJSON(t, map[string]any{
+		schemaVersionKey: 2,
+		mediaTypeKey:     ociManifestTestType,
 		configKey: map[string]any{
 			mediaTypeKey: "application/vnd.oci.image.config.v1+json",
 			digestKey:    digest(config),
@@ -156,32 +198,92 @@ func ociMembers(t *testing.T, options fixtureOptions, config, layer []byte) []ta
 			sizeKey:      len(layer),
 		}},
 	})
+}
+
+func ociPlatformIndexFixture(t *testing.T, options fixtureOptions, manifest []byte) []byte {
+	t.Helper()
+
 	platformArchitecture := options.architecture
 	if options.indexPlatform != "" {
 		platformArchitecture = options.indexPlatform
 	}
-	manifestMediaType := "application/vnd.oci.image.manifest.v1+json"
+	manifestMediaType := ociManifestTestType
 	if options.indexMediaType != "" {
 		manifestMediaType = options.indexMediaType
 	}
-	index := mustJSON(t, map[string]any{
-		"schemaVersion": 2,
-		"manifests": []map[string]any{{
-			mediaTypeKey: manifestMediaType,
-			digestKey:    digest(manifest),
-			sizeKey:      len(manifest),
+	manifests := []map[string]any{{
+		mediaTypeKey: manifestMediaType,
+		digestKey:    digest(manifest),
+		sizeKey:      len(manifest),
+		"platform": map[string]any{
+			osKey: testOSLinux, architectureKey: platformArchitecture, "variant": options.variant,
+		},
+	}}
+	if options.docker29 {
+		manifests = append(manifests, map[string]any{
+			mediaTypeKey: ociManifestTestType,
+			digestKey:    digest([]byte("missing arm64 manifest")),
+			sizeKey:      1056,
 			"platform": map[string]any{
-				osKey: testOSLinux, architectureKey: platformArchitecture, "variant": options.variant,
+				osKey: testOSLinux, architectureKey: testArchitectureARM64,
 			},
-		}},
-	})
+		})
+	}
+	indexDocument := map[string]any{
+		schemaVersionKey: 2,
+		"manifests":      manifests,
+	}
+	if options.docker29 {
+		indexDocument[mediaTypeKey] = ociIndexTestType
+	}
+
+	return mustJSON(t, indexDocument)
+}
+
+func ociIndexMembers(t *testing.T, options fixtureOptions, index []byte) []tarMember {
+	t.Helper()
+
+	if !options.withNestedOCI {
+		return []tarMember{{name: "index.json", body: index}}
+	}
+	indexDigest := nestedIndexDigest(options, index)
+	count := options.nestedTopCount
+	if count == 0 {
+		count = 1
+	}
+	descriptors := make([]map[string]any, count)
+	for descriptorIndex := range descriptors {
+		descriptors[descriptorIndex] = map[string]any{
+			mediaTypeKey: ociIndexTestType,
+			digestKey:    indexDigest,
+			sizeKey:      len(index),
+		}
+	}
+	topIndex := map[string]any{schemaVersionKey: 2, "manifests": descriptors}
+	if options.docker29 {
+		topIndex[mediaTypeKey] = ociIndexTestType
+		descriptors[0]["annotations"] = map[string]string{
+			"org.opencontainers.image.ref.name": "test",
+		}
+	}
 
 	return []tarMember{
-		{name: "index.json", body: index},
-		{name: blobName(manifest), body: manifest},
-		{name: blobName(config), body: config},
-		{name: blobName(layer), body: layer},
+		{name: "index.json", body: mustJSON(t, topIndex)},
+		{name: blobName(index), body: index},
 	}
+}
+
+func nestedIndexDigest(options fixtureOptions, index []byte) string {
+	value := digest(index)
+	if !options.nestedDigestTamper {
+		return value
+	}
+	replacement := "0"
+	if strings.HasSuffix(value, replacement) {
+		replacement = "1"
+	}
+
+	return value[:len(value)-1] + replacement
 }
 
 func mustJSON(t *testing.T, value any) []byte {
@@ -209,13 +311,17 @@ func TestAnalyzeTaggedAndIndexed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		architecture string
-		variant      string
-		selector     string
-		withOCI      bool
+		name          string
+		architecture  string
+		variant       string
+		selector      string
+		withOCI       bool
+		withNestedOCI bool
+		docker29      bool
 	}{
 		{name: "tagged OCI amd64", architecture: testArchitectureAMD64, selector: testArchiveTag, withOCI: true},
+		{name: "Docker 29 nested OCI amd64", architecture: testArchitectureAMD64, selector: testArchiveTag,
+			withOCI: true, withNestedOCI: true, docker29: true},
 		{name: "indexed arm64", architecture: testArchitectureARM64, variant: "v8", selector: "@0"},
 	}
 	for _, test := range tests {
@@ -224,6 +330,7 @@ func TestAnalyzeTaggedAndIndexed(t *testing.T) {
 
 			fixture := newFixture(t, fixtureOptions{
 				architecture: test.architecture, variant: test.variant, withOCI: test.withOCI,
+				withNestedOCI: test.withNestedOCI, docker29: test.docker29,
 			})
 			analysis := analyzeFixture(t, fixture, test.selector)
 			assertAnalysis(t, analysis, fixture, test.architecture, test.selector, test.withOCI)
@@ -295,6 +402,39 @@ func TestAnalyzeStreamUsesTheStrictArchiveParser(t *testing.T) {
 	cancel()
 	if _, err = imagearchive.AnalyzeStream(cancelled, bytes.NewReader(fixture.raw)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("AnalyzeStream(cancelled) error = %v", err)
+	}
+}
+
+func TestAnalyzeStreamVisitExposesOnlyTheValidatedTemporaryArchive(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, fixtureOptions{architecture: testArchitectureAMD64, withOCI: true})
+	visitedPath := ""
+	analysis, err := imagearchive.AnalyzeStreamVisit(
+		context.Background(),
+		bytes.NewReader(fixture.raw),
+		func(_ context.Context, path string) error {
+			visitedPath = path
+			info, statErr := os.Stat(path)
+			if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+				t.Fatalf("visited archive = %#v, %v", info, statErr)
+			}
+
+			return nil
+		},
+	)
+	if err != nil || analysis.ArchiveSize != int64(len(fixture.raw)) || visitedPath == "" {
+		t.Fatalf("AnalyzeStreamVisit() = %#v, %v, path %q", analysis, err, visitedPath)
+	}
+	if _, err = os.Stat(visitedPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary visited archive still exists: %v", err)
+	}
+
+	if _, err = imagearchive.AnalyzeStreamVisit(
+		context.Background(), bytes.NewReader(fixture.raw),
+		func(context.Context, string) error { return errArchiveVisitorTest },
+	); !errors.Is(err, errArchiveVisitorTest) {
+		t.Fatalf("AnalyzeStreamVisit(visitor failure) = %v", err)
 	}
 }
 
@@ -592,6 +732,16 @@ func TestOCIIndexMustProveSelectedPlatform(t *testing.T) {
 		}},
 		{name: "unsupported media type", options: fixtureOptions{
 			architecture: testArchitectureAMD64, withOCI: true, indexMediaType: "text/plain",
+		}},
+		{name: "nested index digest mismatch", options: fixtureOptions{
+			architecture: testArchitectureAMD64, withOCI: true, withNestedOCI: true, nestedDigestTamper: true,
+		}},
+		{name: "ambiguous nested indexes", options: fixtureOptions{
+			architecture: testArchitectureAMD64, withOCI: true, withNestedOCI: true, nestedTopCount: 2,
+		}},
+		{name: "recursive nested index", options: fixtureOptions{
+			architecture: testArchitectureAMD64, withOCI: true, withNestedOCI: true,
+			indexMediaType: ociIndexTestType,
 		}},
 	}
 	for _, test := range tests {

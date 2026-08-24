@@ -169,9 +169,13 @@ func TestDecodeRejectsInvalidDocuments(t *testing.T) {
 		"ambiguous label key": {[]byte(
 			`{"rootfs":{"type":"layers","diff_ids":[]},"config":{"Labels":{"key=part":"value"}}}`,
 		), 128},
-		"escaped Windows args": {[]byte(
+		"escaped args without Linux platform": {[]byte(
 			`{"rootfs":{"type":"layers","diff_ids":[]},"config":{"ArgsEscaped":true}}`,
 		), 128},
+		"escaped Windows args": {[]byte(
+			`{"os":"windows","architecture":"amd64","rootfs":{"type":"layers","diff_ids":[]},` +
+				`"config":{"ArgsEscaped":true}}`,
+		), 192},
 		"oversized field": {[]byte(
 			`{"rootfs":{"type":"layers","diff_ids":[]},"config":{"User":"` + strings.Repeat("x", 4097) + `"}}`,
 		), 5000},
@@ -185,6 +189,23 @@ func TestDecodeRejectsInvalidDocuments(t *testing.T) {
 				t.Fatalf("got %v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeAcceptsArgsEscapedMetadataForLinuxImages(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(
+		`{"os":"linux","architecture":"amd64","rootfs":{"type":"layers","diff_ids":[]},` +
+			`"config":{"ArgsEscaped":true,"Entrypoint":["/init"],"Cmd":["serve"]}}`,
+	)
+	evidence, err := imageconfig.Decode(raw, int64(len(raw)))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !reflect.DeepEqual(evidence.Entrypoint, []string{"/init"}) ||
+		!reflect.DeepEqual(evidence.Command, []string{"serve"}) {
+		t.Fatalf("process = %#v, %#v", evidence.Entrypoint, evidence.Command)
 	}
 }
 

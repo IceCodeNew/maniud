@@ -11,6 +11,7 @@ require (
 )
 
 require (
+	github.com/IceCodeNew/maniud/argv v0.1.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 )
@@ -18,5 +19,7 @@ require (
 replace github.com/IceCodeNew/maniud/containerconfig => ..
 
 replace github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ../runtimeargv
+
+replace github.com/IceCodeNew/maniud/argv => ../../argv
 
 replace github.com/IceCodeNew/maniud/imageref => ../../imageref

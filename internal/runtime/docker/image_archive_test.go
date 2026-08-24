@@ -22,11 +22,21 @@ import (
 	"github.com/IceCodeNew/maniud/internal/imagearchive"
 )
 
-const testArchiveReference = "example.com/team/archive:1"
+const (
+	testArchiveReference = "example.com/team/archive:1"
+	testDockerImageUser  = "service"
+)
 
 type archiveProbeFixture struct {
 	raw      []byte
 	expected domain.ImageIdentity
+}
+
+type dockerImageUserFailureTest struct {
+	name          string
+	expected      domain.ImageIdentity
+	specification string
+	after         func(http.ResponseWriter)
 }
 
 type delayedReadCloser struct {
@@ -81,6 +91,133 @@ func TestProbeArchiveImageProvesSavedRuntimeImage(t *testing.T) {
 				t.Fatalf("request count = %d", requests.Load())
 			}
 		})
+	}
+}
+
+func TestResolveImageUserReadsValidatedSavedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fixture := newArchiveProbeFixture(t)
+	expected := testImageIdentity(t)
+	expected.ImageConfig = fixture.expected.ImageConfig
+	expected.Platform = fixture.expected.Platform
+	var requests atomic.Int32
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch requests.Add(1) {
+		case 1, 3:
+			assertImageProbeRequest(t, request, expected)
+			response.Header().Set(contentTypeHeader, jsonContentType)
+			_, _ = io.WriteString(response, imageInspectDocument(expected, true))
+		case 2:
+			assertArchiveRequest(t, request, expected, "/v1.54/images/"+expected.Reference+"/get")
+			if request.Header.Get("Accept") != dockerArchiveContentType {
+				t.Fatalf("archive save Accept = %q", request.Header.Get("Accept"))
+			}
+			response.Header().Set(contentTypeHeader, dockerArchiveContentType)
+			_, _ = response.Write(fixture.raw)
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
+		}
+	}))
+
+	resolved, err := client.ResolveImageUser(t.Context(), expected, testDockerImageUser)
+	if err != nil || resolved != "1001:1002" || requests.Load() != 3 {
+		t.Fatalf("ResolveImageUser() = %q, %v, requests %d", resolved, err, requests.Load())
+	}
+	if _, err = (*Client)(nil).ResolveImageUser(t.Context(), expected, testDockerImageUser); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("ResolveImageUser(nil client) = %v", err)
+	}
+}
+
+func TestResolveImageUserReadsDocker29NestedOCIIndex(t *testing.T) {
+	t.Parallel()
+
+	fixture := newArchiveProbeFixtureWithNestedOCI(t)
+	expected := testImageIdentity(t)
+	expected.ImageConfig = fixture.expected.ImageConfig
+	expected.Platform = fixture.expected.Platform
+	var requests atomic.Int32
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch requests.Add(1) {
+		case 1, 3:
+			response.Header().Set(contentTypeHeader, jsonContentType)
+			_, _ = io.WriteString(response, imageInspectDocument(expected, true))
+		case 2:
+			response.Header().Set(contentTypeHeader, dockerArchiveContentType)
+			_, _ = response.Write(fixture.raw)
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
+		}
+	}))
+
+	resolved, err := client.ResolveImageUser(t.Context(), expected, testDockerImageUser)
+	if err != nil || resolved != "1001:1002" || requests.Load() != 3 {
+		t.Fatalf("ResolveImageUser(nested OCI) = %q, %v, requests %d", resolved, err, requests.Load())
+	}
+}
+
+func TestResolveImageUserRejectsArchiveDriftAndPostProbeFailure(t *testing.T) {
+	t.Parallel()
+
+	fixture := newArchiveProbeFixture(t)
+	matching := testImageIdentity(t)
+	matching.ImageConfig = fixture.expected.ImageConfig
+	matching.Platform = fixture.expected.Platform
+	drifted := matching
+	drifted.ImageConfig = domain.Hash([]byte("different config"))
+	tests := []dockerImageUserFailureTest{
+		{
+			name:          "archive identity drift",
+			expected:      drifted,
+			specification: testDockerImageUser,
+		},
+		{
+			name:          "post-probe failure",
+			expected:      matching,
+			specification: testDockerImageUser,
+			after: func(response http.ResponseWriter) {
+				response.WriteHeader(http.StatusInternalServerError)
+			},
+		},
+		{
+			name:          "user resolution",
+			expected:      matching,
+			specification: "missing-user",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			assertDockerImageUserFailure(t, fixture.raw, test)
+		})
+	}
+}
+
+func assertDockerImageUserFailure(t *testing.T, raw []byte, test dockerImageUserFailureTest) {
+	t.Helper()
+	var requests atomic.Int32
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		switch requests.Add(1) {
+		case 1:
+			response.Header().Set(contentTypeHeader, jsonContentType)
+			_, _ = io.WriteString(response, imageInspectDocument(test.expected, true))
+		case 2:
+			response.Header().Set(contentTypeHeader, dockerArchiveContentType)
+			_, _ = response.Write(raw)
+		case 3:
+			if test.after != nil {
+				test.after(response)
+
+				return
+			}
+			response.Header().Set(contentTypeHeader, jsonContentType)
+			_, _ = io.WriteString(response, imageInspectDocument(test.expected, true))
+		}
+	}))
+	resolved, err := client.ResolveImageUser(t.Context(), test.expected, test.specification)
+	if resolved != "" || !errors.Is(err, ErrProtocol) {
+		t.Fatalf("ResolveImageUser() = %q, %v", resolved, err)
 	}
 }
 
@@ -389,10 +526,34 @@ func TestArchiveProbeContainsTransportAndInspectProtocolFailures(t *testing.T) {
 func newArchiveProbeFixture(t *testing.T) archiveProbeFixture {
 	t.Helper()
 
-	layer := []byte("layer")
+	return newArchiveProbeFixtureKind(t, false)
+}
+
+func newArchiveProbeFixtureWithNestedOCI(t *testing.T) archiveProbeFixture {
+	t.Helper()
+
+	return newArchiveProbeFixtureKind(t, true)
+}
+
+func newArchiveProbeFixtureKind(t *testing.T, nestedOCI bool) archiveProbeFixture {
+	t.Helper()
+
+	var layerOutput bytes.Buffer
+	layerWriter := tar.NewWriter(&layerOutput)
+	writeArchiveProbeMember(
+		t,
+		layerWriter,
+		"etc/passwd",
+		[]byte("root:x:0:0:root:/root:/bin/sh\nservice:x:1001:1002::/srv/service:/bin/sh\n"),
+	)
+	if err := layerWriter.Close(); err != nil {
+		t.Fatalf("close archive layer fixture: %v", err)
+	}
+	layer := layerOutput.Bytes()
 	config := fmt.Appendf(nil, `{"architecture":"amd64","os":"linux",`+
 		`"rootfs":{"type":"layers","diff_ids":[%q]},`+
-		`"config":{"Entrypoint":["/init"],"Cmd":["serve"]}}`, domain.Hash(layer).String())
+		`"config":{"ArgsEscaped":true,"Entrypoint":["/init"],"Cmd":["serve"]}}`,
+		domain.Hash(layer).String())
 	manifest := []byte(`[{"Config":"config.json","RepoTags":["` + testArchiveReference +
 		`"],"Layers":["layer.tar"]}]`)
 	var output bytes.Buffer
@@ -400,6 +561,9 @@ func newArchiveProbeFixture(t *testing.T) archiveProbeFixture {
 	writeArchiveProbeMember(t, writer, "manifest.json", manifest)
 	writeArchiveProbeMember(t, writer, "config.json", config)
 	writeArchiveProbeMember(t, writer, "layer.tar", layer)
+	if nestedOCI {
+		writeNestedArchiveProbeOCI(t, writer, config, layer)
+	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close archive fixture: %v", err)
 	}
@@ -419,6 +583,35 @@ func newArchiveProbeFixture(t *testing.T) archiveProbeFixture {
 	expected := analysis.Identity
 
 	return archiveProbeFixture{raw: bytes.Clone(output.Bytes()), expected: expected}
+}
+
+func writeNestedArchiveProbeOCI(t *testing.T, writer *tar.Writer, config, layer []byte) {
+	t.Helper()
+
+	imageManifest := fmt.Appendf(nil,
+		`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
+			`"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},`+
+			`"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":%q,"size":%d}]}`,
+		domain.Hash(config).String(), len(config), domain.Hash(layer).String(), len(layer),
+	)
+	platformIndex := fmt.Appendf(nil,
+		`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
+			`"digest":%q,"size":%d,"platform":{"os":"linux","architecture":"amd64"}}]}`,
+		domain.Hash(imageManifest).String(), len(imageManifest),
+	)
+	topIndex := fmt.Appendf(nil,
+		`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json",`+
+			`"digest":%q,"size":%d}]}`,
+		domain.Hash(platformIndex).String(), len(platformIndex),
+	)
+	writeArchiveProbeMember(t, writer, "index.json", topIndex)
+	for _, blob := range [][]byte{platformIndex, imageManifest, config, layer} {
+		writeArchiveProbeMember(t, writer, archiveProbeBlobName(blob), blob)
+	}
+}
+
+func archiveProbeBlobName(value []byte) string {
+	return "blobs/sha256/" + strings.TrimPrefix(domain.Hash(value).String(), "sha256:")
 }
 
 func writeArchiveProbeMember(t *testing.T, writer *tar.Writer, name string, body []byte) {

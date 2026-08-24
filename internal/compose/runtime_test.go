@@ -16,14 +16,16 @@ import (
 
 const (
 	runtimeTestCreateCommand    = "create"
+	runtimeTestDataTarget       = "/data"
 	runtimeTestImageReference   = "example.com/team/image:1"
 	runtimeTestWorkingDirectory = "/workspace"
+	runtimeTestArchiveName      = "archive"
 )
 
 func TestRenderRuntimeProducesStrictCompose(t *testing.T) {
 	t.Parallel()
 
-	projection, err := runtimeargv.ParseSource(runtimeTestImageReference, "service")
+	projection, err := runtimeargv.ParseSource("docker://"+runtimeTestImageReference, "service")
 	if err != nil {
 		t.Fatalf("ParseSource() error = %v", err)
 	}
@@ -146,7 +148,7 @@ func TestRenderRuntimeRoundTripsSharedWorkload(t *testing.T) {
 	}
 }
 
-func TestRenderRuntimeRejectsBindMountsApplyCannotCapture(t *testing.T) {
+func TestRenderRuntimePreservesAbsoluteBindMounts(t *testing.T) {
 	t.Parallel()
 
 	volumeProjection, err := runtimeargv.Parse([]string{
@@ -172,10 +174,26 @@ func TestRenderRuntimeRejectsBindMountsApplyCannotCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if _, err = RenderRuntime(
+	rendered, err := RenderRuntime(
 		context.Background(), projection, image, runtimeTestWorkingDirectory,
-	); !errors.Is(err, runtimeargv.ErrInvalid) {
+	)
+	if err != nil {
 		t.Fatalf("RenderRuntime(bind mount) error = %v", err)
+	}
+	project, err := Load(context.Background(), Source{
+		Content: rendered, WorkingDir: runtimeTestWorkingDirectory, Environment: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("Load(bind mount) error = %v", err)
+	}
+	workload, err := project.Workload("service", image)
+	if err != nil {
+		t.Fatalf("Workload(bind mount) error = %v", err)
+	}
+	if len(workload.Mounts) != 1 || workload.Mounts[0] != (domain.Mount{
+		Kind: domain.MountBind, Source: "/host/data", Target: runtimeTestDataTarget, ReadOnly: true,
+	}) {
+		t.Fatalf("Workload(bind mount) = %#v", workload.Mounts)
 	}
 }
 
@@ -187,7 +205,7 @@ func TestRenderArchiveRoundTripsCompleteImageConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderArchive() error = %v", err)
 	}
-	if name != "archive" || strings.Contains(string(rendered), analysis.Source.Path()) {
+	if name != runtimeTestArchiveName || strings.Contains(string(rendered), analysis.Source.Path()) {
 		t.Fatalf("RenderArchive() = %q, %q", name, rendered)
 	}
 	project, err := Load(context.Background(), Source{
@@ -214,6 +232,66 @@ func TestRenderArchiveRoundTripsCompleteImageConfiguration(t *testing.T) {
 	}, analysis.Identity)
 	if !reflect.DeepEqual(workload.WorkloadSpec, want) {
 		t.Fatalf("archive round trip = %#v, want %#v\n%s", workload.WorkloadSpec, want, rendered)
+	}
+}
+
+func TestResolvedRuntimeRenderersRejectMismatchedWorkloads(t *testing.T) {
+	t.Parallel()
+
+	projection, err := runtimeargv.ParseSource("docker://"+runtimeTestImageReference, "service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := domain.Hash([]byte("resolved renderer identity"))
+	image := domain.ImageIdentity{
+		Origin: domain.ImageOriginRegistry, Reference: runtimeTestImageReference + "@" + digest.String(),
+		ReferenceDigest: digest, Platform: projection.Platform(),
+	}
+	workload, err := projection.Workload(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidImage := image
+	invalidImage.Platform.Architecture = archiveAMD64
+	if invalidImage.Platform == image.Platform {
+		invalidImage.Platform.Architecture = "arm64"
+	}
+	if _, err := RenderResolvedRuntime(
+		t.Context(), projection, invalidImage, workload, runtimeTestWorkingDirectory,
+	); !errors.Is(err, runtimeargv.ErrInvalid) {
+		t.Fatalf("RenderResolvedRuntime(invalid image) error = %v", err)
+	}
+	for _, mutate := range []func(*domain.WorkloadSpec){
+		func(value *domain.WorkloadSpec) { value.ServiceName = testOtherValue },
+		func(value *domain.WorkloadSpec) { value.ContainerName = testOtherValue },
+		func(value *domain.WorkloadSpec) { value.Platform.Architecture = testOtherValue },
+	} {
+		invalid := workload.Clone()
+		mutate(&invalid)
+		if _, err := RenderResolvedRuntime(
+			t.Context(), projection, image, invalid, runtimeTestWorkingDirectory,
+		); !errors.Is(err, runtimeargv.ErrInvalid) {
+			t.Fatalf("RenderResolvedRuntime(mismatched workload) error = %v", err)
+		}
+	}
+
+	analysis := archiveRenderAnalysis(t)
+	archiveWorkload := domain.ResolveWorkloadSpec(domain.WorkloadSpec{
+		ServiceName: runtimeTestArchiveName, ContainerName: runtimeTestArchiveName, Platform: analysis.Identity.Platform,
+		NetworkMode: composeBridgeNetwork,
+	}, analysis.Identity)
+	for _, mutate := range []func(*domain.WorkloadSpec){
+		func(value *domain.WorkloadSpec) { value.ServiceName = "" },
+		func(value *domain.WorkloadSpec) { value.ContainerName = testOtherValue },
+		func(value *domain.WorkloadSpec) { value.Platform.Architecture = testOtherValue },
+	} {
+		invalid := archiveWorkload.Clone()
+		mutate(&invalid)
+		if _, err := RenderResolvedArchive(
+			t.Context(), analysis, invalid, runtimeTestWorkingDirectory,
+		); !errors.Is(err, ErrInvalidSource) {
+			t.Fatalf("RenderResolvedArchive(mismatched workload) error = %v", err)
+		}
 	}
 }
 

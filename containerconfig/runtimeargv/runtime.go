@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/IceCodeNew/maniud/argv"
 	"github.com/IceCodeNew/maniud/containerconfig"
 	"github.com/IceCodeNew/maniud/imageref"
 )
@@ -39,7 +39,7 @@ const (
 	runtimePrefixLength     = 2
 	minimumRuntimeArguments = 3
 	maximumServiceName      = 63
-	maximumArgumentLength   = 4096
+	maximumArgumentLength   = argv.MaximumTokenBytes
 	platformParts           = 3
 	platformField           = "platform"
 	nameField               = "name"
@@ -140,7 +140,11 @@ func (projection Projection) Operation() string {
 // accepts fields already represented by maniud's workload and runtime ports;
 // other runtime flags fail closed instead of producing unusable Compose.
 func Parse(arguments []string, explicitName, workingDirectory string) (Projection, error) {
-	parser, source, err := parseRuntimeArguments(arguments, workingDirectory)
+	boundedArguments, err := argv.Validate(arguments)
+	if err != nil {
+		return Projection{}, ErrInvalid
+	}
+	parser, source, err := parseRuntimeArguments(boundedArguments, workingDirectory)
 	if err != nil {
 		return Projection{}, ErrInvalid
 	}
@@ -190,9 +194,7 @@ func parseRuntimeArguments(arguments []string, workingDirectory string) (argvPar
 		return argvParser{}, imageref.Source{}, ErrInvalid
 	}
 	parser.index++
-	if !parser.setCommand(arguments[parser.index:]) {
-		return argvParser{}, imageref.Source{}, ErrInvalid
-	}
+	parser.setCommand(arguments[parser.index:])
 
 	return parser, source, nil
 }
@@ -294,5 +296,5 @@ func validText(value string) bool {
 }
 
 func validArgument(value string) bool {
-	return len(value) <= maximumArgumentLength && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
+	return argv.ValidToken(value)
 }

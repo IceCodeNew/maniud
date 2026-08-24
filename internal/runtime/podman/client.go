@@ -222,6 +222,7 @@ func (client *Client) newRequestWithReader(
 	}
 	request.Header.Set("Accept", podmanJSONType)
 	for key, values := range headers {
+		request.Header.Del(key)
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}

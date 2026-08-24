@@ -137,3 +137,14 @@ entry = "scripts/check-go-coverage"
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
+
+# Exercise the built CLI across all five public commands without a runtime daemon
+# or container CLI. Native CI passes its CGO-free artifact to the same script.
+[[repos.hooks]]
+id = "command-e2e"
+name = "Five-command executable smoke"
+language = "system"
+entry = "scripts/check-command-e2e"
+pass_filenames = false
+always_run = true
+stages = ["pre-push", "manual"]

@@ -2,10 +2,42 @@ name: Checks
 
 on:
   pull_request:
+    paths:
+      - ".agents/**"
+      - ".github/**"
+      - "argv/**"
+      - "cmd/**"
+      - "containerconfig/**"
+      - "imageref/**"
+      - "internal/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".gitignore"
+      - ".golangci.yml"
+      - "go.mod"
+      - "go.sum"
+      - "prek.toml"
+      - "renovate.json"
   push:
     branches:
       - master
       - "renovate/**"
+    paths:
+      - ".agents/**"
+      - ".github/**"
+      - "argv/**"
+      - "cmd/**"
+      - "containerconfig/**"
+      - "imageref/**"
+      - "internal/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".gitignore"
+      - ".golangci.yml"
+      - "go.mod"
+      - "go.sum"
+      - "prek.toml"
+      - "renovate.json"
 
 permissions:
   contents: read
@@ -81,9 +113,17 @@ jobs:
       - name: Run tests, race detector, statement coverage, and branch coverage
         env:
           MANIUD_CI_RACE: 1
-        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        run: scripts/check-go-coverage coverage.txt
+      - name: Upload statement coverage to Codecov
+        if: >-
+          github.event_name == 'push' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          extra-args: go-coverage --all-files --stage manual
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.txt
+          disable_search: true
+          fail_ci_if_error: true
 
   # Native jobs and the Darwin cross-build are the authoritative CGO-free build gates.
   native:
@@ -140,13 +180,9 @@ jobs:
           CGO_ENABLED: 1
         run: scripts/check-platform-go-coverage
       - name: Build without cgo
-        env:
-          CGO_ENABLED: 0
-        run: go build -trimpath -o "$RUNNER_TEMP/maniud" ./cmd/maniud
-      - name: Smoke-test built executable
-        run: |
-          output="$("$RUNNER_TEMP/maniud" --help)"
-          grep -Fq 'Usage: maniud ' <<< "$output"
+        run: scripts/build-maniud "$RUNNER_TEMP/maniud"
+      - name: Smoke-test all public commands with built executable
+        run: scripts/check-command-e2e "$RUNNER_TEMP/maniud"
 
   darwin-amd64:
     name: Cross-build darwin/amd64 (theoretical support)
@@ -169,7 +205,6 @@ jobs:
             **/go.sum
       - name: Cross-build without cgo
         env:
-          CGO_ENABLED: 0
           GOARCH: amd64
           GOOS: darwin
-        run: go build -trimpath -o "$RUNNER_TEMP/maniud" ./cmd/maniud
+        run: scripts/build-maniud "$RUNNER_TEMP/maniud"

@@ -15,6 +15,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imagearchive"
 	"github.com/IceCodeNew/maniud/internal/imageref"
+	"github.com/IceCodeNew/maniud/internal/imagerootfs"
 )
 
 const (
@@ -69,6 +70,15 @@ func (client *Client) analyzeSavedArchive(
 	reference string,
 	platform domain.Platform,
 ) (imagearchive.Analysis, error) {
+	return client.analyzeSavedArchiveVisit(ctx, reference, platform, nil)
+}
+
+func (client *Client) analyzeSavedArchiveVisit(
+	ctx context.Context,
+	reference string,
+	platform domain.Platform,
+	visit func(context.Context, string) error,
+) (imagearchive.Analysis, error) {
 	var empty imagearchive.Analysis
 	proofContext, cancel := context.WithTimeout(ctx, maximumDockerSaveProofDuration)
 	defer cancel()
@@ -83,7 +93,7 @@ func (client *Client) analyzeSavedArchive(
 		return empty, ErrProtocol
 	}
 
-	analysis, analyzeErr := imagearchive.AnalyzeStream(proofContext, response.Body)
+	analysis, analyzeErr := imagearchive.AnalyzeStreamVisit(proofContext, response.Body, visit)
 	closeErr := response.Body.Close()
 	if analyzeErr != nil || closeErr != nil {
 		if ctxErr := proofContext.Err(); ctxErr != nil {
@@ -97,6 +107,56 @@ func (client *Client) analyzeSavedArchive(
 	}
 
 	return analysis, nil
+}
+
+// ResolveImageUser resolves a named or incomplete image user against the
+// verified final image filesystem without starting a container.
+func (client *Client) ResolveImageUser(
+	ctx context.Context,
+	expected domain.ImageIdentity,
+	specification string,
+) (string, error) {
+	before, err := client.ProbeImage(ctx, expected)
+	if !observedImageMatches(before, expected, err) {
+		return "", ErrProtocol
+	}
+	resolved := ""
+	analysis, err := client.analyzeSavedArchiveVisit(
+		ctx,
+		expected.Reference,
+		expected.Platform,
+		func(visitContext context.Context, path string) error {
+			var resolveErr error
+			resolved, resolveErr = imagerootfs.ResolveArchiveUser(visitContext, path, specification)
+			if resolveErr != nil {
+				return fmt.Errorf("resolve Docker image user: %w", resolveErr)
+			}
+
+			return nil
+		},
+	)
+	if err != nil || !savedRegistryArchiveMatches(analysis, expected) {
+		return "", ErrProtocol
+	}
+	after, err := client.ProbeImage(ctx, expected)
+	if !observedImageMatches(after, expected, err) || after != before {
+		return "", ErrProtocol
+	}
+
+	return resolved, nil
+}
+
+func observedImageMatches(
+	probe application.ImageProbe,
+	expected domain.ImageIdentity,
+	err error,
+) bool {
+	return err == nil && probe.State == application.ImageProbeObserved && probe.Matches(expected)
+}
+
+func savedRegistryArchiveMatches(analysis imagearchive.Analysis, expected domain.ImageIdentity) bool {
+	return analysis.MemberIndex == 0 && analysis.Identity.ImageConfig == expected.ImageConfig &&
+		analysis.Identity.Platform == expected.Platform
 }
 
 func validSavedArchiveResponse(response *http.Response) bool {

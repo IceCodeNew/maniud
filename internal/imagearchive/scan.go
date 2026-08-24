@@ -130,23 +130,28 @@ func recordArchiveMember(
 }
 
 func validMemberHeader(header *tar.Header) bool {
-	if header == nil || header.Format != tar.FormatUSTAR || !canonicalMemberName(header.Name) {
-		return false
-	}
-	if header.Size < 0 || len(header.PAXRecords) != 0 {
+	if header == nil || !validCommonMemberHeader(header) {
 		return false
 	}
 
 	switch header.Typeflag {
 	case tar.TypeReg:
-		return true
+		return canonicalMemberName(header.Name)
 	case tar.TypeDir:
-		return header.Size == 0
+		return header.Size == 0 && canonicalDirectoryName(header.Name)
 	case tar.TypeSymlink:
-		return validLayerLink(header)
+		return canonicalMemberName(header.Name) && validLayerLink(header)
 	default:
 		return false
 	}
+}
+
+func validCommonMemberHeader(header *tar.Header) bool {
+	return header.Format == tar.FormatUSTAR && header.Size >= 0 && len(header.PAXRecords) == 0
+}
+
+func canonicalDirectoryName(name string) bool {
+	return canonicalMemberName(strings.TrimSuffix(name, "/"))
 }
 
 func validLayerLink(header *tar.Header) bool {

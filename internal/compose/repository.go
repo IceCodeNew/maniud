@@ -443,6 +443,14 @@ func collectBindMounts(raw any, base string, result *[]string) bool {
 		if kind != composeBindMountType {
 			continue
 		}
+		nativeSource := filepath.FromSlash(source)
+		if filepath.IsAbs(nativeSource) {
+			if filepath.Clean(nativeSource) != nativeSource || strings.ContainsAny(source, "$\x00") {
+				return false
+			}
+
+			continue
+		}
 		path, pathValid := resolveRepositoryPath(source, base)
 		if !pathValid || path == "." || !readOnly {
 			return false
