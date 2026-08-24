@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Amp orb portal metadata
+.amp/portals/
+
 # Editor/IDE
 # .idea/
 # .vscode/
