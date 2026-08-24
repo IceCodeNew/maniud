@@ -44,8 +44,11 @@ linters:
             - $all
             - "!**/imageref/*.go"
             - "!**/internal/store/*.go"
+            - "!**/internal/compose/*.go"
+            - "!**/internal/composeext/maniud/*.go"
             - "!**/internal/imageref/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/containerconfig/compose/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -67,6 +70,25 @@ linters:
             - github.com/IceCodeNew/maniud
             - golang.org/x/sys
             - modernc.org/sqlite
+        compose-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/compose/*.go"
+            - "**/containerconfig/compose/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/compose-spec/compose-go/v2
+            - github.com/opencontainers/go-digest
+            - go.yaml.in/yaml/v4
+        maniud-compose-extension:
+          list-mode: strict
+          files:
+            - "**/internal/composeext/maniud/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/opencontainers/go-digest
         imageref-domain-adapter:
           list-mode: strict
           files:
