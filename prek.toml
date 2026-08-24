@@ -65,22 +65,22 @@ hooks = [
 [[repos]]
 repo = "local"
 
-# Detect go.mod/go.sum drift without rewriting either file.
+# Detect go.mod/go.sum drift in every workspace module without rewriting files.
 [[repos.hooks]]
 id = "go-mod-tidy"
-name = "go mod tidy"
+name = "go mod tidy (all modules)"
 language = "system"
-entry = "go mod tidy -diff"
+entry = "scripts/run-go-modules go mod tidy -diff"
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
 
-# Verify downloaded module content against go.sum.
+# Verify downloaded module content for every workspace module.
 [[repos.hooks]]
 id = "go-mod-verify"
-name = "go mod verify"
+name = "go mod verify (all modules)"
 language = "system"
-entry = "go mod verify"
+entry = "scripts/run-go-modules go mod verify"
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
@@ -91,7 +91,7 @@ stages = ["pre-push", "manual"]
 id = "golangci-lint"
 name = "golangci-lint"
 language = "system"
-entry = "env CGO_ENABLED=0 golangci-lint run --timeout 2m ./..."
+entry = "scripts/run-go-modules env CGO_ENABLED=0 golangci-lint run --timeout 2m ./..."
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
@@ -101,7 +101,7 @@ stages = ["pre-push", "manual"]
 id = "govulncheck"
 name = "govulncheck"
 language = "system"
-entry = "env CGO_ENABLED=0 govulncheck ./..."
+entry = "scripts/run-go-modules env CGO_ENABLED=0 govulncheck ./..."
 pass_filenames = false
 always_run = true
 stages = ["pre-push", "manual"]
