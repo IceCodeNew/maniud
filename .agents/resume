@@ -142,6 +142,12 @@ require_equal 'Go CGO default' "$(go env CGO_ENABLED)" '0'
 require_equal 'golangci-lint' "$(mise current golangci-lint)" "$GOLANGCI_LINT_VERSION"
 require_equal 'Capslock' \
   "$(mise current go:github.com/google/capslock/cmd/capslock)" "${CAPSLOCK_VERSION#v}"
+capslock_version="$(capslock -version 2>&1)"
+require_equal 'Capslock compiler' \
+  "$(sed -n 's/^compiled with Go version //p' <<<"$capslock_version")" "$(go env GOVERSION)"
+require_equal 'Capslock Go tools' \
+  "$(sed -n 's/^includes Go tools version //p' <<<"$capslock_version")" \
+  "$CAPSLOCK_X_TOOLS_VERSION"
 require_equal 'Gobco' \
   "$(mise current go:github.com/rillig/gobco)" "$GOBCO_VERSION"
 require_equal 'NilAway' \

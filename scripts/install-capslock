@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# shellcheck source=.agents/tool-versions.sh
+source "$repository_root/.agents/tool-versions.sh"
+
+capslock_binary="$(mise which capslock)"
+expected_compiler="$(go env GOVERSION)"
+
+capslock_matches() {
+	local version
+
+	version="$($capslock_binary -version 2>&1)"
+	grep -Fqx "capslock version $CAPSLOCK_VERSION" <<<"$version" &&
+		grep -Fqx "compiled with Go version $expected_compiler" <<<"$version" &&
+		grep -Fqx "includes Go tools version $CAPSLOCK_X_TOOLS_VERSION" <<<"$version"
+}
+
+if capslock_matches; then
+	exit 0
+fi
+
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "$temporary_dir"' EXIT
+
+cat >"$temporary_dir/go.mod" <<EOF
+module github.com/IceCodeNew/maniud/capslock-build
+
+go ${expected_compiler#go}
+
+require (
+	github.com/google/capslock $CAPSLOCK_VERSION
+	golang.org/x/tools $CAPSLOCK_X_TOOLS_VERSION
+)
+EOF
+
+(
+	cd "$temporary_dir"
+	GOWORK=off CGO_ENABLED=0 go build -mod=mod -o capslock github.com/google/capslock/cmd/capslock
+)
+install -m 0755 "$temporary_dir/capslock" "$capslock_binary"
+
+if ! capslock_matches; then
+	printf '%s\n' 'The rebuilt Capslock binary has unexpected version metadata.' >&2
+	exit 1
+fi

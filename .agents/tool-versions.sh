@@ -20,9 +20,14 @@ if [[ -f "$GO_MOD_PATH" ]]; then
 fi
 readonly GO_VERSION
 # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.*)$
-readonly GOLANGCI_LINT_VERSION='2.12.2'
+readonly GOLANGCI_LINT_VERSION='2.13.1'
 # renovate: datasource=github-releases depName=google/capslock
 readonly CAPSLOCK_VERSION='v0.3.2'
+# Capslock v0.3.2 depends on x/tools v0.43.0, which cannot build SSA for Go
+# 1.27 promoted literal fields or generic methods. Keep the fixed transitive
+# dependency explicit until Capslock publishes a release containing it.
+# renovate: datasource=go depName=golang.org/x/tools
+readonly CAPSLOCK_X_TOOLS_VERSION='v0.46.0'
 # NilAway and depaware do not publish stable releases; the Go datasource follows their latest pseudo-versions.
 # renovate: datasource=go depName=go.uber.org/nilaway
 readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'

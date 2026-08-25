@@ -388,6 +388,7 @@ depaware go:github.com/tailscale/depaware
 gopatch go:github.com/uber-go/gopatch
 govulncheck go:golang.org/x/vuln/cmd/govulncheck
 GO_TOOLS
+  "$repo_root/scripts/install-capslock"
   mise reshim
 }
 

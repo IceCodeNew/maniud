@@ -2,7 +2,7 @@ module github.com/IceCodeNew/maniud/containerconfig/runtimeargv
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 require (
 	github.com/IceCodeNew/maniud/argv v0.1.0

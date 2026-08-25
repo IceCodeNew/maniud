@@ -21,6 +21,7 @@ linters:
     # Slow blanket style rules with high false-positive or rewrite cost. Fast
     # formatting, naming, complexity, and autofix rules remain enabled.
     - exhaustruct
+    - exhaustruct_v5
     - noinlineerr
     - nonamedreturns
     - varnamelen

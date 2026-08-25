@@ -108,29 +108,29 @@ func dockerConfiguration(
 	}
 
 	return &containertypes.Config{ //nolint:exhaustruct // Unsupported API fields intentionally keep zero values.
-			Hostname: spec.Hostname, User: spec.User, ExposedPorts: exposed,
-			Tty: valueOrZero(spec.TTY), OpenStdin: valueOrZero(spec.StdinOpen),
-			Env: slices.Clone(spec.Environment), Cmd: slices.Clone(spec.Command), Healthcheck: healthcheck,
-			Image: image, Volumes: volumes, WorkingDir: spec.WorkingDirectory,
-			Entrypoint: slices.Clone(spec.Entrypoint), Labels: labels, StopSignal: spec.StopSignal,
-			StopTimeout: stopTimeout,
-		}, &containertypes.HostConfig{ //nolint:exhaustruct // Unsupported API fields intentionally keep zero values.
-			NetworkMode: containertypes.NetworkMode(spec.NetworkMode), PortBindings: ports, RestartPolicy: restart,
-			CapAdd: slices.Clone(spec.CapAdd), CapDrop: slices.Clone(spec.CapDrop),
-			CgroupnsMode: containertypes.CgroupnsMode(spec.Cgroup), DNS: dns,
-			DNSOptions: slices.Clone(spec.DNSOptions), DNSSearch: slices.Clone(spec.DNSSearch),
-			ExtraHosts: slices.Clone(spec.ExtraHosts), GroupAdd: slices.Clone(spec.GroupAdd),
-			OomScoreAdj: optionalInt(spec.OOMScoreAdj), ReadonlyRootfs: valueOrZero(spec.ReadOnly),
-			SecurityOpt: securityOptions, Tmpfs: tmpfs, ShmSize: spec.SharedMemoryBytes,
-			Sysctls: maps.Clone(spec.Sysctls),
-			Resources: containertypes.Resources{ //nolint:exhaustruct // Only supported resources are populated.
-				Memory: spec.MemoryBytes, NanoCPUs: nanoCPUs, CgroupParent: spec.CgroupParent,
-				BlkioWeight: blkioWeight, Devices: devices,
-				OomKillDisable: cloneDockerPointer(spec.OOMKillDisable), PidsLimit: cloneDockerPointer(spec.PidsLimit),
-				Ulimits: ulimits,
-			},
-			Mounts: mounts, Init: cloneDockerPointer(spec.Init),
-		}, true
+		Hostname: spec.Hostname, User: spec.User, ExposedPorts: exposed,
+		Tty: valueOrZero(spec.TTY), OpenStdin: valueOrZero(spec.StdinOpen),
+		Env: slices.Clone(spec.Environment), Cmd: slices.Clone(spec.Command), Healthcheck: healthcheck,
+		Image: image, Volumes: volumes, WorkingDir: spec.WorkingDirectory,
+		Entrypoint: slices.Clone(spec.Entrypoint), Labels: labels, StopSignal: spec.StopSignal,
+		StopTimeout: stopTimeout,
+	}, &containertypes.HostConfig{ //nolint:exhaustruct // Unsupported API fields intentionally keep zero values.
+		NetworkMode: containertypes.NetworkMode(spec.NetworkMode), PortBindings: ports, RestartPolicy: restart,
+		CapAdd: slices.Clone(spec.CapAdd), CapDrop: slices.Clone(spec.CapDrop),
+		CgroupnsMode: containertypes.CgroupnsMode(spec.Cgroup), DNS: dns,
+		DNSOptions: slices.Clone(spec.DNSOptions), DNSSearch: slices.Clone(spec.DNSSearch),
+		ExtraHosts: slices.Clone(spec.ExtraHosts), GroupAdd: slices.Clone(spec.GroupAdd),
+		OomScoreAdj: optionalInt(spec.OOMScoreAdj), ReadonlyRootfs: valueOrZero(spec.ReadOnly),
+		SecurityOpt: securityOptions, Tmpfs: tmpfs, ShmSize: spec.SharedMemoryBytes,
+		Sysctls: maps.Clone(spec.Sysctls),
+		Resources: containertypes.Resources{ //nolint:exhaustruct // Only supported resources are populated.
+			Memory: spec.MemoryBytes, NanoCPUs: nanoCPUs, CgroupParent: spec.CgroupParent,
+			BlkioWeight: blkioWeight, Devices: devices,
+			OomKillDisable: cloneDockerPointer(spec.OOMKillDisable), PidsLimit: cloneDockerPointer(spec.PidsLimit),
+			Ulimits: ulimits,
+		},
+		Mounts: mounts, Init: cloneDockerPointer(spec.Init),
+	}, true
 }
 
 //nolint:cyclop // Validation mirrors every field accepted by dockerConfiguration.
