@@ -383,9 +383,15 @@ func observedRestart(value inspectRestart) (string, bool) {
 }
 
 func observedEntrypoint(value json.RawMessage, legacy bool) ([]string, bool) {
+	if len(value) == 0 {
+		return nil, false
+	}
+	if string(value) == "null" {
+		return nil, !legacy
+	}
 	if legacy {
 		var flattened string
-		if len(value) == 0 || json.Unmarshal(value, &flattened) != nil || strings.Contains(flattened, " ") {
+		if json.Unmarshal(value, &flattened) != nil || strings.Contains(flattened, " ") {
 			return nil, false
 		}
 		if flattened == "" {
@@ -393,12 +399,6 @@ func observedEntrypoint(value json.RawMessage, legacy bool) ([]string, bool) {
 		}
 
 		return []string{flattened}, validText(flattened)
-	}
-	if len(value) == 0 {
-		return nil, false
-	}
-	if string(value) == "null" {
-		return nil, true
 	}
 	var entrypoint []string
 	if json.Unmarshal(value, &entrypoint) != nil || !validStrings(entrypoint) {

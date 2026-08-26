@@ -235,6 +235,7 @@ func TestDecodeUsesNegotiatedInspectScalarShapes(t *testing.T) {
 	}{
 		{"legacy flattened argv", json.RawMessage(`"/bin/sh -c"`), json.RawMessage(`15`), podmanAPI431},
 		{"legacy modern shape", json.RawMessage(`["/bin/sh"]`), json.RawMessage(`"SIGTERM"`), podmanAPI431},
+		{"legacy null entrypoint", json.RawMessage(`null`), json.RawMessage(`15`), podmanAPI431},
 		{"legacy null signal", json.RawMessage(`"/bin/sh"`), json.RawMessage(`null`), podmanAPI431},
 		{"legacy fractional signal", json.RawMessage(`"/bin/sh"`), json.RawMessage(`15.5`), podmanAPI431},
 		{"modern legacy shape", json.RawMessage(`"/bin/sh"`), json.RawMessage(`15`), "5.0.0"},
