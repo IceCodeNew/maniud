@@ -33,10 +33,11 @@ func (client *Client) ProbeWorkloadArchivePath(
 	if err != nil {
 		return empty, err
 	}
+	requestPath := client.apiPath("/containers/" + container.ID + "/archive")
 	response, err := client.request(
 		ctx,
 		http.MethodHead,
-		libpodPrefix+"/containers/"+container.ID+"/archive",
+		requestPath,
 		url.Values{archivePathQuery: {archivePath}},
 		nil,
 		false,
@@ -80,10 +81,11 @@ func (client *Client) GetWorkloadArchive(
 	if err != nil {
 		return empty, err
 	}
+	requestPath := client.apiPath("/containers/" + container.ID + "/archive")
 	response, err := client.requestWithReader(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/containers/"+container.ID+"/archive",
+		requestPath,
 		url.Values{archivePathQuery: {archivePath}},
 		http.Header{"Accept-Encoding": {"identity"}},
 		nil,
@@ -122,10 +124,11 @@ func (client *Client) PutWorkloadArchive(
 	if err != nil {
 		return err
 	}
+	requestPath := client.apiPath("/containers/" + container.ID + "/archive")
 	response, err := client.requestWithReader(
 		ctx,
 		http.MethodPut,
-		libpodPrefix+"/containers/"+container.ID+"/archive",
+		requestPath,
 		url.Values{
 			archivePathQuery:       {archivePath},
 			"noOverwriteDirNonDir": {podmanQueryTrue},

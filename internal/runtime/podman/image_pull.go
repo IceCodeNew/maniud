@@ -46,6 +46,7 @@ func (client *Client) PullImage(
 	if !valid || authenticator == nil {
 		return ErrUnsupportedWorkload
 	}
+	path := client.apiPath("/images/pull")
 	pullContext, cancel := context.WithTimeout(ctx, maximumImagePullDuration)
 	defer cancel()
 
@@ -56,7 +57,7 @@ func (client *Client) PullImage(
 	response, err := client.request(
 		pullContext,
 		http.MethodPost,
-		libpodPrefix+"/images/pull",
+		path,
 		url.Values{"reference": {reference.String()}},
 		header,
 		true,
