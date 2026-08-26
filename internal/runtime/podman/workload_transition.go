@@ -151,6 +151,7 @@ func (client *Client) podmanWorkloadTransitionRequest(
 	if path == "" {
 		return "", "", nil
 	}
+	//nolint:exhaustive // Unknown is rejected by validation before request construction.
 	switch transition.Kind {
 	case application.WorkloadTransitionStop:
 		return http.MethodPost, path + "/stop", url.Values{
@@ -164,7 +165,6 @@ func (client *Client) podmanWorkloadTransitionRequest(
 		}
 	case application.WorkloadTransitionRestoreStart:
 		return http.MethodPost, path + "/start", nil
-	case application.WorkloadTransitionUnknown:
 	}
 
 	return "", "", nil

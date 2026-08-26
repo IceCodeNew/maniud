@@ -25,6 +25,7 @@ const (
 	libpodPrefix               = "/v" + libpodAPIVersion + "/libpod"
 	testLibpodServerMinimum    = "4.0.0"
 	testLibpodMiddleVersion    = "5.4.2"
+	testLibpodLaterVersion     = "5.8.3"
 	testPodmanPingPath         = "/_ping"
 	testPodmanFallbackPingPath = "/libpod/_ping"
 	testPodmanVersionPath      = "/version"
@@ -68,6 +69,13 @@ func TestConnectNegotiatesAndPinsNativeLibpodScope(t *testing.T) {
 			name: "middle", minimum: testLibpodServerMinimum,
 			maximum: testLibpodMiddleVersion, protocol: testLibpodMiddleVersion, pingRoute: testPodmanPingPath,
 			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v5.4.2/libpod/info"},
+		},
+		{
+			name: testLibpodLaterVersion, minimum: testLibpodServerMinimum,
+			maximum: testLibpodLaterVersion, protocol: testLibpodLaterVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{
+				testPodmanPingPath, testPodmanVersionPath, "/v" + testLibpodLaterVersion + "/libpod/info",
+			},
 		},
 		{
 			name: "maximum", minimum: testLibpodServerMinimum, maximum: maximumLibpodAPIVersion,

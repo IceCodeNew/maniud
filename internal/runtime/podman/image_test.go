@@ -342,8 +342,12 @@ func TestPodmanPullStreamRejectsMalformedOrIncompleteMessages(t *testing.T) {
 	t.Parallel()
 
 	success := `{"status":"success","id":"` + podmanImageConfig + `"}`
-	if err := decodePodmanPullStream(strings.NewReader(success)); err != nil {
+	if err := decodePodmanPullStream(strings.NewReader(success), true); err != nil {
 		t.Fatalf("decodePodmanPullStream(valid) = %v", err)
+	}
+	legacySuccess := `{"id":"` + podmanImageConfig + `"}`
+	if err := decodePodmanPullStream(strings.NewReader(legacySuccess), false); err != nil {
+		t.Fatalf("decodePodmanPullStream(legacy) = %v", err)
 	}
 	tests := []struct {
 		name string
@@ -366,7 +370,7 @@ func TestPodmanPullStreamRejectsMalformedOrIncompleteMessages(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := decodePodmanPullStream(strings.NewReader(test.body)); !errors.Is(err, test.want) {
+			if err := decodePodmanPullStream(strings.NewReader(test.body), true); !errors.Is(err, test.want) {
 				t.Fatalf("decodePodmanPullStream() = %v, want %v", err, test.want)
 			}
 		})
@@ -488,7 +492,6 @@ func (pullCloseErrorReader) Close() error {
 func TestConsumePodmanPullResponseRejectsProtocolAndCloseFailures(t *testing.T) {
 	t.Parallel()
 
-	success := `{"status":"success","id":"` + podmanImageConfig + `"}`
 	responses := []*http.Response{
 		nil,
 		{StatusCode: http.StatusOK, Body: nil, Header: http.Header{podmanContentType: {podmanJSONType}}},
@@ -501,8 +504,9 @@ func TestConsumePodmanPullResponseRejectsProtocolAndCloseFailures(t *testing.T) 
 			Header: http.Header{podmanContentType: {podmanPlainTextType}},
 		},
 	}
+	strictProtocol := semanticVersion{major: 6, minor: 1}
 	for _, response := range responses {
-		err := consumePodmanPullResponse(context.Background(), context.Background(), response)
+		err := consumePodmanPullResponse(context.Background(), context.Background(), response, strictProtocol)
 		if !errors.Is(err, ErrProtocol) {
 			t.Fatalf("consumePodmanPullResponse(%#v) = %v", response, err)
 		}
@@ -510,22 +514,49 @@ func TestConsumePodmanPullResponseRejectsProtocolAndCloseFailures(t *testing.T) 
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{podmanContentType: {podmanJSONType}},
-		Body:       pullCloseErrorReader{Reader: strings.NewReader(success)},
+		Body: pullCloseErrorReader{Reader: strings.NewReader(
+			`{"status":"success","id":"` + podmanImageConfig + `"}`,
+		)},
 	}
 	if err := consumePodmanPullResponse(
-		context.Background(), context.Background(), response,
+		context.Background(), context.Background(), response, strictProtocol,
 	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("consumePodmanPullResponse(close) = %v", err)
+	}
+}
+
+func TestConsumePodmanPullResponseSupportsLegacyAndContextFailures(t *testing.T) {
+	t.Parallel()
+
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"` + podmanImageConfig + `"}`)),
+	}
+	legacyProtocol := semanticVersion{major: 4, minor: 3, patch: 1}
+	if err := consumePodmanPullResponse(
+		context.Background(), context.Background(), response, legacyProtocol,
+	); err != nil {
+		t.Fatalf("consumePodmanPullResponse(legacy) = %v", err)
+	}
+	if !validPodmanPullContentType(podmanPlainTextType+"; charset=utf-8", legacyProtocol) {
+		t.Fatal("validPodmanPullContentType(legacy text) rejected")
+	}
+	if validPodmanPullContentType("text/plain; charset", legacyProtocol) {
+		t.Fatal("validPodmanPullContentType(malformed) accepted")
 	}
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
+	strictProtocol := semanticVersion{major: 6, minor: 1}
 	response = &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{podmanContentType: {podmanJSONType}},
 		Body:       io.NopCloser(strings.NewReader("{")),
 	}
-	if err := consumePodmanPullResponse(cancelled, context.Background(), response); !errors.Is(err, context.Canceled) {
+	if err := consumePodmanPullResponse(
+		cancelled, context.Background(), response, strictProtocol,
+	); !errors.Is(err, context.Canceled) {
 		t.Fatalf("consumePodmanPullResponse(cancelled) = %v", err)
 	}
 
