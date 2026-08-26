@@ -206,7 +206,7 @@ func containerDocumentWithoutDescriptor(
 ) string {
 	t.Helper()
 
-	var document map[string]any
+	document := make(map[string]any)
 	if json.Unmarshal(
 		[]byte(validContainerDocument(t, labels, runningContainerState())),
 		&document,

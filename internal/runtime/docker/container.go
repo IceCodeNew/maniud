@@ -168,7 +168,25 @@ func decodeContainerInspect(reader io.Reader, target *containertypes.InspectResp
 	}
 
 	var document map[string]json.RawMessage
-	if json.Unmarshal(encoded, &document) != nil || document == nil {
+	if json.Unmarshal(encoded, &document) != nil || !validContainerInspectEnvelope(document) {
+		return false
+	}
+
+	hostConfig, found := document["HostConfig"]
+	if found && !sanitizeContainerHostConfig(hostConfig, document) {
+		return false
+	}
+	if !validContainerInspectObjects(document) {
+		return false
+	}
+
+	encoded, err := json.Marshal(document)
+
+	return err == nil && json.Unmarshal(encoded, target) == nil
+}
+
+func validContainerInspectEnvelope(document map[string]json.RawMessage) bool {
+	if document == nil {
 		return false
 	}
 	for name := range document {
@@ -177,14 +195,72 @@ func decodeContainerInspect(reader io.Reader, target *containertypes.InspectResp
 		}
 	}
 
-	hostConfig, found := document["HostConfig"]
-	if found && !sanitizeContainerHostConfig(hostConfig, document) {
-		return false
+	return true
+}
+
+func validContainerInspectObjects(document map[string]json.RawMessage) bool {
+	objects := []struct {
+		name          string
+		schema        reflect.Type
+		compatibility []string
+	}{
+		{name: "Config", schema: reflect.TypeFor[containertypes.Config](), compatibility: []string{"MacAddress"}},
+		{name: "State", schema: reflect.TypeFor[containertypes.State]()},
+		{
+			name:   "NetworkSettings",
+			schema: reflect.TypeFor[containertypes.NetworkSettings](),
+			compatibility: []string{
+				"Bridge", "HairpinMode", "LinkLocalIPv6Address", "LinkLocalIPv6PrefixLen",
+				"SecondaryIPAddresses", "SecondaryIPv6Addresses", "EndpointID", "Gateway",
+				"GlobalIPv6Address", "GlobalIPv6PrefixLen", "IPAddress", "IPPrefixLen",
+				"IPv6Gateway", "MacAddress",
+			},
+		},
+	}
+	for _, object := range objects {
+		encoded, found := document[object.name]
+		if found && !validJSONFields(encoded, object.schema, object.compatibility) {
+			return false
+		}
 	}
 
-	encoded, err := json.Marshal(document)
+	return validJSONArrayFields(document["Mounts"], reflect.TypeFor[containertypes.MountPoint]())
+}
 
-	return err == nil && json.Unmarshal(encoded, target) == nil
+func validJSONFields(encoded json.RawMessage, schema reflect.Type, compatibility []string) bool {
+	if encoded == nil || strings.TrimSpace(string(encoded)) == "null" {
+		return true
+	}
+
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(encoded, &fields) != nil || fields == nil {
+		return false
+	}
+	for name := range fields {
+		if !supportedJSONField(schema, compatibility, name) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func validJSONArrayFields(encoded json.RawMessage, schema reflect.Type) bool {
+	if encoded == nil || strings.TrimSpace(string(encoded)) == "null" {
+		return true
+	}
+
+	var values []json.RawMessage
+	if json.Unmarshal(encoded, &values) != nil || values == nil {
+		return false
+	}
+	for _, value := range values {
+		if !validJSONFields(value, schema, nil) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func sanitizeContainerHostConfig(encoded json.RawMessage, document map[string]json.RawMessage) bool {
