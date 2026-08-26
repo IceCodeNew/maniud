@@ -5,16 +5,19 @@
 # Shared versions for Orb setup, resume checks, and CI policy tools.
 # Renovate metadata is consumed by the custom regex manager in renovate.json.
 
-# go.mod is the single Go toolchain version source once the Foundation layer
-# introduces it. PR #2 installs current Go because that isolated layer has no
-# module yet; no duplicate pinned version survives in the final repository.
+# go.mod is the single Go toolchain version source. Go 1.27 removes a redundant
+# toolchain directive when it matches the language version, so accept the exact
+# root go directive as the installed toolchain version.
 GO_MOD_PATH="$(dirname "${BASH_SOURCE[0]}")/../go.mod"
 readonly GO_MOD_PATH
 GO_VERSION=''
 if [[ -f "$GO_MOD_PATH" ]]; then
   GO_VERSION="$(sed -n 's/^toolchain go//p' "$GO_MOD_PATH")"
+  if [[ -z "$GO_VERSION" ]]; then
+    GO_VERSION="$(sed -n 's/^go //p' "$GO_MOD_PATH")"
+  fi
   if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf '%s\n' 'go.mod must declare an exact Go toolchain version.' >&2
+    printf '%s\n' 'go.mod must declare an exact Go language or toolchain version.' >&2
     return 1
   fi
 fi
@@ -37,6 +40,8 @@ readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
 readonly GOVULNCHECK_VERSION='v1.7.0'
 # renovate: datasource=github-releases depName=rillig/gobco extractVersion=^v(?<version>.*)$
 readonly GOBCO_VERSION='1.3.4'
+# renovate: datasource=github-releases depName=JetBrains/go-modern-guidelines
+readonly GO_MODERN_GUIDELINES_VERSION='v0.1.1'
 # Gitleaks is installed only by CI and prek, not by Orb setup.
 # renovate: datasource=github-releases depName=gitleaks/gitleaks
 readonly GITLEAKS_VERSION='v8.30.1'

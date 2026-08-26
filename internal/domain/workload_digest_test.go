@@ -77,13 +77,14 @@ func TestWorkloadDigestsPreserveVersionedIdentitySemantics(t *testing.T) {
 func TestComputeStorageDigestBindsRuntimeIdentityAndGitProvenance(t *testing.T) {
 	t.Parallel()
 
-	workload := DesiredWorkload{
-		WorkloadSpec: completeDigestTestWorkload(),
-		SourceDigest: Hash([]byte("source evidence")),
-	}
-	workload.Mounts = []Mount{
+	spec := completeDigestTestWorkload()
+	spec.Mounts = []Mount{
 		{Kind: MountBind, Source: "/state/sources/revision/data", Target: digestTestDataTarget, ReadOnly: true},
 		{Kind: MountVolume, Target: "/state"},
+	}
+	workload := DesiredWorkload{
+		WorkloadSpec: spec,
+		SourceDigest: Hash([]byte("source evidence")),
 	}
 	observed := []RuntimeMount{
 		{Kind: MountVolume, Name: "volume-a", Source: "/runtime/volumes/volume-a", Target: "/state"},

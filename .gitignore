@@ -27,8 +27,8 @@ go.work.sum
 # env file
 .env
 
-# Amp orb portal metadata
-.amp/portals/
+# Amp local artifacts and orb metadata
+.amp/
 
 # Editor/IDE
 # .idea/

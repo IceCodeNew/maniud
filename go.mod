@@ -1,8 +1,6 @@
 module github.com/IceCodeNew/maniud
 
-go 1.26.3
-
-toolchain go1.27.0
+go 1.27.0
 
 require (
 	github.com/IceCodeNew/maniud/argv v0.1.0
@@ -21,6 +19,7 @@ require (
 	github.com/containerd/continuity v0.5.0
 	github.com/containerd/log v0.1.0
 	github.com/containernetworking/cni v1.3.0
+	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.21.9
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/sys/user v0.4.1

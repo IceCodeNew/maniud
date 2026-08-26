@@ -804,17 +804,15 @@ func TestUpgradeArchiveImageNeverPulls(t *testing.T) {
 
 func newUpgradeRuntime(workload domain.DesiredWorkload, journey upgradeJourney) *upgradeRuntimeFixture {
 	return &upgradeRuntimeFixture{
-		bootstrapRuntimeFixture: bootstrapRuntimeFixture{
-			image:           observedImageProbe(workload.Image),
-			workload:        WorkloadEffectProbe{State: WorkloadEffectProbeMissing, Workload: emptyWorkloadEffectEvidence()},
-			imageProbeCalls: 0,
-			imageProbeErrAt: make(map[int]error),
-			createProbeErr:  nil,
-			startProbeErr:   nil,
-			pulls:           0,
-			creates:         0,
-			starts:          0,
-		},
+		image:             observedImageProbe(workload.Image),
+		workload:          WorkloadEffectProbe{State: WorkloadEffectProbeMissing, Workload: emptyWorkloadEffectEvidence()},
+		imageProbeCalls:   0,
+		imageProbeErrAt:   make(map[int]error),
+		createProbeErr:    nil,
+		startProbeErr:     nil,
+		pulls:             0,
+		creates:           0,
+		starts:            0,
 		predecessor:       journey.stop.Before,
 		transitionApplies: make(map[WorkloadTransitionKind]int),
 		transitionProbeAt: make(map[int]error),

@@ -269,14 +269,12 @@ func validApplicationWorkload(t *testing.T) domain.DesiredWorkload {
 	t.Helper()
 
 	workload := domain.DesiredWorkload{
-		WorkloadSpec: domain.WorkloadSpec{
-			ServiceName:   testContainerService,
-			ContainerName: testContainerName,
-			Platform:      domain.Platform{OS: testOS, Architecture: testArchitecture, Variant: ""},
-			Entrypoint:    testContainerEntrypoint(),
-			Command:       testContainerCommand(),
-			NetworkMode:   dockerNetworkMode,
-		},
+		ServiceName:   testContainerService,
+		ContainerName: testContainerName,
+		Platform:      domain.Platform{OS: testOS, Architecture: testArchitecture, Variant: ""},
+		Entrypoint:    testContainerEntrypoint(),
+		Command:       testContainerCommand(),
+		NetworkMode:   dockerNetworkMode,
 		Image: domain.ImageIdentity{
 			Origin:           domain.ImageOriginRegistry,
 			Reference:        testContainerImage,

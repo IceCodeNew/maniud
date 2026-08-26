@@ -918,6 +918,15 @@ func TestDockerEndpointSelection(t *testing.T) {
 			want:   dockerruntime.ErrInvalidEndpoint,
 		},
 		{
+			name: "non-empty TLS verification uses Docker semantics",
+			environment: map[string]string{
+				dockerHostKey:       "tcp://engine.example:2376",
+				"DOCKER_TLS_VERIFY": "true",
+			},
+			stderr: io.Discard,
+			want:   dockerruntime.ErrInvalidEndpoint,
+		},
+		{
 			name:        "unknown scheme",
 			environment: map[string]string{dockerHostKey: "http://engine.example:2375"},
 			stderr:      io.Discard,

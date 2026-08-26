@@ -123,13 +123,12 @@ func dockerConfiguration(
 		OomScoreAdj: optionalInt(spec.OOMScoreAdj), ReadonlyRootfs: valueOrZero(spec.ReadOnly),
 		SecurityOpt: securityOptions, Tmpfs: tmpfs, ShmSize: spec.SharedMemoryBytes,
 		Sysctls: maps.Clone(spec.Sysctls),
-		Resources: containertypes.Resources{ //nolint:exhaustruct // Only supported resources are populated.
-			Memory: spec.MemoryBytes, NanoCPUs: nanoCPUs, CgroupParent: spec.CgroupParent,
-			BlkioWeight: blkioWeight, Devices: devices,
-			OomKillDisable: cloneDockerPointer(spec.OOMKillDisable), PidsLimit: cloneDockerPointer(spec.PidsLimit),
-			Ulimits: ulimits,
-		},
-		Mounts: mounts, Init: cloneDockerPointer(spec.Init),
+		//nolint:exhaustruct // Only supported resources are populated.
+		Memory: spec.MemoryBytes, NanoCPUs: nanoCPUs, CgroupParent: spec.CgroupParent,
+		BlkioWeight: blkioWeight, Devices: devices,
+		OomKillDisable: cloneDockerPointer(spec.OOMKillDisable), PidsLimit: cloneDockerPointer(spec.PidsLimit),
+		Ulimits: ulimits,
+		Mounts:  mounts, Init: cloneDockerPointer(spec.Init),
 	}, true
 }
 
