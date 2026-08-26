@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -59,6 +60,8 @@ func validateOCIIndex(
 	members map[string]member,
 	selectedConfig []byte,
 	selectedLayers []layerIdentity,
+	selectedEntry manifestEntry,
+	diffIDs []domain.Digest,
 	selectedPlatform domain.Platform,
 ) (domain.Digest, bool, error) {
 	var empty domain.Digest
@@ -75,7 +78,15 @@ func validateOCIIndex(
 	if err != nil || !bytes.Equal(config, selectedConfig) {
 		return empty, false, ErrInvalidArchive
 	}
-	if err := validateOCILayers(ctx, file, members, imageManifest.Layers, selectedLayers); err != nil {
+	if err := validateOCILayers(
+		ctx,
+		file,
+		members,
+		imageManifest.Layers,
+		selectedLayers,
+		selectedEntry,
+		diffIDs,
+	); err != nil {
 		return empty, false, err
 	}
 	digest, _ := domain.ParseDigest(descriptorValue.Digest) // selectOCIDescriptor validates the canonical digest.
@@ -239,13 +250,22 @@ func selectOCIDescriptor(values []descriptor, expected domain.Platform) (descrip
 	found := false
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if !validImageDescriptor(value, maximumManifestBytes) || value.Platform == nil {
+		if !validImageDescriptor(value, maximumManifestBytes) {
 			return descriptor{}, ErrInvalidArchive
 		}
 		if _, duplicate := seen[value.Digest]; duplicate {
 			return descriptor{}, ErrInvalidArchive
 		}
 		seen[value.Digest] = struct{}{}
+		if value.Platform == nil {
+			if len(values) != 1 {
+				return descriptor{}, ErrInvalidArchive
+			}
+			selected = value
+			found = true
+
+			continue
+		}
 		if !platformMatches(*value.Platform, expected) {
 			continue
 		}
@@ -268,21 +288,32 @@ func validateOCILayers(
 	members map[string]member,
 	layers []descriptor,
 	selected []layerIdentity,
+	selectedEntry manifestEntry,
+	diffIDs []domain.Digest,
 ) error {
-	if len(layers) != len(selected) {
+	if len(layers) != len(selected) || len(diffIDs) != len(selected) ||
+		len(selectedEntry.Layers) != len(selected) {
 		return ErrInvalidArchive
 	}
 	seen := make(map[string]struct{}, len(layers))
 	for index, layer := range layers {
-		if !validOCILayerDescriptor(layer) || layer.Size != selected[index].size ||
-			layer.Digest != selected[index].digest.String() {
+		if !validLayerSourceDescriptor(layer) {
 			return ErrInvalidArchive
 		}
 		if _, duplicate := seen[layer.Digest]; duplicate {
 			return ErrInvalidArchive
 		}
 		seen[layer.Digest] = struct{}{}
-		if _, err := descriptorPayload(ctx, file, members, layer, maximumArchiveBytes); err != nil {
+		if err := validateOCILayer(
+			ctx,
+			file,
+			members,
+			layer,
+			selected[index],
+			selectedEntry,
+			diffIDs[index],
+			index,
+		); err != nil {
 			return err
 		}
 	}
@@ -290,8 +321,55 @@ func validateOCILayers(
 	return nil
 }
 
+func validateOCILayer(
+	ctx context.Context,
+	file *os.File,
+	members map[string]member,
+	layer descriptor,
+	selected layerIdentity,
+	selectedEntry manifestEntry,
+	diffID domain.Digest,
+	index int,
+) error {
+	memberName := "blobs/sha256/" + strings.TrimPrefix(layer.Digest, "sha256:")
+	if _, found := members[memberName]; found {
+		if layer.Size != selected.size || layer.Digest != selected.digest.String() {
+			return ErrInvalidArchive
+		}
+		_, err := descriptorPayload(ctx, file, members, layer, maximumArchiveBytes)
+
+		return err
+	}
+
+	source, found := selectedEntry.LayerSources[diffID.String()]
+	if !found || !matchingLayerDescriptor(source, layer) ||
+		!graphdriverLayerMatchesDiffID(selectedEntry.Layers[index], selected, diffID) {
+		return ErrInvalidArchive
+	}
+
+	return nil
+}
+
+func graphdriverLayerMatchesDiffID(name string, layer layerIdentity, diffID domain.Digest) bool {
+	pathDigest, valid := archiveBlobDigest(name)
+
+	return valid && pathDigest == diffID.String() && layer.digest == diffID
+}
+
+func matchingLayerDescriptor(left, right descriptor) bool {
+	return left.MediaType == right.MediaType && left.Digest == right.Digest && left.Size == right.Size &&
+		slices.Equal(left.URLs, right.URLs) && maps.Equal(left.Annotations, right.Annotations) &&
+		len(left.Data) == 0 && len(right.Data) == 0 && left.Platform == nil && right.Platform == nil
+}
+
+func validLayerSourceDescriptor(value descriptor) bool {
+	value.URLs = nil
+
+	return validOCILayerDescriptor(value)
+}
+
 func validOCILayerDescriptor(value descriptor) bool {
-	if !validDescriptor(value, maximumArchiveBytes) {
+	if value.Platform != nil || !validDescriptor(value, maximumArchiveBytes) {
 		return false
 	}
 
