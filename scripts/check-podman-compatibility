@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 6)); then
+	printf '%s\n' \
+		'usage: check-podman-compatibility VERSION PACKAGE SHA256 SNAPSHOT BASE_IMAGE FIREWALL_DRIVER' >&2
+	exit 2
+fi
+
+readonly podman_version="$1"
+readonly package_name="$2"
+readonly package_sha256="$3"
+readonly snapshot="$4"
+readonly base_image="$5"
+readonly firewall_driver="$6"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly repo_root
+readonly package_url="https://archive.archlinux.org/packages/p/podman/$package_name"
+
+if [[ ! "$podman_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+	[[ ! "$package_name" =~ ^podman-${podman_version}-[0-9]+-x86_64\.pkg\.tar\.zst$ ]] ||
+	[[ ! "$package_sha256" =~ ^[[:xdigit:]]{64}$ ]] ||
+	[[ ! "$snapshot" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]] ||
+	[[ ! "$base_image" =~ ^archlinux@sha256:[[:xdigit:]]{64}$ ]] ||
+	[[ ! "$firewall_driver" =~ ^(iptables|nftables)$ ]]; then
+	printf '%s\n' 'invalid Podman compatibility matrix input' >&2
+	exit 2
+fi
+
+temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-podman-compatibility.XXXXXX")"
+readonly temporary_dir
+trap 'rm -rf "$temporary_dir"' EXIT
+
+curl --fail --location --proto '=https' --retry 3 --tlsv1.2 \
+	--output "$temporary_dir/$package_name" "$package_url"
+curl --fail --location --proto '=https' --retry 3 --tlsv1.2 \
+	--output "$temporary_dir/$package_name.sig" "$package_url.sig"
+printf '%s  %s\n' "$package_sha256" "$temporary_dir/$package_name" | sha256sum --check --strict
+
+(
+	cd "$repo_root"
+	CGO_ENABLED=0 go test -c \
+		-o "$temporary_dir/podman-compatibility.test" ./internal/runtime/podman
+)
+
+docker pull "$base_image"
+docker run --rm --privileged --network host --cgroupns host \
+	--env "MANIUD_PODMAN_PACKAGE=$package_name" \
+	--env "MANIUD_PODMAN_SNAPSHOT=$snapshot" \
+	--env "MANIUD_TEST_PODMAN_VERSION=$podman_version" \
+	--env "NETAVARK_FW=$firewall_driver" \
+	--volume "$temporary_dir:/matrix:ro" \
+	"$base_image" bash -euo pipefail -c '
+    printf "%s\n" \
+      "Server = https://archive.archlinux.org/repos/$MANIUD_PODMAN_SNAPSHOT/\$repo/os/\$arch" \
+      >/etc/pacman.d/mirrorlist
+    pacman -Syy --noconfirm
+    signature_time="$(
+      gpg --batch --list-packets "/matrix/$MANIUD_PODMAN_PACKAGE.sig" |
+        sed -n "s/.*created \([0-9][0-9]*\),.*/\1/p"
+    )"
+    if [[ ! "$signature_time" =~ ^[0-9]+$ ]]; then
+      printf "%s\n" "The Podman package signature has no creation time." >&2
+      exit 1
+    fi
+    gpg --batch --homedir /etc/pacman.d/gnupg \
+      --faked-system-time "$signature_time" \
+      --verify "/matrix/$MANIUD_PODMAN_PACKAGE.sig" "/matrix/$MANIUD_PODMAN_PACKAGE"
+    printf "faked-system-time %s\n" "$signature_time" >>/etc/pacman.d/gnupg/gpg.conf
+    pacman -U --noconfirm "/matrix/$MANIUD_PODMAN_PACKAGE"
+    if [[ "$MANIUD_TEST_PODMAN_VERSION" != "4.3.1" ]]; then
+      printf "[network]\nfirewall_driver=\"%s\"\n" "$NETAVARK_FW" \
+        >/etc/containers/containers.conf
+    fi
+    if [[ "$NETAVARK_FW" == "nftables" ]]; then
+      nft add table inet maniud_compatibility_probe
+      if ! nft "add chain inet maniud_compatibility_probe input { type filter hook input priority 0; policy accept; }" ||
+        ! nft "add rule inet maniud_compatibility_probe input fib daddr type local accept"; then
+        nft delete table inet maniud_compatibility_probe 2>/dev/null || true
+        printf "%s\n" \
+          "The runner kernel lacks nftables FIB support required by this Podman version." >&2
+        exit 1
+      fi
+      nft delete table inet maniud_compatibility_probe
+    fi
+
+    install -d /run/maniud
+    podman --storage-driver=vfs system service --time=0 \
+      unix:///run/maniud/podman.sock >/tmp/maniud-podman-service.log 2>&1 &
+    service_pid=$!
+    cleanup() {
+      kill "$service_pid" 2>/dev/null || true
+      wait "$service_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+
+    for _ in {1..80}; do
+      if [[ -S /run/maniud/podman.sock ]]; then
+        break
+      fi
+      if ! kill -0 "$service_pid" 2>/dev/null; then
+        cat /tmp/maniud-podman-service.log >&2
+        exit 1
+      fi
+      sleep 0.25
+    done
+    if [[ ! -S /run/maniud/podman.sock ]]; then
+      printf "%s\n" "Podman service did not create its socket." >&2
+      cat /tmp/maniud-podman-service.log >&2
+      exit 1
+    fi
+
+    if ! MANIUD_TEST_PODMAN_SOCKET=/run/maniud/podman.sock \
+      /matrix/podman-compatibility.test \
+      -test.run "^TestLivePodmanCompatibility$" -test.v; then
+      cat /tmp/maniud-podman-service.log >&2
+      exit 1
+    fi
+  '
