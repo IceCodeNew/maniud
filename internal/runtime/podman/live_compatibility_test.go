@@ -46,8 +46,19 @@ func connectLivePodman(ctx context.Context, t *testing.T, socketPath, expectedVe
 		t.Fatalf("Connect() error = %v", err)
 	}
 	t.Cleanup(client.CloseIdleConnections)
-	if version.Product != expectedVersion || version.Protocol != expectedVersion {
-		t.Fatalf("Connect() version = %#v, want product and protocol %q", version, expectedVersion)
+	expectedProtocol := expectedVersion
+	if serverMaximum, valid := parseSemanticVersion(expectedVersion); valid {
+		if selected, compatible := compatibleLibpodVersion(serverMaximum); compatible {
+			expectedProtocol = selected.String()
+		}
+	}
+	if version.Product != expectedVersion || version.Protocol != expectedProtocol {
+		t.Fatalf(
+			"Connect() version = %#v, want product %q and protocol %q",
+			version,
+			expectedVersion,
+			expectedProtocol,
+		)
 	}
 	evidence, err := client.Inspect(ctx)
 	if err != nil {
