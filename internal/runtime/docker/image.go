@@ -195,10 +195,8 @@ func hasReferenceDigest(values []string, expected imageref.Reference) bool {
 		if err != nil || !source.IsPinned() {
 			return false
 		}
-		reference, err := imageref.Parse(source.String())
-		if err != nil {
-			return false
-		}
+		// Normalize produced a canonical pinned source, so Parse cannot fail.
+		reference, _ := imageref.Parse(source.String())
 
 		if reference.DigestReference() == expected.DigestReference() {
 			found = true

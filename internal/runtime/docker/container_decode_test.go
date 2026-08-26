@@ -10,6 +10,61 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+func TestDecodeContainerInspectRejectsMalformedCompatibilityFields(t *testing.T) {
+	t.Parallel()
+
+	for _, document := range []string{
+		`[]`,
+		`null`,
+		`{"HostConfig":[]}`,
+		`{"HostConfig":{"Unknown":true}}`,
+		`{"Config":[]}`,
+		`{"State":[]}`,
+		`{"NetworkSettings":[]}`,
+		`{"Mounts":{}}`,
+		`{"Mounts":[[]]}`,
+	} {
+		var target containertypes.InspectResponse
+		if decodeContainerInspect(strings.NewReader(document), &target) {
+			t.Fatalf("decodeContainerInspect(%s) = true", document)
+		}
+	}
+}
+
+func TestDecodeContainerInspectRejectsUnknownNestedFields(t *testing.T) {
+	t.Parallel()
+
+	for _, document := range []string{
+		`{"Config":{"Unknown":true}}`,
+		`{"State":{"Unknown":true}}`,
+		`{"NetworkSettings":{"Unknown":true}}`,
+		`{"Mounts":[{"Unknown":true}]}`,
+	} {
+		var target containertypes.InspectResponse
+		if decodeContainerInspect(strings.NewReader(document), &target) {
+			t.Fatalf("decodeContainerInspect(%s) = true", document)
+		}
+	}
+}
+
+func TestDecodeContainerInspectAcceptsAPI140NestedCompatibilityFields(t *testing.T) {
+	t.Parallel()
+
+	document := `{
+		"Config":{"MacAddress":""},
+		"NetworkSettings":{
+			"Bridge":"","HairpinMode":false,"LinkLocalIPv6Address":"","LinkLocalIPv6PrefixLen":0,
+			"SecondaryIPAddresses":null,"SecondaryIPv6Addresses":null,"EndpointID":"","Gateway":"",
+			"GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"IPAddress":"","IPPrefixLen":0,
+			"IPv6Gateway":"","MacAddress":""
+		}
+	}`
+	var target containertypes.InspectResponse
+	if !decodeContainerInspect(strings.NewReader(document), &target) {
+		t.Fatal("decodeContainerInspect(API 1.40 nested compatibility fields) = false")
+	}
+}
+
 func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 	t.Parallel()
 
