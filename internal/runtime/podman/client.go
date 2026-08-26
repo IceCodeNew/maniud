@@ -231,7 +231,7 @@ func (client *Client) newRequestWithReader(
 	endpoint := client.baseURL
 	endpoint.Path = path
 	endpoint.RawQuery = query.Encode()
-	// The URL host is fixed; the transport dials only the authenticated Unix socket.
+	//nolint:gosec // The URL host is fixed; the transport dials only the authenticated Unix socket.
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
 	if err != nil {
 		return nil, ErrProtocol
@@ -258,7 +258,7 @@ func (client *Client) doRequest(
 		clone.Timeout = 0
 		httpClient = &clone
 	}
-	// newRequestWithReader fixes the host; the transport dials only the Unix socket.
+	//nolint:gosec // newRequestWithReader fixes the host; the transport dials only the Unix socket.
 	response, err := httpClient.Do(request)
 	if err == nil {
 		return response, nil
