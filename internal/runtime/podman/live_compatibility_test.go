@@ -85,8 +85,8 @@ func exerciseLivePodmanWorkload(
 ) {
 	t.Helper()
 	workload := livePodmanWorkload(t, image)
-	identifier := createLivePodmanWorkload(ctx, t, client, workload)
 	livePodmanCleanup(ctx, t, client, workload)
+	identifier := createLivePodmanWorkload(ctx, t, client, workload)
 	startLivePodmanWorkload(ctx, t, client, workload, identifier)
 	discardLivePodmanWorkload(ctx, t, client, workload)
 }
