@@ -56,6 +56,12 @@ type EventSink interface {
 	TryPublish(event Event) bool
 }
 
+// EventDropCounter reports observations dropped by one process-local sink.
+// Implementations must be safe for concurrent reads and return immediately.
+type EventDropCounter interface {
+	DroppedEvents() uint64
+}
+
 type observedEffectJournal struct {
 	EffectJournal
 

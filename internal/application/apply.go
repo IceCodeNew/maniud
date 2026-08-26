@@ -289,22 +289,12 @@ func (service *Service) prepareObserved(ctx context.Context, desired desiredAppl
 		if err != nil {
 			return empty, err
 		}
-		preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
-
-		return preparation, nil
 	}
 
-	preparation.Plan.Kind, err = classifyNewApply(
-		observation,
-		desired.workload,
-		desired.execution,
-		applied,
-		hasApplied,
-	)
+	preparation, err = classifyPreparedApply(preparation)
 	if err != nil {
 		return empty, err
 	}
-	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
 }
@@ -343,24 +333,40 @@ func (service *Service) prepareRecovery(
 	ctx context.Context,
 	preparation Preparation,
 ) (Preparation, error) {
-	transaction := preparation.Transaction
-	if !transactionMatches(transaction, preparation.Workload, preparation.Execution) ||
-		!transactionMatchesApplied(transaction, preparation.Applied, preparation.HasApplied) {
-		return Preparation{}, ErrConflictingState
-	}
-
-	actions, err := service.transactions.Actions(ctx, transaction.ID)
+	actions, err := service.transactions.Actions(ctx, preparation.Transaction.ID)
 	if err != nil {
 		return Preparation{}, fmt.Errorf("prepare apply actions: %w", err)
 	}
+	preparation.Actions = actions
 
-	kind, err := classifyRecovery(transaction, actions)
+	return preparation, nil
+}
+
+func classifyPreparedApply(preparation Preparation) (Preparation, error) {
+	var err error
+
+	if preparation.HasTransaction {
+		transaction := preparation.Transaction
+		if !transactionMatches(transaction, preparation.Workload, preparation.Execution) ||
+			!transactionMatchesApplied(transaction, preparation.Applied, preparation.HasApplied) {
+			return Preparation{}, ErrConflictingState
+		}
+
+		preparation.Plan.Kind, err = classifyRecovery(transaction, preparation.Actions)
+	} else {
+		preparation.Plan.Kind, err = classifyNewApply(
+			preparation.Plan.Observation,
+			preparation.Workload,
+			preparation.Execution,
+			preparation.Applied,
+			preparation.HasApplied,
+		)
+	}
 	if err != nil {
 		return Preparation{}, err
 	}
 
-	preparation.Plan.Kind = kind
-	preparation.Actions = actions
+	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
 }
