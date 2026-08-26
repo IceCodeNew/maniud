@@ -36,16 +36,14 @@ const (
 func podmanTestWorkload(t *testing.T) domain.DesiredWorkload {
 	t.Helper()
 	workload := domain.DesiredWorkload{
-		WorkloadSpec: domain.WorkloadSpec{
-			ServiceName:   podmanTestService,
-			ContainerName: podmanTestContainer,
-			Platform:      domain.Platform{OS: podmanOSLinux, Architecture: podmanArchAMD64},
-			Entrypoint:    []string{podmanTestEntrypoint},
-			Command:       []string{podmanTestCommand, "--port", "8080"},
-			NetworkMode:   podmanNetworkBridge,
-		},
-		Image:        podmanExpectedImage(t),
-		SourceDigest: domain.Hash([]byte("podman workload source")),
+		ServiceName:   podmanTestService,
+		ContainerName: podmanTestContainer,
+		Platform:      domain.Platform{OS: podmanOSLinux, Architecture: podmanArchAMD64},
+		Entrypoint:    []string{podmanTestEntrypoint},
+		Command:       []string{podmanTestCommand, "--port", "8080"},
+		NetworkMode:   podmanNetworkBridge,
+		Image:         podmanExpectedImage(t),
+		SourceDigest:  domain.Hash([]byte("podman workload source")),
 	}
 	workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
 

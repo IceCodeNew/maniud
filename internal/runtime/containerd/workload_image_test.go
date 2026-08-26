@@ -221,11 +221,10 @@ func testContainerdImageGraph(
 
 	platform := domain.Platform{OS: containerdPlatformOS, Architecture: containerdArchitectureAMD64}
 	configuration := ocispec.Image{
-		Platform: ocispec.Platform{OS: platform.OS, Architecture: platform.Architecture},
-		RootFS:   ocispec.RootFS{Type: containerdRootFSType, DiffIDs: []digest.Digest{}},
+		OS: platform.OS, Architecture: platform.Architecture,
+		RootFS: ocispec.RootFS{Type: containerdRootFSType, DiffIDs: []digest.Digest{}},
 	}
-	manifest := ocispec.Manifest{Versioned: ocispec.Manifest{}.Versioned}
-	manifest.SchemaVersion = 2
+	manifest := ocispec.Manifest{SchemaVersion: 2}
 	content := mappedContentClient{}
 	if len(layers) != 0 {
 		layerDigest := digest.FromBytes(layers)

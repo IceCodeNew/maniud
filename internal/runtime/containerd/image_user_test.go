@@ -201,11 +201,12 @@ func TestImageUserLayersRejectInvalidContentGraph(t *testing.T) {
 	t.Parallel()
 
 	config := domain.Hash([]byte("config"))
-	manifest := ocispec.Manifest{Versioned: ocispec.Manifest{}.Versioned}
-	manifest.SchemaVersion = 2
-	manifest.Config = ocispec.Descriptor{
-		MediaType: ocispec.MediaTypeImageConfig,
-		Digest:    digest.Digest(config.String()), Size: 1,
+	manifest := ocispec.Manifest{
+		SchemaVersion: 2,
+		Config: ocispec.Descriptor{
+			MediaType: ocispec.MediaTypeImageConfig,
+			Digest:    digest.Digest(config.String()), Size: 1,
+		},
 	}
 	validLayerDigest := digest.FromString("layer")
 	manifest.Layers = []ocispec.Descriptor{{

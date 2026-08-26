@@ -83,7 +83,7 @@ func dockerEndpoint(environment map[string]string, stderr io.Writer) (dockerrunt
 		}))
 	}
 
-	if strings.HasPrefix(host, "tcp://") && environment["DOCKER_TLS_VERIFY"] != "1" {
+	if strings.HasPrefix(host, "tcp://") && environment["DOCKER_TLS_VERIFY"] == "" {
 		if stderr == nil {
 			return dockerruntime.Endpoint{}, dockerruntime.ErrWarningDelivery
 		}

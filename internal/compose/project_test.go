@@ -92,14 +92,12 @@ services:
 	}
 
 	want := domain.DesiredWorkload{
-		WorkloadSpec: domain.WorkloadSpec{
-			ServiceName:   apiService,
-			ContainerName: "example-api",
-			Platform:      image.Platform,
-			Entrypoint:    []string{"/bin/api"},
-			Command:       []string{"serve", "--port", "8080"},
-			NetworkMode:   composeBridgeNetwork,
-		},
+		ServiceName:     apiService,
+		ContainerName:   "example-api",
+		Platform:        image.Platform,
+		Entrypoint:      []string{"/bin/api"},
+		Command:         []string{"serve", "--port", "8080"},
+		NetworkMode:     composeBridgeNetwork,
 		Image:           image,
 		SourceDigest:    domain.Hash(source.Content),
 		EffectiveDigest: workload.EffectiveDigest,
