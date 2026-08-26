@@ -253,12 +253,67 @@ func TestAppliedAndRecoveryRelationshipsRejectDrift(t *testing.T) {
 	}
 }
 
+func TestAppliedSuccessorMatchesPredecessorStorageEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mounts []domain.Mount
+	}{
+		{name: "without mounts"},
+		{
+			name: "persistent volume",
+			mounts: []domain.Mount{{
+				Kind: domain.MountVolume, Target: testVolumeTarget,
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			desired := testWorkloadEffect(t)
+			desired.Mounts = test.mounts
+			previous := desired
+			previous.SourceDigest = domain.Hash([]byte("previous source"))
+			previous.EffectiveDigest = domain.Hash([]byte("previous desired state"))
+
+			observation := matchingManagedObservation(desired)
+			observation.ConfigurationMatches = false
+			observation.Ownership = desiredOwnership(previous)
+			execution := testExecutionEvidence()
+			applied := appliedServiceForObservation(previous, execution, observation)
+			applied.StorageDigest = storageDigestForTest(previous)
+
+			kind, err := classifyAppliedWorkload(observation, desired, execution, applied)
+			if err != nil || kind != PlanUpgrade {
+				t.Fatalf("classifyAppliedWorkload(successor) = %q, %v", kind, err)
+			}
+
+			if len(test.mounts) == 0 {
+				return
+			}
+
+			drifted := observation
+			drifted.RuntimeMounts = testRuntimeMounts(desired)
+			drifted.RuntimeMounts[0].Name = "other-volume"
+			drifted.RuntimeMounts[0].Source = "/runtime/volumes/other-volume"
+			drifted.StorageDigest, _ = domain.ComputeStorageDigest(desired, drifted.RuntimeMounts)
+			_, err = classifyAppliedWorkload(drifted, desired, execution, applied)
+			if !errors.Is(err, ErrConflictingState) {
+				t.Fatalf("classifyAppliedWorkload(storage drift) error = %v", err)
+			}
+		})
+	}
+}
+
 func TestAdoptedBaselineRetainsUnmanagedWorkload(t *testing.T) {
 	t.Parallel()
 
 	workload := testWorkloadEffect(t)
 	execution := testExecutionEvidence()
-	observation := presentObservation(true, true, domain.OwnershipUnmanaged)
+	observation := matchingManagedObservation(workload)
+	observation.Ownership = domain.WorkloadOwnership{Status: domain.OwnershipUnmanaged}
 	applied := appliedServiceForObservation(workload, execution, observation)
 	applied.Kind = store.TransactionAdopt
 	applied.EffectiveDigest = workload.EffectiveDigest
