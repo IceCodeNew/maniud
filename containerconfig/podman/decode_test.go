@@ -252,6 +252,32 @@ func TestDecodeUsesNegotiatedInspectScalarShapes(t *testing.T) {
 	}
 }
 
+func TestInspectVersionAndProcessScalarBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range []string{"4.3", "4.x.1"} {
+		if _, _, valid := inspectAPIMode(version); valid {
+			t.Fatalf("inspectAPIMode(%q) = valid", version)
+		}
+	}
+
+	if entrypoint, valid := observedEntrypoint(json.RawMessage(`""`), true); !valid || entrypoint != nil {
+		t.Fatalf("observedEntrypoint(legacy empty) = %#v, %t", entrypoint, valid)
+	}
+	if _, valid := observedEntrypoint(nil, false); valid {
+		t.Fatal("observedEntrypoint(modern missing) = valid")
+	}
+	if entrypoint, valid := observedEntrypoint(json.RawMessage(`null`), false); !valid || entrypoint != nil {
+		t.Fatalf("observedEntrypoint(modern null) = %#v, %t", entrypoint, valid)
+	}
+	if _, valid := observedInspectStopSignal(nil, false); valid {
+		t.Fatal("observedInspectStopSignal(missing) = valid")
+	}
+	if _, valid := observedInspectStopSignal(json.RawMessage(`""`), false); valid {
+		t.Fatal("observedInspectStopSignal(empty) = valid")
+	}
+}
+
 //nolint:cyclop // The assertion exhausts independent native scalar mappings.
 func TestObservedScalarBranches(t *testing.T) {
 	t.Parallel()
