@@ -77,7 +77,29 @@ func testBoundMutationStartsRequiredTransaction(t *testing.T, test mutationPlanT
 	}
 
 	assertBoundTransaction(t, state, mutation.preparation, test.wantTransaction)
+	assertBoundUpgradeTransaction(t, mutation.preparation, applied, test.want)
 	assertMutationLockHeld(t, state, mutation.preparation)
+}
+
+func assertBoundUpgradeTransaction(
+	t *testing.T,
+	preparation Preparation,
+	applied store.AppliedService,
+	kind PlanKind,
+) {
+	t.Helper()
+
+	if kind != PlanUpgrade {
+		return
+	}
+
+	transaction := preparation.Transaction
+	if transaction.SourceDigest != preparation.Workload.SourceDigest ||
+		transaction.EffectiveDigest != preparation.Workload.EffectiveDigest ||
+		transaction.BaseTransactionID != applied.TransactionID ||
+		transaction.PredecessorWorkloadID != applied.WorkloadID {
+		t.Fatalf("upgrade transaction = %#v, applied %#v", transaction, applied)
+	}
 }
 
 func appliedForMutationPlan(
@@ -97,7 +119,13 @@ func appliedForMutationPlan(
 		t.Fatalf("prepareDesired() error = %v", err)
 	}
 
-	return seedAppliedMutation(t, state, desired.workload, desired.execution)
+	workload := desired.workload
+	if kind == PlanUpgrade {
+		workload.SourceDigest = domain.Hash([]byte("previous source"))
+		workload.EffectiveDigest = domain.Hash([]byte("previous desired state"))
+	}
+
+	return seedAppliedMutation(t, state, workload, desired.execution)
 }
 
 func seedAppliedMutation(

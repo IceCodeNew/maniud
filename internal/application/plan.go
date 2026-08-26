@@ -153,7 +153,7 @@ func classifyAppliedWorkload(
 	applied store.AppliedService,
 ) (PlanKind, error) {
 	if observation.State != WorkloadObservationPresent || !observation.Running ||
-		!observationMatchesApplied(observation, workload.ServiceName, applied) ||
+		!observationMatchesApplied(observation, workload, applied) ||
 		!appliedMatchesExecution(applied, execution) {
 		return "", ErrConflictingState
 	}
@@ -179,10 +179,10 @@ func appliedMatchesDesired(applied store.AppliedService, workload domain.Desired
 
 func observationMatchesApplied(
 	observation WorkloadObservation,
-	service string,
+	workload domain.DesiredWorkload,
 	applied store.AppliedService,
 ) bool {
-	if !observationIdentityMatchesApplied(observation, applied) {
+	if !observationIdentityMatchesApplied(observation, workload, applied) {
 		return false
 	}
 
@@ -191,7 +191,7 @@ func observationMatchesApplied(
 	}
 
 	return observation.Ownership.Status == domain.OwnershipManaged &&
-		observation.Ownership.Service == service &&
+		observation.Ownership.Service == workload.ServiceName &&
 		observation.Ownership.Transaction == applied.TransactionID.String() &&
 		observation.Ownership.DesiredState == applied.EffectiveDigest &&
 		observation.Ownership.Reference == applied.ReferenceDigest &&
@@ -201,11 +201,15 @@ func observationMatchesApplied(
 
 func observationIdentityMatchesApplied(
 	observation WorkloadObservation,
+	workload domain.DesiredWorkload,
 	applied store.AppliedService,
 ) bool {
+	predecessor := workload
+	predecessor.SourceDigest = applied.SourceDigest
+
 	return observation.ID == applied.WorkloadID &&
 		observation.ConfigurationDigest == applied.ConfigurationDigest &&
-		observation.StorageDigest == applied.StorageDigest
+		workloadStorageMatches(applied.StorageDigest, observation.RuntimeMounts, predecessor)
 }
 
 func classifyRecovery(transaction store.Transaction, actions []store.Action) (PlanKind, error) {
