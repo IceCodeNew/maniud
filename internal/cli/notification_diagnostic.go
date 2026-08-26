@@ -125,25 +125,14 @@ func notificationDiagnosticTarget(target notification.Target) (string, bool) {
 }
 
 func notificationDiagnosticEvent(event application.EventKind) (string, bool) {
-	switch event {
-	case "":
+	if event == "" {
 		return "unknown", true
-	case application.EventPlanPrepared,
-		application.EventRuntimeEffectStarted,
-		application.EventTransactionSucceeded,
-		application.EventTransactionRestored,
-		application.EventTransactionFailed,
-		application.EventGitOpsServiceApplyFailed,
-		application.EventDaemonUnavailable:
-		return string(event), true
-	case application.EventActionIntentRecorded,
-		application.EventPostconditionObserved,
-		application.EventActionCompleted,
-		application.EventTransactionDegraded:
-		return "", false
-	default:
+	}
+	if !notification.SupportsEvent(event) {
 		return "", false
 	}
+
+	return string(event), true
 }
 
 func notificationDiagnosticCode(code notification.DiagnosticCode) (string, string, bool) {

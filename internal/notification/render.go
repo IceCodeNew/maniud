@@ -58,6 +58,14 @@ func renderApplicationEvent(event application.Event) (notificationMessage, bool)
 	return notificationMessage{title: title, body: body}, true
 }
 
+// SupportsEvent reports whether an application event can produce an external
+// notification.
+func SupportsEvent(kind application.EventKind) bool {
+	_, supported := notificationEventTitle(kind)
+
+	return supported
+}
+
 func notificationEventTitle(kind application.EventKind) (string, bool) {
 	switch kind {
 	case application.EventPlanPrepared:
