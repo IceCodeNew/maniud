@@ -525,7 +525,7 @@ func TestPodmanWorkloadPureFailClosedBranches(t *testing.T) {
 		t.Fatalf("Inspect(unsupported platform) = %v", err)
 	}
 	for _, state := range []ContainerProbeState{ContainerProbeUnknown, 99} {
-		observation, err := podmanWorkloadObservation(ContainerProbe{State: state}, workload)
+		observation, err := podmanWorkloadObservation(ContainerProbe{State: state}, workload, libpodAPIVersion)
 		if !errors.Is(err, ErrProtocol) || !reflect.DeepEqual(observation, application.WorkloadObservation{}) {
 			t.Fatalf("podmanWorkloadObservation(%d) = %#v, %v", state, observation, err)
 		}
@@ -583,7 +583,7 @@ func TestPodmanWorkloadPureFailClosedBranches(t *testing.T) {
 	if method != "" || requestPath != "" || query != nil {
 		t.Fatalf("podmanWorkloadTransitionRequest(unknown) = %q, %q, %#v", method, requestPath, query)
 	}
-	if containerConfigurationMatches(Container{}, workload) {
+	if containerConfigurationMatches(Container{}, workload, libpodAPIVersion) {
 		t.Fatal("containerConfigurationMatches accepted empty container")
 	}
 	if validOwnershipName("bad/name") || validOwnershipName(strings.Repeat("a", maximumOwnershipValueBytes+1)) {
@@ -794,7 +794,7 @@ func TestPodmanObservedWorkloadAndInspectMappingBranches(t *testing.T) {
 		WorkloadSpec: workload.WorkloadSpec, State: ContainerRunning,
 	}
 	observation, err := podmanWorkloadObservation(
-		ContainerProbe{State: ContainerProbeObserved, Container: container}, workload,
+		ContainerProbe{State: ContainerProbeObserved, Container: container}, workload, libpodAPIVersion,
 	)
 	if err != nil || observation.State != application.WorkloadObservationPresent || !observation.Running ||
 		!observation.ConfigurationMatches {
@@ -803,7 +803,7 @@ func TestPodmanObservedWorkloadAndInspectMappingBranches(t *testing.T) {
 	invalidStorage := workload
 	invalidStorage.SourceDigest = domain.Digest{}
 	observation, err = podmanWorkloadObservation(
-		ContainerProbe{State: ContainerProbeObserved, Container: container}, invalidStorage,
+		ContainerProbe{State: ContainerProbeObserved, Container: container}, invalidStorage, libpodAPIVersion,
 	)
 	if !reflect.DeepEqual(observation, application.WorkloadObservation{}) || !errors.Is(err, ErrProtocol) {
 		t.Fatalf("podmanWorkloadObservation(invalid storage) = %#v, %v", observation, err)

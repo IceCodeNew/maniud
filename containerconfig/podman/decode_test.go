@@ -27,7 +27,7 @@ func decodeDocument(t *testing.T, document inspectDocument) (Inspection, error) 
 	t.Helper()
 	encoded := inspectBytes(t, document)
 
-	return DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)))
+	return DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)), testPodmanAPIVersion)
 }
 
 func TestDecodeRejectsFramingAndRequiredFieldFailures(t *testing.T) {
@@ -45,7 +45,7 @@ func TestDecodeRejectsFramingAndRequiredFieldFailures(t *testing.T) {
 		{"oversized", strings.NewReader("{}"), 1}, {"wrong shape", strings.NewReader("[]"), 2},
 	}
 	for _, test := range tests {
-		if _, err := DecodeInspect(test.input, test.limit); err == nil {
+		if _, err := DecodeInspect(test.input, test.limit, testPodmanAPIVersion); err == nil {
 			t.Fatalf("DecodeInspect(%s) error = nil", test.name)
 		}
 	}
@@ -65,7 +65,11 @@ func TestDecodeRejectsFramingAndRequiredFieldFailures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = DecodeInspect(bytes.NewReader(missing), int64(len(missing))); err == nil {
+		if _, err = DecodeInspect(
+			bytes.NewReader(missing),
+			int64(len(missing)),
+			testPodmanAPIVersion,
+		); err == nil {
 			t.Fatalf("DecodeInspect(missing %s) error = nil", name)
 		}
 	}
@@ -140,7 +144,7 @@ func TestObservedSpecRejectsEachMappingBoundary(t *testing.T) {
 		func(value *inspectDocument) { value.Config.Labels = map[string]string{"": "bad"} },
 		func(value *inspectDocument) { value.Config.Environment = []string{"bad"} },
 		func(value *inspectDocument) { value.HostConfig.RestartPolicy.Name = "bad" },
-		func(value *inspectDocument) { value.Config.StopSignal = "bad" },
+		func(value *inspectDocument) { value.Config.StopSignal = json.RawMessage(`"bad"`) },
 		func(value *inspectDocument) { value.HostConfig.NanoCPUs = -1 },
 		func(value *inspectDocument) { value.HostConfig.BlkioWeight = 1 },
 		func(value *inspectDocument) { value.HostConfig.PidsLimit = -2 },
@@ -159,6 +163,91 @@ func TestObservedSpecRejectsEachMappingBoundary(t *testing.T) {
 		mutate(&value)
 		if _, err := decodeDocument(t, value); err == nil {
 			t.Fatalf("DecodeInspect(mapping %d) error = nil", index)
+		}
+	}
+}
+
+func TestDecodeAcceptsPodman431ShareableIPCOnly(t *testing.T) {
+	t.Parallel()
+
+	document := richInspectDocument()
+	document.HostConfig.IPCMode = "shareable"
+	document.Config.Entrypoint = json.RawMessage(`"/usr/local/bin/app"`)
+	document.Config.StopSignal = json.RawMessage(`2`)
+	encoded := inspectBytes(t, document)
+	if _, err := DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)), podmanAPI431); err != nil {
+		t.Fatalf("DecodeInspect(Podman 4.3.1 shareable IPC) error = %v", err)
+	}
+	document.Config.Entrypoint = json.RawMessage(`["/usr/local/bin/app"]`)
+	document.Config.StopSignal = json.RawMessage(`"SIGINT"`)
+	encoded = inspectBytes(t, document)
+	for _, apiVersion := range []string{"5.0.0", testPodmanAPIVersion} {
+		if _, err := DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)), apiVersion); err == nil {
+			t.Fatalf("DecodeInspect(Podman %s shareable IPC) error = nil", apiVersion)
+		}
+	}
+	document.Config.Entrypoint = json.RawMessage(`"/usr/local/bin/app"`)
+	document.Config.StopSignal = json.RawMessage(`2`)
+	for _, mode := range []string{"host", "container:other", "ns:/proc/1/ns/ipc", "none"} {
+		document.HostConfig.IPCMode = mode
+		encoded = inspectBytes(t, document)
+		if _, err := DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)), podmanAPI431); err == nil {
+			t.Fatalf("DecodeInspect(Podman 4.3.1 IPC mode %q) error = nil", mode)
+		}
+	}
+}
+
+func TestDecodeUsesNegotiatedInspectScalarShapes(t *testing.T) {
+	t.Parallel()
+
+	modern := richInspectDocument()
+	legacy := richInspectDocument()
+	legacy.Config.Entrypoint = json.RawMessage(`"/usr/local/bin/app"`)
+	legacy.Config.StopSignal = json.RawMessage(`2`)
+	for _, test := range []struct {
+		name       string
+		document   inspectDocument
+		apiVersion string
+	}{
+		{"Podman 4.3.1", legacy, podmanAPI431},
+		{"Podman 5", modern, "5.0.0"},
+		{"Podman 6.1", modern, testPodmanAPIVersion},
+	} {
+		inspection, err := DecodeInspect(
+			bytes.NewReader(inspectBytes(t, test.document)),
+			int64(len(inspectBytes(t, test.document))),
+			test.apiVersion,
+		)
+		if err != nil {
+			t.Fatalf("DecodeInspect(%s) error = %v", test.name, err)
+		}
+		if !slices.Equal(inspection.Spec.Entrypoint, []string{"/usr/local/bin/app"}) ||
+			inspection.Spec.StopSignal != signalInterruptName {
+			t.Fatalf("DecodeInspect(%s) process = %#v, %q", test.name, inspection.Spec.Entrypoint, inspection.Spec.StopSignal)
+		}
+	}
+
+	invalid := []struct {
+		name       string
+		entrypoint json.RawMessage
+		stopSignal json.RawMessage
+		apiVersion string
+	}{
+		{"legacy flattened argv", json.RawMessage(`"/bin/sh -c"`), json.RawMessage(`15`), podmanAPI431},
+		{"legacy modern shape", json.RawMessage(`["/bin/sh"]`), json.RawMessage(`"SIGTERM"`), podmanAPI431},
+		{"legacy null signal", json.RawMessage(`"/bin/sh"`), json.RawMessage(`null`), podmanAPI431},
+		{"legacy fractional signal", json.RawMessage(`"/bin/sh"`), json.RawMessage(`15.5`), podmanAPI431},
+		{"modern legacy shape", json.RawMessage(`"/bin/sh"`), json.RawMessage(`15`), "5.0.0"},
+		{"modern mixed entrypoint", json.RawMessage(`["/bin/sh",1]`), json.RawMessage(`"SIGTERM"`), "5.0.0"},
+		{"unsupported API", json.RawMessage(`["/bin/sh"]`), json.RawMessage(`"SIGTERM"`), "6.1.1"},
+	}
+	for _, test := range invalid {
+		document := richInspectDocument()
+		document.Config.Entrypoint = test.entrypoint
+		document.Config.StopSignal = test.stopSignal
+		encoded := inspectBytes(t, document)
+		if _, err := DecodeInspect(bytes.NewReader(encoded), int64(len(encoded)), test.apiVersion); err == nil {
+			t.Fatalf("DecodeInspect(%s) error = nil", test.name)
 		}
 	}
 }

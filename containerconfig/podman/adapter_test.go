@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	testContainerID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	testImageID     = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testImage       = "registry.example.test/example/app@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	testContainerID      = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	testImageID          = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testImageDigest      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testImage            = "registry.example.test/example/app@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	testPodmanAPIVersion = "6.1.0"
 )
 
 func minimalSpec() containerconfig.Spec {
@@ -75,11 +76,12 @@ func richInspectDocument() inspectDocument {
 			Destination: "/image-data", Driver: volumeDriverLocal, ReadWrite: true,
 		}},
 		Config: &inspectConfig{
-			Image: testImage, Command: []string{"serve"}, Entrypoint: []string{"/usr/local/bin/app"},
+			Image: testImage, Command: []string{"serve"},
+			Entrypoint:  json.RawMessage(`["/usr/local/bin/app"]`),
 			Labels:      map[string]string{"com.example.role": "api"},
 			Environment: []string{"A=one", "B=two", podmanEnvironmentKey + "=" + podmanEnvironmentValue},
 			Hostname:    "api.internal", User: "1000:1000", WorkingDir: "/app", OpenStdin: true, TTY: true,
-			StopSignal: "SIGINT", StopTimeout: 20,
+			StopSignal: json.RawMessage(`"SIGINT"`), StopTimeout: 20,
 			Healthcheck: &healthConfig{
 				Test: []string{"CMD", "check"}, Interval: 30 * time.Second, Timeout: 5 * time.Second,
 				Retries: 3, StartPeriod: 10 * time.Second, StartInterval: 2 * time.Second,
@@ -141,7 +143,7 @@ func TestDecodeInspectRichConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inspection, err := DecodeInspect(bytes.NewReader(document), int64(len(document)))
+	inspection, err := DecodeInspect(bytes.NewReader(document), int64(len(document)), testPodmanAPIVersion)
 	if err != nil {
 		t.Fatalf("DecodeInspect() error = %v", err)
 	}
@@ -196,6 +198,7 @@ func TestCanonicalOwnsInputAndNormalizesRuntimeDefaults(t *testing.T) {
 
 	spec := minimalSpec()
 	spec.Cgroup = namespacePrivate
+	spec.WorkingDirectory = "/"
 	spec.Restart = "no"
 	spec.SharedMemoryBytes = defaultSharedMemoryBytes
 	spec.StopSignal = "15"
@@ -215,7 +218,8 @@ func TestCanonicalOwnsInputAndNormalizesRuntimeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if canonical.Cgroup != "" || canonical.Restart != "" || canonical.SharedMemoryBytes != 0 || canonical.StopSignal != "" ||
+	if canonical.Cgroup != "" || canonical.WorkingDirectory != "" || canonical.Restart != "" ||
+		canonical.SharedMemoryBytes != 0 || canonical.StopSignal != "" ||
 		canonical.StopTimeout != nil || canonical.OOMScoreAdj != nil || canonical.Init != nil ||
 		canonical.StdinOpen != nil || canonical.OOMKillDisable != nil || canonical.ReadOnly != nil ||
 		canonical.TTY != nil || len(canonical.ExposedPorts) != 0 || canonical.Ports[0].HostIP != "" ||
@@ -232,43 +236,108 @@ func TestCanonicalOwnsInputAndNormalizesRuntimeDefaults(t *testing.T) {
 	}
 }
 
-func TestEquivalentHandlesLibpodRuntimeDefaults(t *testing.T) {
-	t.Parallel()
-
+func podmanRuntimeDefaultSpecs() (containerconfig.Spec, containerconfig.Spec) {
 	expected := minimalSpec()
 	expected.Environment = []string{"PATH=/usr/bin"}
 	observed := expected.Clone()
 	observed.ServiceName = ""
 	observed.Platform = containerconfig.Platform{}
-	observed.Environment = append(observed.Environment, "HOME=/root", "HOSTNAME=container-id")
+	observed.Environment = append(observed.Environment, "HOME=/root", "HOSTNAME=container-id", "TERM=xterm")
+	observed.CapDrop = []string{"CAP_AUDIT_WRITE", "CAP_MKNOD", "CAP_NET_RAW"}
 	observed.Ulimits = []containerconfig.Ulimit{
 		{Name: ulimitNoFile, Soft: 1_048_576, Hard: 1_048_576},
 		{Name: ulimitNProc, Soft: 1_048_576, Hard: 1_048_576},
 	}
-	if !Equivalent(observed, expected) {
+	observed.PidsLimit = new(defaultPidsLimit)
+
+	return observed, expected
+}
+
+func TestEquivalentHandlesLibpodRuntimeDefaults(t *testing.T) {
+	t.Parallel()
+
+	observed, expected := podmanRuntimeDefaultSpecs()
+	if !Equivalent(observed, expected, podmanAPI431) {
 		t.Fatal("Equivalent() rejected Libpod runtime defaults")
 	}
-	observed.Ulimits = append(observed.Ulimits, containerconfig.Ulimit{Name: "memlock", Soft: 1, Hard: 1})
-	if Equivalent(observed, expected) {
-		t.Fatal("Equivalent() ignored an unexpected ulimit")
+	if Equivalent(observed, expected, "4.7.0") || Equivalent(observed, expected, testPodmanAPIVersion) {
+		t.Fatal("Equivalent() ignored version-specific Libpod defaults")
 	}
+	modern := observed.Clone()
+	modern.Environment = slices.DeleteFunc(modern.Environment, func(value string) bool { return value == "TERM=xterm" })
+	modern.CapDrop = nil
+	if !Equivalent(modern, expected, testPodmanAPIVersion) {
+		t.Fatal("Equivalent() rejected modern Libpod defaults")
+	}
+	if Equivalent(modern, expected, "6.1.1") {
+		t.Fatal("Equivalent() accepted an unsupported API version")
+	}
+}
 
-	expected.Environment = append(expected.Environment, "HOME=/home/app")
-	if Equivalent(observed, expected) {
-		t.Fatal("Equivalent() ignored an explicit HOME value")
+func TestEquivalentRejectsLibpodResourceDifferences(t *testing.T) {
+	t.Parallel()
+
+	observed, expected := podmanRuntimeDefaultSpecs()
+	explicitPids := expected.Clone()
+	explicitPids.PidsLimit = new(int64(-1))
+	if Equivalent(observed, explicitPids, podmanAPI431) {
+		t.Fatal("Equivalent() ignored an explicit pids limit")
 	}
-	expected = minimalSpec()
-	observed = expected.Clone()
-	observed.Environment = []string{"EXTRA=value"}
-	if Equivalent(observed, expected) {
-		t.Fatal("Equivalent() ignored a non-Libpod environment value")
+	unexpectedPids := observed.Clone()
+	unexpectedPidsLimit := defaultPidsLimit - 1
+	unexpectedPids.PidsLimit = &unexpectedPidsLimit
+	if Equivalent(unexpectedPids, expected, podmanAPI431) {
+		t.Fatal("Equivalent() ignored a non-default pids limit")
+	}
+	observed.Ulimits = append(observed.Ulimits, containerconfig.Ulimit{Name: "memlock", Soft: 1, Hard: 1})
+	if Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() ignored an unexpected ulimit")
 	}
 	expected = minimalSpec()
 	expected.Ulimits = []containerconfig.Ulimit{{Name: ulimitNoFile, Soft: 1024, Hard: 2048}}
 	observed = expected.Clone()
 	observed.Ulimits[0].Soft++
-	if Equivalent(observed, expected) {
+	if Equivalent(observed, expected, testPodmanAPIVersion) {
 		t.Fatal("Equivalent() ignored an explicit ulimit")
+	}
+}
+
+func TestEquivalentRejectsLibpodEnvironmentAndCapabilityDifferences(t *testing.T) {
+	t.Parallel()
+
+	observed, expected := podmanRuntimeDefaultSpecs()
+	expected.Environment = append(expected.Environment, "HOME=/home/app")
+	if Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() ignored an explicit HOME value")
+	}
+	expected = minimalSpec()
+	expected.Environment = []string{"TERM=screen"}
+	observed = minimalSpec()
+	observed.Environment = []string{"TERM=xterm"}
+	if Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() ignored an explicit TERM value")
+	}
+	expected = minimalSpec()
+	expected.CapDrop = []string{"CAP_MKNOD"}
+	observed = expected.Clone()
+	observed.CapDrop = []string{"CAP_AUDIT_WRITE", "CAP_MKNOD", "CAP_NET_RAW"}
+	if Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() accepted an ambiguous Podman 4.3.1 capability drop")
+	}
+	expected.CapDrop = []string{"CAP_SYS_ADMIN"}
+	observed.CapDrop = append(observed.CapDrop, "CAP_SYS_ADMIN")
+	if !Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() rejected an unambiguous explicit capability drop")
+	}
+	observed.CapDrop = append(observed.CapDrop, "CAP_SYS_TIME")
+	if Equivalent(observed, expected, podmanAPI431) {
+		t.Fatal("Equivalent() ignored an unexpected capability drop")
+	}
+	expected = minimalSpec()
+	observed = expected.Clone()
+	observed.Environment = []string{"EXTRA=value"}
+	if Equivalent(observed, expected, testPodmanAPIVersion) {
+		t.Fatal("Equivalent() ignored a non-Libpod environment value")
 	}
 }
 
@@ -280,7 +349,7 @@ func TestEquivalentPreservesExplicitTmpfsDefaults(t *testing.T) {
 	expected.Tmpfs = []containerconfig.TmpfsMount{{Target: "/tmp"}}
 	observed := expected.Clone()
 	observed.Tmpfs[0].Options = slices.Clone(defaults)
-	if !Equivalent(observed, expected) {
+	if !Equivalent(observed, expected, testPodmanAPIVersion) {
 		t.Fatal("Equivalent() rejected implicit Libpod tmpfs defaults")
 	}
 
@@ -288,11 +357,11 @@ func TestEquivalentPreservesExplicitTmpfsDefaults(t *testing.T) {
 		explicit := expected.Clone()
 		explicit.Tmpfs[0].Options = []string{option}
 		missing := expected.Clone()
-		if Equivalent(missing, explicit) {
+		if Equivalent(missing, explicit, testPodmanAPIVersion) {
 			t.Fatalf("Equivalent() ignored explicit tmpfs option %q", option)
 		}
 		matching := explicit.Clone()
-		if !Equivalent(matching, explicit) {
+		if !Equivalent(matching, explicit, testPodmanAPIVersion) {
 			t.Fatalf("Equivalent() rejected explicit tmpfs option %q", option)
 		}
 	}

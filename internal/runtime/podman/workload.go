@@ -168,12 +168,13 @@ func (client *Client) ObserveWorkload(
 		return empty, err
 	}
 
-	return podmanWorkloadObservation(probe, workload)
+	return podmanWorkloadObservation(probe, workload, client.version.Protocol)
 }
 
 func podmanWorkloadObservation(
 	probe ContainerProbe,
 	workload domain.DesiredWorkload,
+	apiVersion string,
 ) (application.WorkloadObservation, error) {
 	var empty application.WorkloadObservation
 
@@ -192,7 +193,7 @@ func podmanWorkloadObservation(
 			ConfigurationDigest:  containerConfigurationDigest(probe.Container),
 			StorageDigest:        storageDigest,
 			RuntimeMounts:        slices.Clone(probe.Container.RuntimeMounts),
-			ConfigurationMatches: containerConfigurationMatches(probe.Container, workload),
+			ConfigurationMatches: containerConfigurationMatches(probe.Container, workload, apiVersion),
 			Running:              probe.Container.State == ContainerRunning,
 			Ownership:            probe.Container.Ownership,
 		}, nil
@@ -235,7 +236,11 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 		return unknown, ErrProtocol
 	}
 
-	inspection, decodeErr := podmanconfig.DecodeInspect(response.Body, maximumControlBytes)
+	inspection, decodeErr := podmanconfig.DecodeInspect(
+		response.Body,
+		maximumControlBytes,
+		client.version.Protocol,
+	)
 	if decodeErr != nil {
 		return unknown, ErrProtocol
 	}
@@ -283,7 +288,11 @@ func alphaNumeric(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
-func containerConfigurationMatches(container Container, workload domain.DesiredWorkload) bool {
+func containerConfigurationMatches(
+	container Container,
+	workload domain.DesiredWorkload,
+	apiVersion string,
+) bool {
 	observedReference, observedErr := imageref.Parse(container.ImageReference)
 	expectedReference, expectedErr := parseExpectedImageReference(workload.Image)
 	if observedErr != nil || expectedErr != nil ||
@@ -294,7 +303,7 @@ func containerConfigurationMatches(container Container, workload domain.DesiredW
 		return false
 	}
 
-	return podmanconfig.Equivalent(container.WorkloadSpec, workload.WorkloadSpec)
+	return podmanconfig.Equivalent(container.WorkloadSpec, workload.WorkloadSpec, apiVersion)
 }
 
 func containerConfigurationDigest(container Container) domain.Digest {

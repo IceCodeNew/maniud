@@ -12,6 +12,7 @@ import (
 const (
 	defaultSharedMemoryBytes = int64(65_536_000)
 	defaultStopTimeout       = int64(10)
+	defaultPidsLimit         = int64(2048)
 	containerIDBytes         = 64
 	containerNameBytes       = 63
 	serviceNameBytes         = 128
