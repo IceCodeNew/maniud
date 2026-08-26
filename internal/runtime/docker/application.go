@@ -64,7 +64,8 @@ func (client *Client) Inspect(ctx context.Context) (application.RuntimeEvidence,
 // CheckWorkload validates one projected workload against the negotiated
 // Docker daemon and the phase-one container contract.
 func (client *Client) CheckWorkload(workload domain.DesiredWorkload) error {
-	if client == nil || !validNegotiatedVersion(client.version) ||
+	if client == nil || client.version.Protocol != client.protocol.String() ||
+		!validNegotiatedVersion(client.version) ||
 		!validDockerWorkload(client.version, workload) {
 		return ErrUnsupportedWorkload
 	}
@@ -139,11 +140,17 @@ func validDockerWorkload(version Version, workload domain.DesiredWorkload) bool 
 	labels, labelsValid := dockerLabels(workload.Labels, nil)
 	_, _, configurationValid := dockerConfiguration(workload.WorkloadSpec, workload.Image.Reference, labels)
 
-	return labelsValid && configurationValid &&
+	return validDockerCapabilities(version.Protocol, workload.Cgroup) && labelsValid && configurationValid &&
 		validDockerImage(version, workload.Image) && validWorkloadDigests(workload) &&
 		workload.Platform == workload.Image.Platform &&
 		len(workload.Entrypoint)+len(workload.Command) > 0 &&
 		validProcessArguments(workload.Entrypoint) && validProcessArguments(workload.Command)
+}
+
+func validDockerCapabilities(protocolValue, cgroup string) bool {
+	protocol, valid := parseAPIVersion(protocolValue)
+
+	return valid && (supportsCgroupNamespace(protocol) || cgroup == "")
 }
 
 func validDockerImage(version Version, image domain.ImageIdentity) bool {
@@ -161,6 +168,7 @@ func validDockerImage(version Version, image domain.ImageIdentity) bool {
 
 func validRegistryImage(version Version, image domain.ImageIdentity) bool {
 	reference, err := imageref.Parse(image.Reference)
+	protocol, protocolValid := parseAPIVersion(version.Protocol)
 	if err != nil {
 		return false
 	}
@@ -168,7 +176,8 @@ func validRegistryImage(version Version, image domain.ImageIdentity) bool {
 	emptyDigest := domain.Digest{}
 	platform, valid := dockerPlatform(version.OS, version.Architecture)
 
-	return valid && reference.Digest() == image.ReferenceDigest && image.Platform == platform &&
+	return protocolValid && valid && reference.Digest() == image.ReferenceDigest && image.Platform == platform &&
+		(supportsImageInspectPlatform(protocol) || image.ReferenceDigest == image.PlatformManifest) &&
 		image.PlatformManifest != emptyDigest && image.ImageConfig != emptyDigest
 }
 

@@ -14,7 +14,14 @@ const (
 	testOS                      = "linux"
 	testProduct                 = "29.7.2"
 	testUnsupportedArchitecture = "s390x"
-	testUnsupportedAPIVersion   = "1.53"
+	testUnsupportedAPIVersion   = "1.39"
+	testDaemonID                = "engine-id"
+	testAPIVersion141           = "1.41"
+	testAPIVersion147           = "1.47"
+	testAPIVersion148           = "1.48"
+	testAPIVersion149           = "1.49"
+	testAPIVersion154           = "1.54"
+	testCgroupPrivate           = "private"
 )
 
 type nestedJSONValue struct {
@@ -51,8 +58,18 @@ func testClient(roundTripper http.RoundTripper) *Client {
 			Scheme: httpScheme,
 			Host:   dummyDockerHost,
 		},
-		version: emptyVersion,
+		version:  emptyVersion,
+		protocol: apiVersion{major: dockerAPIMajor, minor: 55},
 	}
+}
+
+func setTestClientVersion(t *testing.T, client *Client, protocol string) {
+	t.Helper()
+
+	client.protocol = testAPIVersion(t, protocol)
+	client.version = testVersion()
+	client.version.Protocol = protocol
+	client.version.Maximum = protocol
 }
 
 type engineFixture struct {

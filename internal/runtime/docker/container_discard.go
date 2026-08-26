@@ -28,7 +28,7 @@ func (client *Client) DiscardWorkload(
 	}
 
 	// The strict probe proved the immutable client version and full container ID.
-	path, _ := client.versionedPath("/containers/" + probe.Workload.ID)
+	path, _ := client.apiPath("/containers/" + probe.Workload.ID)
 
 	response, err := client.requestQuery(ctx, http.MethodDelete, path, url.Values{
 		"force": {dockerQueryTrue},

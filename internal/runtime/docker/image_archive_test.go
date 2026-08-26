@@ -109,7 +109,7 @@ func TestResolveImageUserReadsValidatedSavedFilesystem(t *testing.T) {
 			response.Header().Set(contentTypeHeader, jsonContentType)
 			_, _ = io.WriteString(response, imageInspectDocument(expected, true))
 		case 2:
-			assertArchiveRequest(t, request, expected, "/v1.54/images/"+expected.Reference+"/get")
+			assertArchiveRequest(t, request, expected, "/v1.55/images/"+expected.Reference+"/get")
 			if request.Header.Get("Accept") != dockerArchiveContentType {
 				t.Fatalf("archive save Accept = %q", request.Header.Get("Accept"))
 			}
@@ -629,14 +629,14 @@ func writeArchiveProbeMember(t *testing.T, writer *tar.Writer, name string, body
 func assertArchiveInspectRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) {
 	t.Helper()
 
-	wantPath := "/v1.54/images/" + testArchiveReference + "/json"
+	wantPath := "/v1.55/images/" + testArchiveReference + "/json"
 	assertArchiveRequest(t, request, expected, wantPath)
 }
 
 func assertArchiveSaveRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) {
 	t.Helper()
 
-	wantPath := "/v1.54/images/" + testArchiveReference + "/get"
+	wantPath := "/v1.55/images/" + testArchiveReference + "/get"
 	assertArchiveRequest(t, request, expected, wantPath)
 	if request.Header.Get("Accept") != dockerArchiveContentType {
 		t.Fatalf("archive save Accept = %q", request.Header.Get("Accept"))
@@ -717,6 +717,75 @@ func TestArchiveImageHelpersContainProtocolBoundaries(t *testing.T) {
 	fixture := newArchiveProbeFixture(t)
 	testArchiveRequestConstructionFailures(t, fixture)
 	testArchiveInspectValidationFailures(t, fixture)
+}
+
+func TestSaveArchiveImageUsesVersionedPlatformQuery(t *testing.T) {
+	t.Parallel()
+
+	platform := domain.Platform{OS: testOS, Architecture: testArchitecture, Variant: ""}
+	for _, test := range []struct {
+		protocol string
+		platform bool
+	}{
+		{protocol: minimumAPIVersion, platform: false},
+		{protocol: testAPIVersion148, platform: true},
+		{protocol: maximumAPIVersion, platform: true},
+	} {
+		t.Run(test.protocol, func(t *testing.T) {
+			t.Parallel()
+
+			client := connectedTestClient(t, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/v"+test.protocol+"/images/"+testArchiveReference+"/get" {
+					t.Errorf("save path = %s", request.URL.Path)
+				}
+				_, present := request.URL.Query()[imagePullPlatformQuery]
+				if present != test.platform {
+					t.Errorf("save platform query for API %s = %t", test.protocol, present)
+				}
+			}))
+			setTestClientVersion(t, client, test.protocol)
+			response, err := client.saveArchiveImage(context.Background(), testArchiveReference, platform)
+			if err != nil {
+				t.Fatalf("saveArchiveImage(API %s) error = %v", test.protocol, err)
+			}
+			closeResponse(response)
+		})
+	}
+}
+
+func TestInspectArchiveImageUsesVersionedPlatformQuery(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		protocol string
+		platform bool
+	}{
+		{protocol: testAPIVersion148, platform: false},
+		{protocol: testAPIVersion149, platform: true},
+	} {
+		t.Run(test.protocol, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := newArchiveProbeFixture(t)
+			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/v"+test.protocol+"/images/"+fixture.expected.Reference+"/json" {
+					t.Errorf("inspect path = %s", request.URL.Path)
+				}
+				_, present := request.URL.Query()[imagePullPlatformQuery]
+				if present != test.platform {
+					t.Errorf("inspect platform query for API %s = %t", test.protocol, present)
+				}
+				response.Header().Set(contentTypeHeader, jsonContentType)
+				_, _ = io.WriteString(response, archiveInspectDocument(fixture.expected, test.platform))
+			}))
+			setTestClientVersion(t, client, test.protocol)
+
+			_, state, err := client.inspectArchiveImage(context.Background(), fixture.expected)
+			if err != nil || state != application.ImageProbeObserved {
+				t.Fatalf("inspectArchiveImage(API %s) = %v, %v", test.protocol, state, err)
+			}
+		})
+	}
 }
 
 func testArchiveRequestConstructionFailures(t *testing.T, fixture archiveProbeFixture) {

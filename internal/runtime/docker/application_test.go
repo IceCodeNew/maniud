@@ -18,7 +18,7 @@ func TestInspectReturnsApplicationRuntimeEvidence(t *testing.T) {
 	t.Parallel()
 
 	daemon := Daemon{
-		ID:           "engine-id",
+		ID:           testDaemonID,
 		Driver:       "overlay2",
 		OS:           testOS,
 		Architecture: testArchitecture,
@@ -66,7 +66,7 @@ func TestInspectRejectsUnsupportedDaemonPlatform(t *testing.T) {
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, daemonDocument(
-			"engine-id",
+			testDaemonID,
 			"overlay2",
 			testOS,
 			testUnsupportedArchitecture,
@@ -111,6 +111,50 @@ func TestCheckWorkloadAcceptsSupportedDesiredState(t *testing.T) {
 	err := client.CheckWorkload(validApplicationWorkload(t))
 	if err != nil {
 		t.Fatalf("CheckWorkload() error = %v", err)
+	}
+}
+
+func TestCheckWorkloadEnforcesAPICapabilityThresholds(t *testing.T) {
+	t.Parallel()
+
+	registryIndex := validApplicationWorkload(t)
+	registrySingle := registryIndex
+	registrySingle.Image.PlatformManifest = registrySingle.Image.ReferenceDigest
+	registrySingle.EffectiveDigest = domain.ComputeEffectiveDigest(registrySingle)
+
+	cgroup := registrySingle
+	cgroup.Cgroup = testCgroupPrivate
+	cgroup.EffectiveDigest = domain.ComputeEffectiveDigest(cgroup)
+
+	archive := validApplicationWorkload(t)
+	archive.Image.Origin = domain.ImageOriginDockerArchive
+	archive.Image.Reference = "registry.example/api:1"
+	archive.EffectiveDigest = domain.ComputeEffectiveDigest(archive)
+
+	tests := []struct {
+		name     string
+		protocol string
+		workload domain.DesiredWorkload
+		valid    bool
+	}{
+		{name: "cgroup before 1.41", protocol: minimumAPIVersion, workload: cgroup, valid: false},
+		{name: "cgroup at 1.41", protocol: testAPIVersion141, workload: cgroup, valid: true},
+		{name: "archive before 1.48", protocol: testAPIVersion147, workload: archive, valid: false},
+		{name: "archive at 1.48", protocol: testAPIVersion148, workload: archive, valid: true},
+		{name: "index before 1.49", protocol: testAPIVersion148, workload: registryIndex, valid: false},
+		{name: "index at 1.49", protocol: testAPIVersion149, workload: registryIndex, valid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := testClient(http.DefaultTransport)
+			setTestClientVersion(t, client, test.protocol)
+			err := client.CheckWorkload(test.workload)
+			if (err == nil) != test.valid {
+				t.Fatalf("CheckWorkload(%s) error = %v, valid %t", test.protocol, err, test.valid)
+			}
+		})
 	}
 }
 
@@ -160,7 +204,7 @@ func TestObserveWorkloadMapsDockerProbe(t *testing.T) {
 			t.Parallel()
 
 			client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-				if request.URL.Path != "/v1.54/containers/example-api/json" {
+				if request.URL.Path != "/v1.55/containers/example-api/json" {
 					t.Errorf("request path = %q", request.URL.Path)
 				}
 

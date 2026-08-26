@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -55,6 +56,55 @@ func TestProbeImageAcceptsClassicImageStoreProof(t *testing.T) {
 	}
 }
 
+func TestProbeImageUsesLegacySingleManifestContract(t *testing.T) {
+	t.Parallel()
+
+	expected := testSingleManifestImageIdentity(t)
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		wantPath := "/v1.40/images/example.com/team/api@" + expected.ReferenceDigest.String() + "/json"
+		if request.Method != http.MethodGet || request.URL.Path != wantPath || request.URL.RawQuery != "" {
+			t.Fatalf("legacy image request = %s %s", request.Method, request.URL.String())
+		}
+		response.Header().Set(contentTypeHeader, jsonContentType)
+		_, _ = io.WriteString(response, imageInspectDocument(expected, false))
+	}))
+	setTestClientVersion(t, client, "1.40")
+
+	probe, err := client.ProbeImage(context.Background(), expected)
+	if err != nil || !probe.Matches(expected) {
+		t.Fatalf("ProbeImage(1.40 single manifest) = %#v, %v", probe, err)
+	}
+
+	var requests atomic.Int32
+	indexClient := connectedTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	setTestClientVersion(t, indexClient, "1.48")
+	probe, err = indexClient.ProbeImage(context.Background(), testImageIdentity(t))
+	if !errors.Is(err, ErrUnsupportedWorkload) || probe != emptyImageProbe() || requests.Load() != 0 {
+		t.Fatalf("ProbeImage(1.48 index) = %#v, %v, requests %d", probe, err, requests.Load())
+	}
+}
+
+func TestProbeImageAcceptsAPI140LegacyFields(t *testing.T) {
+	t.Parallel()
+
+	expected := testSingleManifestImageIdentity(t)
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		document := strings.TrimSuffix(imageInspectDocument(expected, false), "}") +
+			`,"Container":"","ContainerConfig":{},"DockerVersion":"",` +
+			`"Parent":"","VirtualSize":123}`
+		response.Header().Set(contentTypeHeader, jsonContentType)
+		_, _ = io.WriteString(response, document)
+	}))
+	setTestClientVersion(t, client, minimumAPIVersion)
+
+	probe, err := client.ProbeImage(context.Background(), expected)
+	if err != nil || !probe.Matches(expected) {
+		t.Fatalf("ProbeImage(API 1.40 legacy fields) = %#v, %v", probe, err)
+	}
+}
+
 func TestHasReferenceDigestAcceptsDockerFamiliarName(t *testing.T) {
 	t.Parallel()
 
@@ -65,6 +115,14 @@ func TestHasReferenceDigestAcceptsDockerFamiliarName(t *testing.T) {
 	}
 	if !hasReferenceDigest([]string{"api@" + expected.ReferenceDigest.String()}, reference) {
 		t.Fatal("hasReferenceDigest() rejected Docker's familiar repository name")
+	}
+	otherDigest := domain.Hash([]byte("other manifest"))
+	if !hasReferenceDigest([]string{
+		"api@" + otherDigest.String(),
+		"api@" + expected.ReferenceDigest.String(),
+		"mirror.example.com/team/api@" + otherDigest.String(),
+	}, reference) {
+		t.Fatal("hasReferenceDigest() rejected one exact reference among other valid local aliases")
 	}
 	if hasReferenceDigest([]string{"api:latest"}, reference) {
 		t.Fatal("hasReferenceDigest() accepted a mutable repository tag")
@@ -319,7 +377,7 @@ func emptyImageProbe() application.ImageProbe {
 func assertImageProbeRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) {
 	t.Helper()
 
-	wantPath := "/v1.54/images/example.com/team/api@" + expected.ReferenceDigest.String() + "/json"
+	wantPath := "/v1.55/images/example.com/team/api@" + expected.ReferenceDigest.String() + "/json"
 	if request.Method != http.MethodGet || request.URL.Path != wantPath ||
 		request.URL.Query().Get("platform") != `{"architecture":"amd64","os":"linux"}` {
 		t.Fatalf("image probe request = %s %s?%s", request.Method, request.URL.Path, request.URL.RawQuery)

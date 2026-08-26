@@ -451,7 +451,7 @@ func assertImagePullRequest(t *testing.T, request *http.Request, digest string) 
 
 func validImagePullRequestTarget(request *http.Request, digest string) bool {
 	query := request.URL.Query()
-	validTarget := request.Method == http.MethodPost && request.URL.Path == "/v1.54/images/create" &&
+	validTarget := request.Method == http.MethodPost && request.URL.Path == "/v1.55/images/create" &&
 		query.Get("fromImage") == "example.com/team/api" && query.Get("tag") == digest &&
 		query.Get(imagePullPlatformQuery) == "linux/amd64"
 

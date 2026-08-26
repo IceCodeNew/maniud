@@ -32,7 +32,11 @@ func (client *Client) ApplyWorkloadTransition(
 		return ErrProtocol
 	}
 
-	method, path, query := workloadTransitionRequest(transition)
+	method, endpoint, query := workloadTransitionRequest(transition)
+	path, valid := client.apiPath(endpoint)
+	if !valid {
+		return ErrProtocol
+	}
 	response, err := client.requestQuery(ctx, method, path, query)
 	if err != nil {
 		return err
@@ -159,7 +163,7 @@ func validDockerWorkloadTransition(transition application.WorkloadTransition) bo
 }
 
 func workloadTransitionRequest(transition application.WorkloadTransition) (string, string, url.Values) {
-	path := "/v1.54/containers/" + transition.Before.ID
+	path := "/containers/" + transition.Before.ID
 
 	switch transition.Kind {
 	case application.WorkloadTransitionStop:

@@ -2,8 +2,11 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode"
@@ -13,6 +16,8 @@ import (
 	containertypes "github.com/moby/moby/api/types/container"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/imageref"
+	"github.com/IceCodeNew/maniud/internal/jsonstrict"
 )
 
 const (
@@ -121,7 +126,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 		return unknown, ErrInvalidContainerReference
 	}
 
-	path, valid := client.versionedPath("/containers/" + reference + "/json")
+	path, valid := client.apiPath("/containers/" + reference + "/json")
 	if !valid {
 		return unknown, ErrProtocol
 	}
@@ -133,13 +138,7 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	defer closeResponse(response)
 
 	if response.StatusCode == http.StatusNotFound {
-		if !validErrorResponse(response) {
-			return unknown, ErrProtocol
-		}
-
-		var emptyContainer Container
-
-		return ContainerProbe{State: ContainerProbeMissing, Container: emptyContainer}, nil
+		return missingContainerProbe(response)
 	}
 
 	if response.StatusCode != http.StatusOK || !isJSON(response.Header.Get(contentTypeHeader)) {
@@ -147,16 +146,98 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	}
 
 	var payload containertypes.InspectResponse
-	if !decodeStrictJSON(response.Body, &payload) {
+	if !decodeContainerInspect(response.Body, &payload) {
 		return unknown, ErrProtocol
 	}
 
-	observed, valid := decodeContainer(reference, payload)
+	observed, valid := decodeContainer(client.protocol, reference, payload)
 	if !valid {
+		return unknown, ErrProtocol
+	}
+	if !client.provesContainerImageWithoutDescriptor(ctx, observed, payload.ImageManifestDescriptor != nil) {
 		return unknown, ErrProtocol
 	}
 
 	return ContainerProbe{State: ContainerProbeObserved, Container: observed}, nil
+}
+
+func decodeContainerInspect(reader io.Reader, target *containertypes.InspectResponse) bool {
+	encoded, valid := jsonstrict.Read(reader, maximumJSONBytes)
+	if !valid || target == nil {
+		return false
+	}
+
+	var document map[string]json.RawMessage
+	if json.Unmarshal(encoded, &document) != nil || document == nil {
+		return false
+	}
+	for name := range document {
+		if !supportedJSONField(reflect.TypeFor[containertypes.InspectResponse](), nil, name) {
+			return false
+		}
+	}
+
+	hostConfig, found := document["HostConfig"]
+	if found && !sanitizeContainerHostConfig(hostConfig, document) {
+		return false
+	}
+
+	encoded, err := json.Marshal(document)
+
+	return err == nil && json.Unmarshal(encoded, target) == nil
+}
+
+func sanitizeContainerHostConfig(encoded json.RawMessage, document map[string]json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(encoded, &fields) != nil || fields == nil {
+		return false
+	}
+
+	compatibilityFields := []string{"Capabilities", "KernelMemory", "KernelMemoryTCP"}
+	for name := range fields {
+		if !supportedJSONField(reflect.TypeFor[containertypes.HostConfig](), compatibilityFields, name) {
+			return false
+		}
+	}
+	for _, name := range compatibilityFields {
+		delete(fields, name)
+	}
+
+	var err error
+	document["HostConfig"], err = json.Marshal(fields)
+
+	return err == nil
+}
+
+func missingContainerProbe(response *http.Response) (ContainerProbe, error) {
+	var unknown ContainerProbe
+	if !validErrorResponse(response) {
+		return unknown, ErrProtocol
+	}
+
+	var emptyContainer Container
+
+	return ContainerProbe{State: ContainerProbeMissing, Container: emptyContainer}, nil
+}
+
+func (client *Client) provesContainerImageWithoutDescriptor(
+	ctx context.Context,
+	observed Container,
+	hasDescriptor bool,
+) bool {
+	if hasDescriptor || observed.Ownership.Status != domain.OwnershipManaged {
+		return true
+	}
+
+	platform, platformValid := dockerPlatform(client.version.OS, client.version.Architecture)
+	expected, valid := containerImageWithoutDescriptor(observed, platform)
+	if !platformValid || !valid {
+		return false
+	}
+
+	probe, err := client.ProbeImage(ctx, expected)
+
+	return observedImageMatches(probe, expected, err)
 }
 
 func validErrorResponse(response *http.Response) bool {
@@ -183,15 +264,19 @@ func validErrorMessage(message string) bool {
 	return true
 }
 
-func decodeContainer(reference string, payload containertypes.InspectResponse) (Container, bool) {
+func decodeContainer(
+	protocol apiVersion,
+	reference string,
+	payload containertypes.InspectResponse,
+) (Container, bool) {
 	var emptyContainer Container
 
-	if !validContainerPayload(reference, payload) {
+	if !validContainerPayload(protocol, reference, payload) {
 		return emptyContainer, false
 	}
 
 	imageTarget, imageErr := domain.ParseDigest(payload.Image)
-	platformManifest, manifestErr := domain.ParseDigest(payload.ImageManifestDescriptor.Digest.String())
+	platformManifest, manifestValid := containerPlatformManifest(protocol, payload)
 
 	state, stateValid := decodeContainerState(payload.State)
 	workloadSpec, workloadValid := dockerWorkloadFromInspect(
@@ -200,8 +285,7 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 		payload.HostConfig,
 	)
 	runtimeMounts, runtimeMountsValid := dockerRuntimeMounts(payload.Mounts, workloadSpec)
-	if imageErr != nil || manifestErr != nil ||
-		!validManifestDescriptor(payload.ImageManifestDescriptor.MediaType, payload.ImageManifestDescriptor.Size) ||
+	if imageErr != nil || !manifestValid ||
 		!stateValid || !workloadValid || !runtimeMountsValid {
 		return emptyContainer, false
 	}
@@ -227,13 +311,69 @@ func decodeContainer(reference string, payload containertypes.InspectResponse) (
 	}, true
 }
 
+func containerPlatformManifest(
+	protocol apiVersion,
+	payload containertypes.InspectResponse,
+) (domain.Digest, bool) {
+	if payload.ImageManifestDescriptor == nil {
+		manifest, err := domain.ParseDigest(payload.Config.Labels[domain.LabelPlatformManifestDigest])
+		if err != nil {
+			return domain.Digest{}, true
+		}
+
+		return manifest, true
+	}
+
+	if !supportsImageDescriptors(protocol) {
+		return domain.Digest{}, false
+	}
+
+	manifest, err := domain.ParseDigest(payload.ImageManifestDescriptor.Digest.String())
+
+	return manifest, err == nil &&
+		validManifestDescriptor(payload.ImageManifestDescriptor.MediaType, payload.ImageManifestDescriptor.Size)
+}
+
+func containerImageWithoutDescriptor(
+	container Container,
+	platform domain.Platform,
+) (domain.ImageIdentity, bool) {
+	var empty domain.ImageIdentity
+	origin := domain.ImageOriginDockerArchive
+	reference, err := imageref.Parse(container.ImageReference)
+	if err == nil {
+		if reference.Digest() != container.Ownership.Reference {
+			return empty, false
+		}
+		origin = domain.ImageOriginRegistry
+	} else {
+		source, sourceErr := imageref.Normalize(container.ImageReference)
+		if sourceErr != nil || source.String() != container.ImageReference || source.IsPinned() {
+			return empty, false
+		}
+	}
+
+	return domain.ImageIdentity{
+		Origin:           origin,
+		Reference:        container.ImageReference,
+		ReferenceDigest:  container.Ownership.Reference,
+		PlatformManifest: container.Ownership.PlatformManifest,
+		ImageConfig:      container.Ownership.ImageConfig,
+		Platform:         platform,
+	}, true
+}
+
 func validManifestDescriptor(mediaType string, size int64) bool {
 	return size > 0 && (mediaType == ociManifestMediaType || mediaType == dockerManifestMediaType)
 }
 
-func validContainerPayload(reference string, payload containertypes.InspectResponse) bool {
+func validContainerPayload(
+	protocol apiVersion,
+	reference string,
+	payload containertypes.InspectResponse,
+) bool {
 	if payload.State == nil || payload.Config == nil || payload.HostConfig == nil ||
-		payload.ImageManifestDescriptor == nil {
+		!validContainerDescriptor(protocol, payload.ImageManifestDescriptor != nil) {
 		return false
 	}
 
@@ -242,11 +382,17 @@ func validContainerPayload(reference string, payload containertypes.InspectRespo
 	return validContainerID(payload.ID) && validContainerName(name) && payload.Name == "/"+name &&
 		matchesContainerReference(reference, payload) &&
 		validOpaqueValue(payload.Config.Image, maximumImageReferenceBytes) &&
-		validContainerHostConfig(payload.HostConfig)
+		validContainerHostConfig(protocol, payload.HostConfig)
 }
 
-func validContainerHostConfig(config *containertypes.HostConfig) bool {
+func validContainerDescriptor(protocol apiVersion, present bool) bool {
+	return !present || supportsImageDescriptors(protocol)
+}
+
+func validContainerHostConfig(protocol apiVersion, config *containertypes.HostConfig) bool {
 	return validOpaqueValue(string(config.NetworkMode), maximumNetworkModeBytes) &&
+		(supportsCgroupNamespace(protocol) || config.CgroupnsMode == "" ||
+			config.CgroupnsMode == containertypes.CgroupnsModePrivate) &&
 		validRestartPolicy(config.RestartPolicy)
 }
 

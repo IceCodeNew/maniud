@@ -30,7 +30,7 @@ func (client *Client) ProbeWorkloadArchivePath(
 	if err != nil {
 		return empty, err
 	}
-	pathValue, _ := client.versionedPath("/containers/" + container.ID + "/archive")
+	pathValue, _ := client.apiPath("/containers/" + container.ID + "/archive")
 
 	response, err := client.archiveRequest(ctx, http.MethodHead, pathValue, url.Values{
 		archivePathQuery: {archivePath},
@@ -74,7 +74,7 @@ func (client *Client) GetWorkloadArchive(
 	if err != nil {
 		return empty, err
 	}
-	pathValue, _ := client.versionedPath("/containers/" + container.ID + "/archive")
+	pathValue, _ := client.apiPath("/containers/" + container.ID + "/archive")
 	response, err := client.archiveRequest(ctx, http.MethodGet, pathValue, url.Values{
 		archivePathQuery: {archivePath},
 	}, nil)
@@ -109,7 +109,7 @@ func (client *Client) PutWorkloadArchive(
 	if err != nil {
 		return err
 	}
-	pathValue, _ := client.versionedPath("/containers/" + container.ID + "/archive")
+	pathValue, _ := client.apiPath("/containers/" + container.ID + "/archive")
 	response, err := client.archiveRequest(ctx, http.MethodPut, pathValue, url.Values{
 		"path":                 {archivePath},
 		"noOverwriteDirNonDir": {dockerQueryTrue},

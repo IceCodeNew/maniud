@@ -25,6 +25,20 @@ type containerListFilters struct {
 	Labels []string `json:"label"`
 }
 
+//nolint:tagliatelle // Docker Engine wire fields use exported Go names.
+type createRequestWithoutCgroupNamespace struct {
+	containertypes.CreateRequest
+
+	HostConfig *hostConfigWithoutCgroupNamespace `json:"HostConfig,omitempty"`
+}
+
+//nolint:tagliatelle // Docker Engine wire fields use exported Go names.
+type hostConfigWithoutCgroupNamespace struct {
+	*containertypes.HostConfig
+
+	CgroupnsMode containertypes.CgroupnsMode `json:"CgroupnsMode,omitempty"`
+}
+
 // CreateWorkload creates one stopped transaction-owned container. The returned
 // ID remains response evidence until ProbeCreatedWorkload independently proves
 // the complete runtime postcondition.
@@ -40,9 +54,9 @@ func (client *Client) CreateWorkload(
 
 	// CheckWorkload and validTransaction prove the same pure mapping contract.
 	body, _ := dockerCreateConfiguration(workload, transaction, options)
-	encoded, _ := json.Marshal(body) //nolint:errchkjson // The wire type contains only JSON-supported values.
+	encoded, _ := encodeDockerCreateRequest(body, client.protocol)
 	// CheckWorkload proved the immutable client version above.
-	path, _ := client.versionedPath("/containers/create")
+	path, _ := client.apiPath("/containers/create")
 
 	response, err := client.containerCreateRequest(ctx, path, workload.ContainerName, encoded)
 	if err != nil {
@@ -50,6 +64,28 @@ func (client *Client) CreateWorkload(
 	}
 
 	return decodeContainerCreateResponse(response)
+}
+
+func encodeDockerCreateRequest(request containertypes.CreateRequest, protocol apiVersion) ([]byte, bool) {
+	if supportsCgroupNamespace(protocol) {
+		encoded, _ := json.Marshal(request) //nolint:errchkjson // The Docker wire type contains only JSON-supported values.
+
+		return encoded, true
+	}
+	if request.HostConfig == nil || request.HostConfig.CgroupnsMode != "" {
+		return nil, false
+	}
+
+	wireRequest := createRequestWithoutCgroupNamespace{
+		CreateRequest: request,
+		HostConfig: &hostConfigWithoutCgroupNamespace{
+			HostConfig:   request.HostConfig,
+			CgroupnsMode: "",
+		},
+	}
+	encoded, _ := json.Marshal(wireRequest) //nolint:errchkjson // The Docker wire type has only JSON-supported values.
+
+	return encoded, true
 }
 
 func (client *Client) containerCreateRequest(
@@ -146,7 +182,7 @@ func (client *Client) StartWorkload(
 	}
 
 	// ProbeCreatedWorkload proved the immutable client version above.
-	path, _ := client.versionedPath("/containers/" + probe.Workload.ID + "/start")
+	path, _ := client.apiPath("/containers/" + probe.Workload.ID + "/start")
 
 	response, err := client.request(ctx, http.MethodPost, path)
 	if err != nil {
@@ -337,7 +373,7 @@ func (client *Client) ownedContainerID(
 		},
 	})
 
-	path, valid := client.versionedPath("/containers/json")
+	path, valid := client.apiPath("/containers/json")
 	if !valid {
 		return "", false, ErrProtocol
 	}

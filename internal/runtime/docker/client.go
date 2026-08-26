@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	minimumAPIVersion = "1.54"
-	maximumAPIVersion = "1.54"
+	minimumAPIVersion = "1.40"
+	maximumAPIVersion = "1.55"
 	maximumPingBytes  = 1024
 	maximumJSONBytes  = 1 << 20
 	jsonContentType   = "application/json"
@@ -42,6 +42,7 @@ type Client struct {
 	httpClient *http.Client
 	baseURL    url.URL
 	version    Version
+	protocol   apiVersion
 }
 
 // Connect negotiates the supported Docker API range and returns an immutable client.
@@ -60,7 +61,12 @@ func Connect(ctx context.Context, endpoint Endpoint) (*Client, Version, error) {
 		Jar:     nil,
 		Timeout: requestTimeout,
 	}
-	client := &Client{httpClient: httpClient, baseURL: endpoint.baseURL, version: emptyVersion}
+	client := &Client{
+		httpClient: httpClient,
+		baseURL:    endpoint.baseURL,
+		version:    emptyVersion,
+		protocol:   apiVersion{},
+	}
 
 	version, err := client.negotiate(ctx)
 	if err != nil {

@@ -179,13 +179,15 @@ func (client *Client) inspectArchiveImage(
 	expected domain.ImageIdentity,
 ) (archiveImageSnapshot, application.ImageProbeState, error) {
 	var empty archiveImageSnapshot
-	path, valid := client.versionedPath("/images/" + expected.Reference + "/json")
+	path, valid := client.apiPath("/images/" + expected.Reference + "/json")
 	if !valid {
 		return empty, application.ImageProbeUnknown, ErrProtocol
 	}
-	response, err := client.requestQuery(ctx, http.MethodGet, path, url.Values{
-		imagePullPlatformQuery: []string{imagePlatform(expected.Platform)},
-	})
+	query := url.Values(nil)
+	if supportsImageInspectPlatform(client.protocol) {
+		query = url.Values{imagePullPlatformQuery: {imagePlatform(expected.Platform)}}
+	}
+	response, err := client.requestQuery(ctx, http.MethodGet, path, query)
 	if err != nil {
 		return empty, application.ImageProbeUnknown, err
 	}
@@ -269,15 +271,17 @@ func (client *Client) saveArchiveImage(
 	reference string,
 	platform domain.Platform,
 ) (*http.Response, error) {
-	path, valid := client.versionedPath("/images/" + reference + "/get")
+	path, valid := client.apiPath("/images/" + reference + "/get")
 	if !valid {
 		return nil, ErrProtocol
 	}
 	endpoint := client.baseURL
 	endpoint.Path = path
-	endpoint.RawQuery = url.Values{
-		imagePullPlatformQuery: []string{imagePlatform(platform)},
-	}.Encode()
+	if supportsImageDescriptors(client.protocol) {
+		endpoint.RawQuery = url.Values{
+			imagePullPlatformQuery: {imagePlatform(platform)},
+		}.Encode()
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, ErrProtocol
@@ -316,8 +320,15 @@ func validArchiveImage(version Version, image domain.ImageIdentity) bool {
 	platform, platformValid := dockerPlatform(version.OS, version.Architecture)
 	empty := domain.Digest{}
 
-	return image.Origin == domain.ImageOriginDockerArchive && err == nil &&
+	return supportsDockerArchive(version.Protocol) &&
+		image.Origin == domain.ImageOriginDockerArchive && err == nil &&
 		source.String() == image.Reference && !source.IsPinned() &&
 		platformValid && image.Platform == platform && image.ReferenceDigest != empty &&
 		image.PlatformManifest != empty && image.ImageConfig != empty
+}
+
+func supportsDockerArchive(protocolValue string) bool {
+	protocol, valid := parseAPIVersion(protocolValue)
+
+	return valid && supportsImageDescriptors(protocol)
 }

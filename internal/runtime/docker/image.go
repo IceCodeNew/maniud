@@ -2,8 +2,10 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 
 	imagetypes "github.com/moby/moby/api/types/image"
@@ -12,6 +14,23 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 )
+
+type imageInspectResponse struct {
+	ID           string `json:"Id"` //nolint:tagliatelle // Docker Engine wire field.
+	RepoDigests  []string
+	Config       json.RawMessage
+	Architecture string
+	Variant      string
+	Os           string
+	Size         int64
+	Descriptor   *imageInspectDescriptor
+}
+
+type imageInspectDescriptor struct {
+	MediaType string `json:"mediaType"` //nolint:tagliatelle // OCI descriptor wire field.
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+}
 
 // ProbeImage inspects one exact digest-pinned platform. Only a valid 404 proves
 // absence; all transport, protocol, and identity conflicts remain unknown.
@@ -23,6 +42,9 @@ func (client *Client) ProbeImage(
 
 	if client == nil {
 		return unknown, ErrUnsupportedWorkload
+	}
+	if client.version.Protocol != client.protocol.String() || !validNegotiatedVersion(client.version) {
+		return unknown, ErrProtocol
 	}
 	switch expected.Origin {
 	case domain.ImageOriginRegistry:
@@ -51,14 +73,13 @@ func (client *Client) probeRegistryImage(
 		return unknown, ErrUnsupportedWorkload
 	}
 
-	path, valid := client.versionedPath("/images/" + reference.DigestReference() + "/json")
-	if !valid {
-		return unknown, ErrProtocol
-	}
+	path, _ := client.apiPath("/images/" + reference.DigestReference() + "/json")
 
-	response, err := client.requestQuery(ctx, http.MethodGet, path, url.Values{
-		imagePullPlatformQuery: []string{imagePlatform(expected.Platform)},
-	})
+	query := url.Values(nil)
+	if supportsImageInspectPlatform(client.protocol) {
+		query = url.Values{imagePullPlatformQuery: {imagePlatform(expected.Platform)}}
+	}
+	response, err := client.requestQuery(ctx, http.MethodGet, path, query)
 	if err != nil {
 		return unknown, err
 	}
@@ -86,8 +107,17 @@ func decodeImageResponse(
 		return unknown, ErrProtocol
 	}
 
-	var payload imagetypes.InspectResponse
-	if !decodeStrictJSON(response.Body, &payload) {
+	var payload imageInspectResponse
+	if !decodeCompatibleJSON(
+		response.Body,
+		&payload,
+		reflect.TypeFor[imagetypes.InspectResponse](),
+		"Container",
+		"ContainerConfig",
+		"DockerVersion",
+		"Parent",
+		"VirtualSize",
+	) {
 		return unknown, ErrProtocol
 	}
 
@@ -119,13 +149,13 @@ func imagePlatform(platform domain.Platform) string {
 }
 
 func decodeImage(
-	payload imagetypes.InspectResponse,
+	payload imageInspectResponse,
 	reference imageref.Reference,
 	expected domain.ImageIdentity,
 ) (application.ImageEvidence, bool) {
 	var empty application.ImageEvidence
 
-	if !validImageID(payload.ID, expected, payload.Descriptor != nil) || payload.Config == nil ||
+	if !validImageID(payload.ID, expected, payload.Descriptor != nil) || !validImageConfig(payload.Config) ||
 		payload.Os != expected.Platform.OS || payload.Architecture != expected.Platform.Architecture ||
 		payload.Variant != expected.Platform.Variant || payload.Size < 0 ||
 		!hasReferenceDigest(payload.RepoDigests, reference) ||
@@ -139,6 +169,12 @@ func decodeImage(
 		ImageConfig:      expected.ImageConfig,
 		Platform:         expected.Platform,
 	}, true
+}
+
+func validImageConfig(encoded json.RawMessage) bool {
+	var config map[string]json.RawMessage
+
+	return json.Unmarshal(encoded, &config) == nil && config != nil
 }
 
 func validImageID(value string, expected domain.ImageIdentity, hasDescriptor bool) bool {
@@ -159,7 +195,7 @@ func hasReferenceDigest(values []string, expected imageref.Reference) bool {
 		if err != nil || !source.IsPinned() {
 			return false
 		}
-		reference, err := source.Pin(expected.Digest())
+		reference, err := imageref.Parse(source.String())
 		if err != nil {
 			return false
 		}
@@ -173,7 +209,7 @@ func hasReferenceDigest(values []string, expected imageref.Reference) bool {
 }
 
 func validImageTarget(
-	payload imagetypes.InspectResponse,
+	payload imageInspectResponse,
 	referenceDigest domain.Digest,
 	platformManifest domain.Digest,
 ) bool {
@@ -181,7 +217,7 @@ func validImageTarget(
 		return referenceDigest == platformManifest
 	}
 
-	digest, err := domain.ParseDigest(payload.Descriptor.Digest.String())
+	digest, err := domain.ParseDigest(payload.Descriptor.Digest)
 
 	return err == nil && digest == platformManifest &&
 		validManifestDescriptor(payload.Descriptor.MediaType, payload.Descriptor.Size)
