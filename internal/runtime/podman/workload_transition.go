@@ -31,7 +31,7 @@ func (client *Client) ApplyWorkloadTransition(
 	if probe.State != application.WorkloadEffectProbeObserved || probe.Workload != transition.Before {
 		return ErrProtocol
 	}
-	method, path, query := podmanWorkloadTransitionRequest(transition)
+	method, path, query := client.podmanWorkloadTransitionRequest(transition)
 	response, err := client.request(ctx, method, path, query, nil, false)
 	if err != nil {
 		return err
@@ -133,7 +133,7 @@ func existingPodmanWorkloadProbe(probe ContainerProbe) application.WorkloadTrans
 }
 
 func validPodmanWorkloadTransition(client *Client, transition application.WorkloadTransition) bool {
-	if client == nil || client.version.Protocol != libpodAPIVersion || !transition.Valid() ||
+	if !client.negotiated() || !transition.Valid() ||
 		!validContainerID(transition.Before.ID) || !validContainerName(transition.Before.Name) {
 		return false
 	}
@@ -144,18 +144,20 @@ func validPodmanWorkloadTransition(client *Client, transition application.Worklo
 	return validContainerID(transition.After.ID) && validContainerName(transition.After.Name)
 }
 
-func podmanWorkloadTransitionRequest(
+func (client *Client) podmanWorkloadTransitionRequest(
 	transition application.WorkloadTransition,
 ) (string, string, url.Values) {
-	path := libpodPrefix + "/containers/" + transition.Before.ID
+	path := client.apiPath("/containers/" + transition.Before.ID)
+	if path == "" {
+		return "", "", nil
+	}
 	switch transition.Kind {
 	case application.WorkloadTransitionStop:
 		return http.MethodPost, path + "/stop", url.Values{
 			"timeout": {strconv.Itoa(podmanStopTimeoutSeconds)},
 		}
 	case application.WorkloadTransitionRename:
-		return http.MethodPost, "/v" + libpodAPIVersion + "/containers/" + transition.Before.ID + "/rename",
-			url.Values{"name": {transition.After.Name}}
+		return http.MethodPost, path + "/rename", url.Values{"name": {transition.After.Name}}
 	case application.WorkloadTransitionRemove:
 		return http.MethodDelete, path, url.Values{
 			"force": {podmanQueryFalse}, "volumes": {podmanQueryFalse},

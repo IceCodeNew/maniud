@@ -92,7 +92,7 @@ type ContainerProbe struct {
 func (client *Client) Inspect(context.Context) (application.RuntimeEvidence, error) {
 	var empty application.RuntimeEvidence
 
-	if client == nil || client.version.Protocol != libpodAPIVersion || client.scope == (domain.Digest{}) {
+	if !client.negotiated() || client.scope == (domain.Digest{}) {
 		return empty, ErrProtocol
 	}
 	platform, valid := podmanPlatform(client.version.OS, client.version.Architecture)
@@ -126,8 +126,11 @@ func (client *Client) CheckWorkload(workload domain.DesiredWorkload) error {
 }
 
 func validPodmanWorkload(client *Client, workload domain.DesiredWorkload) bool {
-	if client == nil || client.version.Protocol != libpodAPIVersion ||
-		!validPodmanImage(client, workload.Image) || !validDesiredWorkload(workload) {
+	if !client.negotiated() || !validPodmanImage(client, workload.Image) || !validDesiredWorkload(workload) {
+		return false
+	}
+	if client.protocol.major == 4 &&
+		(len(workload.Entrypoint) > 1 || len(workload.Entrypoint) == 1 && strings.Contains(workload.Entrypoint[0], " ")) {
 		return false
 	}
 
@@ -212,10 +215,11 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	if !validContainerReference(reference) {
 		return unknown, ErrInvalidContainerReference
 	}
+	path := client.apiPath("/containers/" + reference + "/json")
 	response, err := client.request(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/containers/"+reference+"/json",
+		path,
 		url.Values{"size": {podmanQueryFalse}},
 		nil,
 		false,

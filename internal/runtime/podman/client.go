@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	libpodAPIVersion     = "6.1.0"
-	libpodPrefix         = "/v" + libpodAPIVersion + "/libpod"
-	podmanJSONType       = "application/json"
-	podmanDummyHost      = "podman.invalid"
-	maximumControlBytes  = int64(16 << 20)
-	podmanRequestTimeout = 30 * time.Second
-	podmanContentType    = "Content-Type"
+	minimumLibpodAPIVersion = "4.3.1"
+	maximumLibpodAPIVersion = "6.1.0"
+	podmanJSONType          = "application/json"
+	podmanDummyHost         = "podman.invalid"
+	maximumControlBytes     = int64(16 << 20)
+	podmanRequestTimeout    = 30 * time.Second
+	podmanContentType       = "Content-Type"
 )
 
 var (
@@ -69,13 +69,14 @@ type Client struct {
 	socket     socketIdentity
 	peer       peerIdentity
 	version    Version
+	protocol   semanticVersion
 	scope      domain.Digest
 
 	peerLock sync.Mutex
 }
 
-// Connect authenticates a local Unix socket, negotiates Libpod 6.1.0, and pins
-// the daemon storage scope used by every later request.
+// Connect authenticates a local Unix socket, negotiates Libpod 4.3.1 through
+// 6.1.0, and pins the daemon storage scope used by every later request.
 func Connect(ctx context.Context, socketPath string) (*Client, Version, error) {
 	var empty Version
 
@@ -94,6 +95,7 @@ func Connect(ctx context.Context, socketPath string) (*Client, Version, error) {
 		socket:     identity,
 		peer:       peerIdentity{},
 		version:    empty,
+		protocol:   semanticVersion{},
 		scope:      domain.Digest{},
 		peerLock:   sync.Mutex{},
 	}
@@ -193,6 +195,19 @@ func (client *Client) requestWithReader(
 func (client *Client) ready(path string) bool {
 	return client != nil && client.httpClient != nil && strings.HasPrefix(path, "/") &&
 		client.socketPath != "" && client.socket != (socketIdentity{})
+}
+
+func (client *Client) apiPath(path string) string {
+	if !client.negotiated() {
+		return ""
+	}
+
+	return "/v" + client.protocol.String() + "/libpod" + path
+}
+
+func (client *Client) negotiated() bool {
+	return client != nil && client.version.Protocol == client.protocol.String() &&
+		validNegotiatedLibpodVersion(client.version)
 }
 
 func (client *Client) newRequest(

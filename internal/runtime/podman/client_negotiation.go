@@ -32,14 +32,20 @@ func (client *Client) negotiate(ctx context.Context) (Version, domain.Digest, er
 	var empty Version
 	var emptyDigest domain.Digest
 
-	maximum, err := client.ping(ctx)
+	serverMaximum, err := client.ping(ctx)
 	if err != nil {
 		return empty, emptyDigest, err
 	}
-	version, err := client.serverVersion(ctx, maximum)
+	selected, compatible := compatibleLibpodVersion(serverMaximum)
+	if !compatible {
+		return empty, emptyDigest, ErrProtocol
+	}
+	version, err := client.serverVersion(ctx, selected, serverMaximum)
 	if err != nil {
 		return empty, emptyDigest, err
 	}
+	client.protocol = selected
+	client.version = version
 	scope, err := client.inspectScope(ctx, version)
 	if err != nil {
 		return empty, emptyDigest, err
@@ -49,18 +55,33 @@ func (client *Client) negotiate(ctx context.Context) (Version, domain.Digest, er
 	return version, scope, nil
 }
 
-func (client *Client) ping(ctx context.Context) (string, error) {
+func (client *Client) ping(ctx context.Context) (semanticVersion, error) {
+	var empty semanticVersion
+
 	response, err := client.request(ctx, http.MethodGet, "/_ping", nil, nil, false)
 	if err != nil {
-		return "", err
+		return empty, err
+	}
+	if response.StatusCode == http.StatusNotFound {
+		closePodmanResponse(response)
+		fallback, fallbackErr := client.request( //nolint:bodyclose // The defer below closes the selected response.
+			ctx, http.MethodGet, "/libpod/_ping", nil, nil, false,
+		)
+		if fallbackErr != nil {
+			return empty, fallbackErr
+		}
+		response = fallback
 	}
 	defer closePodmanResponse(response)
 
 	value, readErr := io.ReadAll(io.LimitReader(response.Body, maximumPingBytes+1))
-	maximum := response.Header.Get(podmanAPIHeader)
 	if readErr != nil || response.StatusCode != http.StatusOK || len(value) > int(maximumPingBytes) ||
-		string(bytes.TrimSpace(value)) != "OK" || !validSemanticVersion(maximum) {
-		return "", ErrProtocol
+		string(bytes.TrimSpace(value)) != "OK" {
+		return empty, ErrProtocol
+	}
+	maximum, valid := parseSemanticVersion(response.Header.Get(podmanAPIHeader))
+	if !valid {
+		return empty, ErrProtocol
 	}
 
 	return maximum, nil
@@ -77,7 +98,11 @@ type versionComponent struct {
 	Details map[string]string `json:"Details"` //nolint:tagliatelle // Libpod wire field.
 }
 
-func (client *Client) serverVersion(ctx context.Context, pingMaximum string) (Version, error) {
+func (client *Client) serverVersion(
+	ctx context.Context,
+	selected semanticVersion,
+	pingMaximum semanticVersion,
+) (Version, error) {
 	var empty Version
 
 	response, err := client.request(ctx, http.MethodGet, "/version", nil, nil, false)
@@ -96,14 +121,21 @@ func (client *Client) serverVersion(ctx context.Context, pingMaximum string) (Ve
 	if !valid || engine.Version != payload.Version {
 		return empty, ErrProtocol
 	}
-	serverMaximum := engine.Details["APIVersion"]
-	serverMinimum := engine.Details["MinAPIVersion"]
-	if serverMaximum != pingMaximum || !compatibleLibpodRange(serverMinimum, serverMaximum) {
+	serverMaximum, validMaximum := parseSemanticVersion(engine.Details["APIVersion"])
+	serverMinimum, validMinimum := parseSemanticVersion(engine.Details["MinAPIVersion"])
+	if !validLibpodServerRange(
+		selected,
+		serverMinimum,
+		validMinimum,
+		serverMaximum,
+		validMaximum,
+		pingMaximum,
+	) {
 		return empty, ErrProtocol
 	}
 
 	return Version{
-		Protocol: libpodAPIVersion, Minimum: serverMinimum, Maximum: serverMaximum,
+		Protocol: selected.String(), Minimum: serverMinimum.String(), Maximum: serverMaximum.String(),
 		Product: payload.Version, OS: "", Architecture: "",
 	}, nil
 }
@@ -136,7 +168,8 @@ type infoResponse struct {
 }
 
 func (client *Client) inspectScope(ctx context.Context, version Version) (domain.Digest, error) {
-	response, err := client.request(ctx, http.MethodGet, libpodPrefix+"/info", nil, nil, false)
+	path := client.apiPath("/info")
+	response, err := client.request(ctx, http.MethodGet, path, nil, nil, false)
 	if err != nil {
 		return domain.Digest{}, err
 	}
@@ -224,13 +257,41 @@ func isPodmanJSON(value string) bool {
 	return err == nil && mediaType == podmanJSONType
 }
 
-func compatibleLibpodRange(minimum, maximum string) bool {
-	want, validWant := parseSemanticVersion(libpodAPIVersion)
-	minimumVersion, validMinimum := parseSemanticVersion(minimum)
-	maximumVersion, validMaximum := parseSemanticVersion(maximum)
+func compatibleLibpodVersion(serverMaximum semanticVersion) (semanticVersion, bool) {
+	minimum, _ := parseSemanticVersion(minimumLibpodAPIVersion)
+	maximum, _ := parseSemanticVersion(maximumLibpodAPIVersion)
+	if serverMaximum.less(minimum) {
+		return semanticVersion{}, false
+	}
+	if maximum.less(serverMaximum) {
+		return maximum, true
+	}
 
-	return validWant && validMinimum && validMaximum &&
-		!want.less(minimumVersion) && !maximumVersion.less(want)
+	return serverMaximum, true
+}
+
+func validLibpodServerRange(
+	selected semanticVersion,
+	serverMinimum semanticVersion,
+	validMinimum bool,
+	serverMaximum semanticVersion,
+	validMaximum bool,
+	pingMaximum semanticVersion,
+) bool {
+	return validMinimum && validMaximum && serverMaximum == pingMaximum &&
+		!serverMaximum.less(serverMinimum) && !selected.less(serverMinimum) && !serverMaximum.less(selected)
+}
+
+func validNegotiatedLibpodVersion(version Version) bool {
+	protocol, validProtocol := parseSemanticVersion(version.Protocol)
+	minimum, validMinimum := parseSemanticVersion(version.Minimum)
+	maximum, validMaximum := parseSemanticVersion(version.Maximum)
+	supportedMinimum, _ := parseSemanticVersion(minimumLibpodAPIVersion)
+	supportedMaximum, _ := parseSemanticVersion(maximumLibpodAPIVersion)
+
+	return validProtocol && validMinimum && validMaximum &&
+		!protocol.less(supportedMinimum) && !supportedMaximum.less(protocol) &&
+		!maximum.less(minimum) && !protocol.less(minimum) && !maximum.less(protocol)
 }
 
 type semanticVersion struct {
@@ -264,6 +325,11 @@ func parseSemanticVersion(value string) (semanticVersion, bool) {
 	}
 
 	return semanticVersion{major: values[0], minor: values[1], patch: values[2]}, true
+}
+
+func (version semanticVersion) String() string {
+	return strconv.FormatUint(version.major, 10) + "." + strconv.FormatUint(version.minor, 10) + "." +
+		strconv.FormatUint(version.patch, 10)
 }
 
 func (version semanticVersion) less(other semanticVersion) bool {
