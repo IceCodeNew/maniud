@@ -148,7 +148,7 @@ func (client *Client) probeWorkloadEffect(
 
 	return application.WorkloadEffectProbe{
 		State:    application.WorkloadEffectProbeObserved,
-		Workload: podmanWorkloadEffectEvidence(selected, workload),
+		Workload: podmanWorkloadEffectEvidence(selected, workload, client.version.Protocol),
 	}, nil
 }
 
@@ -283,6 +283,7 @@ func selectPodmanContainer(named, owned ContainerProbe) (Container, bool, bool) 
 func podmanWorkloadEffectEvidence(
 	container Container,
 	workload domain.DesiredWorkload,
+	apiVersion string,
 ) application.WorkloadEffectEvidence {
 	storageDigest, _ := domain.ComputeStorageDigest(workload, container.RuntimeMounts)
 
@@ -292,7 +293,7 @@ func podmanWorkloadEffectEvidence(
 		ConfigurationDigest:  containerConfigurationDigest(container),
 		StorageDigest:        storageDigest,
 		RuntimeMounts:        slices.Clone(container.RuntimeMounts),
-		ConfigurationMatches: containerConfigurationMatches(container, workload),
+		ConfigurationMatches: containerConfigurationMatches(container, workload, apiVersion),
 		Lifecycle:            podmanWorkloadLifecycle(container.State),
 		Ownership:            container.Ownership,
 	}

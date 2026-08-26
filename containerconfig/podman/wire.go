@@ -1,6 +1,9 @@
 package podman
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 //nolint:tagliatelle // Native Libpod inspect owns these established wire names.
 type inspectDocument struct {
@@ -38,7 +41,7 @@ type healthConfig struct {
 type inspectConfig struct {
 	Image        string            `json:"Image"`
 	Command      []string          `json:"Cmd"`
-	Entrypoint   []string          `json:"Entrypoint"`
+	Entrypoint   json.RawMessage   `json:"Entrypoint"`
 	Labels       map[string]string `json:"Labels"`
 	Environment  []string          `json:"Env"`
 	Hostname     string            `json:"Hostname"`
@@ -46,7 +49,7 @@ type inspectConfig struct {
 	WorkingDir   string            `json:"WorkingDir"`
 	OpenStdin    bool              `json:"OpenStdin"`
 	TTY          bool              `json:"Tty"`
-	StopSignal   string            `json:"StopSignal"`
+	StopSignal   json.RawMessage   `json:"StopSignal"`
 	StopTimeout  uint              `json:"StopTimeout"`
 	Healthcheck  *healthConfig     `json:"Healthcheck"`
 	ExposedPorts map[string]any    `json:"ExposedPorts"`

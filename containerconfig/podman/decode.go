@@ -13,20 +13,27 @@ import (
 )
 
 const (
-	cgroupsDefault     = "default"
-	cgroupsDisabled    = "disabled"
-	propagationPrivate = "rprivate"
-	tmpfsNoSUID        = "nosuid"
-	tmpfsNoDevice      = "nodev"
-	tmpfsCopyUp        = "tmpcopyup"
-	volumeDriverLocal  = "local"
+	cgroupsDefault         = "default"
+	cgroupsDisabled        = "disabled"
+	podmanAPI431           = "4.3.1"
+	legacyPodmanAPIMajor   = uint64(4)
+	inspectAPIVersionParts = 3
+	propagationPrivate     = "rprivate"
+	tmpfsNoSUID            = "nosuid"
+	tmpfsNoDevice          = "nodev"
+	tmpfsCopyUp            = "tmpcopyup"
+	volumeDriverLocal      = "local"
 )
 
 // DecodeInspect validates and decodes one bounded native Libpod inspect JSON
-// document. Unknown fields are allowed because Libpod adds observational
-// fields independently of this configuration contract; duplicate keys and
-// malformed required fields fail closed.
-func DecodeInspect(reader io.Reader, maximumBytes int64) (Inspection, error) {
+// document for the negotiated API version. Unknown fields are allowed because
+// Libpod adds observational fields independently of this configuration
+// contract; duplicate keys and malformed required fields fail closed.
+func DecodeInspect(reader io.Reader, maximumBytes int64, apiVersion string) (Inspection, error) {
+	legacy, acceptPodman431PrivateIPC, validVersion := inspectAPIMode(apiVersion)
+	if !validVersion {
+		return Inspection{}, validationError(containerconfig.ValidationInvalidDocument, "")
+	}
 	document, valid := readJSON(reader, maximumBytes)
 	if !valid {
 		return Inspection{}, validationError(containerconfig.ValidationInvalidDocument, "")
@@ -44,11 +51,15 @@ func DecodeInspect(reader io.Reader, maximumBytes int64) (Inspection, error) {
 		}
 	}
 
-	return inspectionFromDocument(payload)
+	return inspectionFromDocument(payload, legacy, acceptPodman431PrivateIPC)
 }
 
 //nolint:cyclop // Native inspect core fields form one fail-closed document boundary.
-func inspectionFromDocument(payload inspectDocument) (Inspection, error) {
+func inspectionFromDocument(
+	payload inspectDocument,
+	legacy bool,
+	acceptPodman431PrivateIPC bool,
+) (Inspection, error) {
 	if !validID(payload.ID) || !validName(payload.Name, containerNameBytes) ||
 		payload.Config == nil || payload.HostConfig == nil ||
 		payload.State == nil || payload.Image == "" || !validText(payload.Image) ||
@@ -60,7 +71,13 @@ func inspectionFromDocument(payload inspectDocument) (Inspection, error) {
 	if !valid {
 		return Inspection{}, validationError(containerconfig.ValidationInvalidValue, "/State")
 	}
-	spec, runtimeMounts, err := observedSpec(payload.ID, payload.Name, payload)
+	spec, runtimeMounts, err := observedSpec(
+		payload.ID,
+		payload.Name,
+		payload,
+		legacy,
+		acceptPodman431PrivateIPC,
+	)
 	if err != nil {
 		return Inspection{}, err
 	}
@@ -112,14 +129,27 @@ func observedState(state *inspectState) (State, bool) {
 }
 
 //nolint:cyclop,funlen // This function is the native inspect-to-Spec mapping table.
-func observedSpec(identifier, name string, payload inspectDocument) (
+func observedSpec(
+	identifier string,
+	name string,
+	payload inspectDocument,
+	legacy bool,
+	acceptPodman431PrivateIPC bool,
+) (
 	containerconfig.Spec,
 	[]RuntimeMount,
 	error,
 ) {
 	config := payload.Config
 	host := payload.HostConfig
-	if config == nil || host == nil || host.RestartPolicy == nil || !validInspectScalars(identifier, config, host) {
+	if config == nil || host == nil || host.RestartPolicy == nil {
+		return containerconfig.Spec{}, nil, validationError(containerconfig.ValidationInvalidDocument, "")
+	}
+	entrypoint, valid := observedEntrypoint(config.Entrypoint, legacy)
+	if !valid {
+		return containerconfig.Spec{}, nil, validationError(containerconfig.ValidationInvalidValue, "/Config/Entrypoint")
+	}
+	if !validInspectScalars(identifier, config, host, entrypoint, acceptPodman431PrivateIPC) {
 		return containerconfig.Spec{}, nil, validationError(containerconfig.ValidationInvalidDocument, "")
 	}
 	labels, valid := observedLabels(config.Labels)
@@ -133,7 +163,7 @@ func observedSpec(identifier, name string, payload inspectDocument) (
 			containerconfig.ValidationInvalidValue, "/HostConfig/RestartPolicy",
 		)
 	}
-	stopSignal, valid := observedStopSignal(config.StopSignal)
+	stopSignal, valid := observedInspectStopSignal(config.StopSignal, legacy)
 	if !valid {
 		return containerconfig.Spec{}, nil, validationError(containerconfig.ValidationInvalidValue, "/Config/StopSignal")
 	}
@@ -186,7 +216,7 @@ func observedSpec(identifier, name string, payload inspectDocument) (
 		return containerconfig.Spec{}, nil, validationError(containerconfig.ValidationInvalidValue, "/Config/StopTimeout")
 	}
 	spec := containerconfig.Spec{
-		ContainerName: name, Entrypoint: slices.Clone(config.Entrypoint), Command: slices.Clone(config.Command),
+		ContainerName: name, Entrypoint: entrypoint, Command: slices.Clone(config.Command),
 		NetworkMode: host.NetworkMode, BlkioWeight: blkio, CgroupParent: host.CgroupParent,
 		Cgroup: host.CgroupMode, CPUs: cpus, Hostname: normalizedHostname(identifier, config.Hostname),
 		MemoryBytes: host.Memory, OOMScoreAdj: optionalInt(host.OOMScoreAdj), PidsLimit: pids,
@@ -209,17 +239,69 @@ func observedSpec(identifier, name string, payload inspectDocument) (
 }
 
 //nolint:cyclop // Every accepted native scalar and collection is checked independently.
-func validInspectScalars(identifier string, config *inspectConfig, host *inspectHost) bool {
-	return host.NetworkMode == networkBridge && host.IPCMode == namespacePrivate &&
+func validInspectScalars(
+	identifier string,
+	config *inspectConfig,
+	host *inspectHost,
+	entrypoint []string,
+	acceptPodman431PrivateIPC bool,
+) bool {
+	return host.NetworkMode == networkBridge && validInspectIPCMode(host.IPCMode, acceptPodman431PrivateIPC) &&
 		host.PIDMode == namespacePrivate && host.UTSMode == namespacePrivate &&
 		(host.CgroupMode == namespacePrivate || host.CgroupMode == cgroupHost) &&
 		validCgroupsMode(host) && len(host.Devices) == 0 &&
-		validStrings(config.Command) && validStrings(config.Entrypoint) && validStrings(config.Environment) &&
+		validStrings(config.Command) && validStrings(entrypoint) && validStrings(config.Environment) &&
 		validText(config.Hostname) && validText(config.User) && validText(config.WorkingDir) &&
 		validStrings(host.CapAdd) && validStrings(host.CapDrop) && validStrings(host.DNSOptions) &&
 		validStrings(host.DNSSearch) && validStrings(host.GroupAdd) && validText(host.CgroupParent) &&
 		host.Memory >= 0 && host.ShmSize >= 0 && host.OOMScoreAdj >= minimumOOMScore &&
 		host.OOMScoreAdj <= maximumOOMScore && identifier != ""
+}
+
+func validInspectIPCMode(mode string, acceptPodman431PrivateIPC bool) bool {
+	return mode == namespacePrivate || acceptPodman431PrivateIPC && mode == "shareable"
+}
+
+func inspectAPIMode(value string) (legacy bool, acceptPodman431PrivateIPC bool, valid bool) {
+	version, valid := parseInspectAPIVersion(value)
+	if !valid {
+		return false, false, false
+	}
+
+	return version[0] == legacyPodmanAPIMajor, value == podmanAPI431, true
+}
+
+func parseInspectAPIVersion(value string) ([3]uint64, bool) {
+	var version [3]uint64
+
+	parts := strings.Split(value, ".")
+	if len(parts) != inspectAPIVersionParts {
+		return version, false
+	}
+	for index, part := range parts {
+		parsed, err := strconv.ParseUint(part, 10, 16)
+		if err != nil || strconv.FormatUint(parsed, 10) != part {
+			return [3]uint64{}, false
+		}
+		version[index] = parsed
+	}
+	minimum := [3]uint64{4, 3, 1}
+	maximum := [3]uint64{6, 1, 0}
+	if versionLess(version, minimum) || versionLess(maximum, version) {
+		return [3]uint64{}, false
+	}
+
+	return version, true
+}
+
+func versionLess(left, right [3]uint64) bool {
+	for index := range left {
+		if left[index] != right[index] {
+			return left[index] < right[index]
+		}
+	}
+
+	return false
 }
 
 func validCgroupsMode(host *inspectHost) bool {
@@ -298,6 +380,52 @@ func observedRestart(value inspectRestart) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func observedEntrypoint(value json.RawMessage, legacy bool) ([]string, bool) {
+	if legacy {
+		var flattened string
+		if len(value) == 0 || json.Unmarshal(value, &flattened) != nil || strings.Contains(flattened, " ") {
+			return nil, false
+		}
+		if flattened == "" {
+			return nil, true
+		}
+
+		return []string{flattened}, validText(flattened)
+	}
+	if len(value) == 0 {
+		return nil, false
+	}
+	if string(value) == "null" {
+		return nil, true
+	}
+	var entrypoint []string
+	if json.Unmarshal(value, &entrypoint) != nil || !validStrings(entrypoint) {
+		return nil, false
+	}
+
+	return entrypoint, true
+}
+
+func observedInspectStopSignal(value json.RawMessage, legacy bool) (string, bool) {
+	if len(value) == 0 {
+		return "", false
+	}
+	if legacy {
+		var signal uint8
+		if json.Unmarshal(value, &signal) != nil || signal == 0 {
+			return "", false
+		}
+
+		return observedStopSignal(strconv.FormatUint(uint64(signal), 10))
+	}
+	var signal string
+	if json.Unmarshal(value, &signal) != nil || signal == "" {
+		return "", false
+	}
+
+	return observedStopSignal(signal)
 }
 
 func observedStopSignal(value string) (string, bool) {

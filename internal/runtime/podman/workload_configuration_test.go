@@ -145,7 +145,7 @@ func TestPodmanConfigurationRejectsInvalidProjectInputs(t *testing.T) {
 		ImageConfig: workload.Image.ImageConfig, PlatformManifest: workload.Image.PlatformManifest,
 	}
 	workload.ServiceName = ""
-	if containerConfigurationMatches(container, workload) {
+	if containerConfigurationMatches(container, workload, libpodAPIVersion) {
 		t.Fatal("containerConfigurationMatches(invalid spec) = true")
 	}
 }
@@ -161,11 +161,11 @@ func TestPodmanConfigurationIgnoresInformationalImageTag(t *testing.T) {
 		WorkloadSpec: workload.WorkloadSpec,
 	}
 	workload.Image.Reference = "registry.example/team/app:stable@" + podmanReferenceDigest
-	if !containerConfigurationMatches(container, workload) {
+	if !containerConfigurationMatches(container, workload, libpodAPIVersion) {
 		t.Fatal("containerConfigurationMatches(tag omitted by Podman) = false")
 	}
 	container.ImageReference = "registry.example/other/app@" + podmanReferenceDigest
-	if containerConfigurationMatches(container, workload) {
+	if containerConfigurationMatches(container, workload, libpodAPIVersion) {
 		t.Fatal("containerConfigurationMatches(other repository) = true")
 	}
 }
