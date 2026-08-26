@@ -370,7 +370,7 @@ func TestReadSnapshotJournalContainsReadAndCloseFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			reader := *base
+			reader := *newTestTransactions(new([]string))
 			test.mutate(&reader)
 			_, err := readSnapshotJournal(t.Context(), &reader, testProjectName, testServiceName)
 			if !errors.Is(err, errTestBoundary) {
