@@ -92,6 +92,9 @@ func TestProcessNotificationsFiltersInternalEventsAndDrainsDiagnostics(t *testin
 	if (&notifications).TryPublish(application.Event{Kind: application.EventActionCompleted}) {
 		t.Fatal("internal event was accepted for notification delivery")
 	}
+	if notifications.DroppedEvents() != 1 {
+		t.Fatalf("notification dropped events = %d, want 1", notifications.DroppedEvents())
+	}
 	notifications.Shutdown(t.Context())
 
 	want := "maniud notification: target=bark event=unknown code=invalid_event: " +
