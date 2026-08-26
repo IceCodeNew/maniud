@@ -115,6 +115,26 @@ func TestParseNormalizesRuntimeDefaultZeroValues(t *testing.T) {
 	}
 }
 
+func TestParseProjectsNativeIntegerScalars(t *testing.T) {
+	t.Parallel()
+
+	projection := requireProjection(t, []string{
+		dockerRuntime, createOperation, "--oom-score-adj=-500", "--blkio-weight=500", testImage,
+	})
+	if projection.service.OOMScoreAdj == nil {
+		t.Fatal("OOMScoreAdj = nil, want -500")
+	}
+	if got := *projection.service.OOMScoreAdj; got != -500 {
+		t.Fatalf("OOMScoreAdj = %d, want -500", got)
+	}
+	if projection.service.BlkioWeight == nil {
+		t.Fatal("BlkioWeight = nil, want 500")
+	}
+	if got := *projection.service.BlkioWeight; got != 500 {
+		t.Fatalf("BlkioWeight = %d, want 500", got)
+	}
+}
+
 func TestParseWarnsWhenComposeRoundsCPUs(t *testing.T) {
 	t.Parallel()
 

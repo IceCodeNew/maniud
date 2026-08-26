@@ -288,12 +288,12 @@ func (parser *argvParser) assignScalar(field, value string) {
 		parsed := canonicalInt64(value)
 		parser.service.PidsLimit = &parsed
 	case fieldOOMScore:
-		parsed := int(canonicalInt64(value))
+		parsed := canonicalInt(value)
 		if parsed != 0 {
 			parser.service.OOMScoreAdj = &parsed
 		}
 	case fieldBlkio:
-		weight := int(canonicalInt64(value))
+		weight := canonicalInt(value)
 		parser.service.BlkioWeight = &weight
 	case fieldStopTimeout:
 		seconds := canonicalInt64(value)
@@ -366,6 +366,12 @@ func canonicalScalar(field, value string) (string, error) {
 
 func canonicalInt64(value string) int64 {
 	parsed, _ := strconv.ParseInt(value, 10, 64)
+
+	return parsed
+}
+
+func canonicalInt(value string) int {
+	parsed, _ := strconv.Atoi(value)
 
 	return parsed
 }
