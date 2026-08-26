@@ -134,6 +134,18 @@ func testStrictOCISelection(t *testing.T) {
 	if _, err := selectOCIDescriptor([]descriptor{descriptorValue}, expected); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("missing platform error = %v", err)
 	}
+	platformless := descriptorValue
+	platformless.Platform = nil
+	selected, err := selectOCIDescriptor([]descriptor{platformless}, expected)
+	if err != nil || selected.Digest != platformless.Digest {
+		t.Fatalf("single platform-less OCI descriptor = %#v, %v", selected, err)
+	}
+	if _, err := selectOCIDescriptor(
+		[]descriptor{platformless, descriptorValue},
+		expected,
+	); !errors.Is(err, ErrInvalidArchive) {
+		t.Fatalf("ambiguous platform-less OCI descriptor error = %v", err)
+	}
 
 	second := descriptorValue
 	second.Digest = "sha256:" + strings.Repeat("c", 64)
@@ -222,12 +234,20 @@ func testArchiveLayerBoundaries(t *testing.T) {
 	if validOCILayerDescriptor(validLayer) {
 		t.Fatal("unsupported layer media type accepted")
 	}
-	err := validateOCILayers(context.Background(), nil, nil, nil, []layerIdentity{{}})
+	err := validateOCILayers(
+		context.Background(), nil, nil, nil, []layerIdentity{{}}, manifestEntry{}, nil,
+	)
 	if !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("layer count mismatch error = %v", err)
 	}
 	err = validateOCILayers(
-		context.Background(), nil, nil, []descriptor{validLayer}, []layerIdentity{{size: 1}},
+		context.Background(),
+		nil,
+		nil,
+		[]descriptor{validLayer},
+		[]layerIdentity{{size: 1}},
+		manifestEntry{Layers: []string{"layer.tar"}},
+		[]domain.Digest{{}},
 	)
 	if !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("invalid layer descriptor error = %v", err)
@@ -430,6 +450,7 @@ func TestStrictManifestAndMemberBoundaries(t *testing.T) {
 	if selectedMembersExist(map[string]member{"c": {kind: tar.TypeReg, size: 0}}, manifestEntry{Config: "c"}) {
 		t.Fatal("selectedMembersExist() accepted empty config")
 	}
+	testManifestLayerSourceBoundaries(t)
 
 	hexName := strings.Repeat("a", 64)
 	for _, header := range []*tar.Header{
@@ -439,6 +460,85 @@ func TestStrictManifestAndMemberBoundaries(t *testing.T) {
 		if validLayerLink(header) {
 			t.Fatalf("validLayerLink(%#v) succeeded", header)
 		}
+	}
+}
+
+func testManifestLayerSourceBoundaries(t *testing.T) {
+	t.Helper()
+
+	diffID := domain.Hash([]byte("uncompressed layer"))
+	sourceDigest := domain.Hash([]byte("compressed layer"))
+	entry := manifestEntry{
+		Layers: []string{"legacy/layer.tar"},
+		LayerSources: map[string]descriptor{
+			diffID.String(): {
+				MediaType: ociForeignGzipLayerType,
+				Digest:    sourceDigest.String(),
+				Size:      1,
+				URLs:      []string{"https://registry.example.invalid/layer"},
+			},
+		},
+	}
+	if !validManifestLayerSources(entry) || !manifestLayerSourcesMatch(
+		entry,
+		[]layerIdentity{{size: 1, digest: sourceDigest}},
+		[]domain.Digest{diffID},
+	) {
+		t.Fatal("legacy foreign manifest layer source rejected")
+	}
+	if manifestLayerSourcesMatch(entry, nil, nil) {
+		t.Fatal("manifest layer source without layer accepted")
+	}
+	testManifestLayerSourceRejections(t, entry, diffID, sourceDigest)
+}
+
+func testManifestLayerSourceRejections(
+	t *testing.T,
+	entry manifestEntry,
+	diffID domain.Digest,
+	sourceDigest domain.Digest,
+) {
+	t.Helper()
+
+	source := entry.LayerSources[diffID.String()]
+	source.Size = 0
+	entry.LayerSources[diffID.String()] = source
+	if validManifestLayerSources(entry) {
+		t.Fatal("invalid manifest layer source accepted")
+	}
+	entry.LayerSources[diffID.String()] = descriptor{
+		MediaType: ociLayerMediaType, Digest: sourceDigest.String(), Size: 1,
+	}
+	entry.Layers[0] = "blobs/sha256/" + strings.TrimPrefix(sourceDigest.String(), "sha256:")
+	if manifestLayerSourcesMatch(
+		entry,
+		[]layerIdentity{{size: 2, digest: sourceDigest}},
+		[]domain.Digest{diffID},
+	) {
+		t.Fatal("manifest layer source mismatch accepted")
+	}
+	if manifestLayerSourcesMatch(
+		entry,
+		[]layerIdentity{{size: 1, digest: sourceDigest}},
+		[]domain.Digest{domain.Hash([]byte("different diff ID"))},
+	) {
+		t.Fatal("manifest layer source without matching config DiffID accepted")
+	}
+	entry.Layers[0] = "blobs/sha256/" + strings.TrimPrefix(diffID.String(), "sha256:")
+	if manifestLayerSourcesMatch(
+		entry,
+		[]layerIdentity{{size: 1, digest: sourceDigest}},
+		[]domain.Digest{diffID},
+	) {
+		t.Fatal("graphdriver layer content without matching DiffID accepted")
+	}
+	entry.LayerSources[domain.Hash([]byte("extra")).String()] = descriptor{
+		MediaType: ociLayerMediaType,
+		Digest:    domain.Hash([]byte("extra")).String(),
+		Size:      1,
+	}
+	if validManifestLayerSources(entry) {
+		t.Fatal("manifest layer source count mismatch accepted")
 	}
 }
 
@@ -538,6 +638,33 @@ func testAnalyzeSelectedImageFailure(t *testing.T) {
 	); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("analyzeSelectedImage(read failure) error = %v", err)
 	}
+
+	layer := []byte("layer")
+	layerDigest := domain.Hash(layer).String()
+	layerMember := "blobs/sha256/" + strings.TrimPrefix(layerDigest, "sha256:")
+	config := []byte(
+		`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["` +
+			layerDigest + `"]}}`,
+	)
+	content := append(bytes.Clone(config), layer...)
+	contentFile := mustBytesFile(t, content)
+	defer closeTestFile(t, contentFile)
+	entry := manifestEntry{
+		Config: testConfigMember,
+		Layers: []string{layerMember},
+		LayerSources: map[string]descriptor{
+			layerDigest: {MediaType: ociLayerMediaType, Digest: layerDigest, Size: int64(len(layer) + 1)},
+		},
+	}
+	contentMembers := map[string]member{
+		testConfigMember: {offset: 0, size: int64(len(config)), kind: tar.TypeReg},
+		layerMember:      {offset: int64(len(config)), size: int64(len(layer)), kind: tar.TypeReg},
+	}
+	if _, _, _, _, err := analyzeSelectedImage(
+		context.Background(), contentFile, contentMembers, []manifestEntry{entry}, "@0",
+	); !errors.Is(err, ErrInvalidArchive) {
+		t.Fatalf("analyzeSelectedImage(layer source mismatch) error = %v", err)
+	}
 }
 
 func TestOCIPayloadAndLayerBoundaries(t *testing.T) {
@@ -583,21 +710,39 @@ func TestOCIPayloadAndLayerBoundaries(t *testing.T) {
 		t.Fatalf("descriptorPayload(closed) error = %v", err)
 	}
 
+	testOCILayerValidationFailures(t, file, members, value, raw, digest, digestMember)
+
+	invalid := value
+	invalid.Size = 0
+	if validOCILayerDescriptor(invalid) {
+		t.Fatal("validOCILayerDescriptor(invalid descriptor) succeeded")
+	}
+}
+
+func testOCILayerValidationFailures(
+	t *testing.T,
+	file *os.File,
+	members map[string]member,
+	value descriptor,
+	raw []byte,
+	digest domain.Digest,
+	digestMember string,
+) {
+	t.Helper()
+
 	selected := []layerIdentity{{size: int64(len(raw)), digest: digest}, {size: int64(len(raw)), digest: digest}}
+	selectedEntry := manifestEntry{Layers: []string{digestMember, digestMember}}
 	if err := validateOCILayers(
 		context.Background(), file, members, []descriptor{value, value}, selected,
+		selectedEntry, []domain.Digest{digest, digest},
 	); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("validateOCILayers(duplicate) error = %v", err)
 	}
 	if err := validateOCILayers(
 		context.Background(), file, nil, []descriptor{value}, selected[:1],
+		manifestEntry{Layers: []string{digestMember}}, []domain.Digest{digest},
 	); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("validateOCILayers(missing payload) error = %v", err)
-	}
-	invalid := value
-	invalid.Size = 0
-	if validOCILayerDescriptor(invalid) {
-		t.Fatal("validOCILayerDescriptor(invalid descriptor) succeeded")
 	}
 }
 
@@ -913,18 +1058,26 @@ func testValidateOCIIndexFailures(t *testing.T, platformValue domain.Platform) {
 		offset += int64(len(value.raw))
 	}
 	layers := []layerIdentity{{size: int64(len(layer)), digest: layerDigest}}
+	selectedEntry, diffIDs := internalOCISelection(layerDigest)
 	if _, _, err := validateOCIIndex(
-		context.Background(), file, members, []byte("different config"), layers, platformValue,
+		context.Background(), file, members, []byte("different config"), layers,
+		selectedEntry, diffIDs, platformValue,
 	); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("validateOCIIndex(config mismatch) error = %v", err)
 	}
 	if _, _, err := validateOCIIndex(
 		context.Background(), file, members, config,
 		[]layerIdentity{{size: int64(len(layer)), digest: domain.Hash([]byte("different layer"))}},
-		platformValue,
+		selectedEntry, diffIDs, platformValue,
 	); !errors.Is(err, ErrInvalidArchive) {
 		t.Fatalf("validateOCIIndex(layer mismatch) error = %v", err)
 	}
+}
+
+func internalOCISelection(layerDigest domain.Digest) (manifestEntry, []domain.Digest) {
+	return manifestEntry{
+		Layers: []string{"blobs/sha256/" + strings.TrimPrefix(layerDigest.String(), "sha256:")},
+	}, []domain.Digest{layerDigest}
 }
 
 func mustInternalJSON(t *testing.T, value any) []byte {

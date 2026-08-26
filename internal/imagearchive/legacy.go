@@ -10,15 +10,17 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/jsonstrict"
 )
 
 //nolint:tagliatelle // Docker defines these legacy manifest field names.
 type manifestEntry struct {
-	Config   string   `json:"Config"`
-	RepoTags []string `json:"RepoTags"`
-	Layers   []string `json:"Layers"`
+	Config       string                `json:"Config"`
+	RepoTags     []string              `json:"RepoTags"`
+	Layers       []string              `json:"Layers"`
+	LayerSources map[string]descriptor `json:"LayerSources,omitempty"`
 }
 
 func decodeManifest(raw []byte) ([]manifestEntry, error) {
@@ -39,7 +41,7 @@ func decodeManifest(raw []byte) ([]manifestEntry, error) {
 
 func normalizeManifestEntry(entry *manifestEntry) bool {
 	if !canonicalMemberName(entry.Config) || len(entry.Layers) > maximumImageLayerCount ||
-		!uniqueCanonicalMembers(entry.Layers) {
+		!uniqueCanonicalMembers(entry.Layers) || !validManifestLayerSources(*entry) {
 		return false
 	}
 
@@ -59,6 +61,70 @@ func normalizeManifestEntry(entry *manifestEntry) bool {
 	entry.RepoTags = normalized
 
 	return true
+}
+
+func validManifestLayerSources(entry manifestEntry) bool {
+	if len(entry.LayerSources) == 0 {
+		return true
+	}
+	if len(entry.LayerSources) > len(entry.Layers) {
+		return false
+	}
+	for diffID, source := range entry.LayerSources {
+		parsed, err := domain.ParseDigest(diffID)
+		if err != nil || parsed.String() != diffID || !validLayerSourceDescriptor(source) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func archiveBlobDigest(name string) (string, bool) {
+	encoded, found := strings.CutPrefix(name, "blobs/sha256/")
+
+	return "sha256:" + encoded, found && hexNamePattern.MatchString(encoded)
+}
+
+func manifestLayerSourcesMatch(
+	entry manifestEntry,
+	layers []layerIdentity,
+	diffIDs []domain.Digest,
+) bool {
+	if len(entry.LayerSources) == 0 {
+		return true
+	}
+	if len(layers) != len(entry.Layers) || len(diffIDs) != len(layers) {
+		return false
+	}
+	matched := make(map[string]struct{}, len(entry.LayerSources))
+	for index, diffID := range diffIDs {
+		source, found := entry.LayerSources[diffID.String()]
+		if !found {
+			continue
+		}
+		matched[diffID.String()] = struct{}{}
+		if !manifestLayerSourceMatches(entry.Layers[index], layers[index], diffID, source) {
+			return false
+		}
+	}
+
+	return len(matched) == len(entry.LayerSources)
+}
+
+func manifestLayerSourceMatches(
+	name string,
+	layer layerIdentity,
+	diffID domain.Digest,
+	source descriptor,
+) bool {
+	memberDigest, blob := archiveBlobDigest(name)
+	if blob && memberDigest == diffID.String() && layer.digest != diffID {
+		return false
+	}
+
+	return !blob || memberDigest != source.Digest ||
+		source.Size == layer.size && source.Digest == layer.digest.String()
 }
 
 func normalizeArchiveTag(tag string) (string, bool) {

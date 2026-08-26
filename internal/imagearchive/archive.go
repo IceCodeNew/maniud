@@ -212,6 +212,8 @@ func analyzeOpenArchive(
 		members,
 		config,
 		layers,
+		selected.entry,
+		configEvidence.DiffIDs,
 		configEvidence.Platform,
 	)
 	if err != nil {
@@ -309,6 +311,9 @@ func analyzeSelectedImage(
 	}
 	configEvidence, err := imageconfig.Decode(config, maximumConfiguration)
 	if err != nil || !supportedPlatform(configEvidence) || len(configEvidence.DiffIDs) != len(layers) {
+		return selectedImage{}, nil, nil, imageconfig.Evidence{}, ErrInvalidArchive
+	}
+	if !manifestLayerSourcesMatch(selected.entry, layers, configEvidence.DiffIDs) {
 		return selectedImage{}, nil, nil, imageconfig.Evidence{}, ErrInvalidArchive
 	}
 
