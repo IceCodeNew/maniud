@@ -158,7 +158,7 @@ func TestNewBoundMutationContainsClosedStore(t *testing.T) {
 	if err = state.Close(); err != nil {
 		t.Fatalf("Store.Close() error = %v", err)
 	}
-	mutation, err := newBoundMutation(lock, state, Preparation{}, Request{})
+	mutation, err := newBoundMutation(lock, state, Preparation{}, Request{}, nil)
 	if mutation != nil || err == nil {
 		t.Fatalf("newBoundMutation(closed store) = %#v, %v", mutation, err)
 	}

@@ -19,6 +19,7 @@ type boundMutation struct {
 	lock        *store.ServiceLock
 	backupRoot  string
 	materialize func() error
+	events      EventSink
 }
 
 // Apply binds one service-scoped transaction and executes or recovers its
@@ -44,6 +45,7 @@ func (service *Service) Apply(
 	defer func() { //nolint:contextcheck // ServiceLock.Close owns its non-cancelled lease-release context.
 		err = errors.Join(err, mutation.close())
 	}()
+	service.publishPlan(mutation.preparation)
 	if err = materializeMutationRuntime(mutation); err != nil {
 		return Plan{}, err
 	}
@@ -117,7 +119,7 @@ func (service *Service) bindMutation(
 		return nil, ErrInvalidRequest
 	}
 
-	lockedService := NewService(service.images, service.runtime, state)
+	lockedService := NewObservedService(service.images, service.runtime, state, service.events)
 
 	initial, err := lockedService.Prepare(ctx, request)
 	if err != nil {
@@ -151,7 +153,9 @@ func (service *Service) bindMutation(
 		return closeMutationLock(lock, err) //nolint:contextcheck // Lock release must outlive cancellation.
 	}
 
-	return newBoundMutation(lock, state, final, request) //nolint:contextcheck // Lock release must outlive cancellation.
+	return newBoundMutation( //nolint:contextcheck // Lock release must outlive cancellation.
+		lock, state, final, request, service.events,
+	)
 }
 
 func newBoundMutation(
@@ -159,13 +163,19 @@ func newBoundMutation(
 	state *store.Store,
 	final Preparation,
 	request Request,
+	events EventSink,
 ) (*boundMutation, error) {
 	root, err := state.BackupRoot()
 	if err != nil {
 		return closeMutationLock(lock, err)
 	}
 
-	mutation := &boundMutation{preparation: final, lock: lock, backupRoot: root}
+	mutation := &boundMutation{
+		preparation: final,
+		lock:        lock,
+		backupRoot:  root,
+		events:      events,
+	}
 	if mutationNeedsRepositoryRuntime(final) {
 		mutation.materialize = request.Source.MaterializeRuntime
 	}
@@ -283,4 +293,38 @@ func (mutation *boundMutation) close() error {
 	}
 
 	return nil
+}
+
+func (mutation *boundMutation) effectJournal() *observedEffectJournal {
+	if mutation == nil || mutation.lock == nil {
+		return nil
+	}
+
+	preparation := mutation.preparation
+
+	return &observedEffectJournal{
+		EffectJournal: mutation.lock,
+		events:        mutation.events,
+		context: Event{
+			Project: preparation.Plan.Project,
+			Service: preparation.Plan.Service,
+			Runtime: preparation.Plan.Runtime,
+		},
+	}
+}
+
+func (mutation *boundMutation) publishTransaction(kind EventKind) {
+	if mutation == nil {
+		return
+	}
+
+	preparation := mutation.preparation
+	tryPublish(mutation.events, Event{
+		Kind:        kind,
+		Plan:        preparation.Plan.Kind,
+		Project:     preparation.Plan.Project,
+		Service:     preparation.Plan.Service,
+		Runtime:     preparation.Plan.Runtime,
+		Transaction: preparation.Transaction.ID.String(),
+	})
 }

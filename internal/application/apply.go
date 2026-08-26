@@ -62,11 +62,23 @@ type Service struct {
 	images       ImageResolver
 	runtime      Runtime
 	transactions TransactionReader
+	events       EventSink
 }
 
 // NewService creates an apply service over explicit read-only dependencies.
 func NewService(images ImageResolver, runtime Runtime, transactions TransactionReader) *Service {
-	return &Service{images: images, runtime: runtime, transactions: transactions}
+	return NewObservedService(images, runtime, transactions, nil)
+}
+
+// NewObservedService creates an apply service that attempts transient event
+// publication after application-owned successful seams.
+func NewObservedService(
+	images ImageResolver,
+	runtime Runtime,
+	transactions TransactionReader,
+	events EventSink,
+) *Service {
+	return &Service{images: images, runtime: runtime, transactions: transactions, events: events}
 }
 
 // Request selects one service from an already bounded in-memory Compose source.
@@ -104,8 +116,19 @@ func (service *Service) DryRun(ctx context.Context, request Request) (Plan, erro
 	if err != nil {
 		return Plan{}, err
 	}
+	service.publishPlan(preparation)
 
 	return preparation.Plan, nil
+}
+
+func (service *Service) publishPlan(preparation Preparation) {
+	tryPublish(service.events, Event{
+		Kind:    EventPlanPrepared,
+		Plan:    preparation.Plan.Kind,
+		Project: preparation.Plan.Project,
+		Service: preparation.Plan.Service,
+		Runtime: preparation.Plan.Runtime,
+	})
 }
 
 type desiredApply struct {

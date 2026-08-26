@@ -130,6 +130,7 @@ func recoverRuntimeEffect(
 	if err != nil {
 		return empty, fmt.Errorf("probe recovered runtime effect: %w", err)
 	}
+	publishEffectPostcondition(journal, identifier, sequence, postcondition)
 	if postcondition.Digest == (domain.Digest{}) {
 		return empty, ErrConflictingState
 	}
@@ -139,7 +140,9 @@ func recoverRuntimeEffect(
 
 	resumer, resumable := effect.(incompleteEffectResumer)
 	if resumable && resumer.incomplete() {
-		postcondition, err = resumeRuntimeEffect(ctx, journal, effect, postcondition, nil)
+		postcondition, err = resumeRuntimeEffect(
+			ctx, journal, identifier, sequence, effect, postcondition, nil,
+		)
 		if err != nil {
 			return empty, err
 		}
@@ -168,12 +171,15 @@ func probeRuntimeEffect(
 	if probeErr != nil {
 		return empty, errors.Join(effectErr, probeErr)
 	}
+	publishEffectPostcondition(journal, identifier, sequence, postcondition)
 
 	if postcondition.Digest == (domain.Digest{}) {
 		return empty, ErrConflictingState
 	}
 	if !postcondition.Satisfied {
-		postcondition, probeErr = resumeRuntimeEffect(ctx, journal, effect, postcondition, effectErr)
+		postcondition, probeErr = resumeRuntimeEffect(
+			ctx, journal, identifier, sequence, effect, postcondition, effectErr,
+		)
 		if probeErr != nil {
 			return empty, probeErr
 		}
@@ -215,6 +221,8 @@ func completeRuntimeEffect(
 func resumeRuntimeEffect(
 	ctx context.Context,
 	journal EffectJournal,
+	identifier store.TransactionID,
+	sequence int64,
 	effect RuntimeEffect,
 	postcondition EffectPostcondition,
 	effectErr error,
@@ -232,11 +240,30 @@ func resumeRuntimeEffect(
 	if probeErr != nil {
 		return empty, errors.Join(effectErr, resumeErr, probeErr)
 	}
+	publishEffectPostcondition(journal, identifier, sequence, resumedPostcondition)
 	if !resumedPostcondition.Satisfied {
 		return empty, errors.Join(effectErr, resumeErr, ErrConflictingState)
 	}
 
 	return resumedPostcondition, nil
+}
+
+func publishEffectPostcondition(
+	journal EffectJournal,
+	identifier store.TransactionID,
+	sequence int64,
+	postcondition EffectPostcondition,
+) {
+	publisher, valid := journal.(interface {
+		publishPostcondition(
+			identifier store.TransactionID,
+			sequence int64,
+			postcondition EffectPostcondition,
+		)
+	})
+	if valid && postcondition.Digest != (domain.Digest{}) {
+		publisher.publishPostcondition(identifier, sequence, postcondition)
+	}
 }
 
 func actionMatchesIntent(

@@ -82,7 +82,9 @@ func settleStorageBackup(
 		return postcondition, effect.publication, err
 	}
 
-	postcondition, err := runRuntimeEffect(ctx, mutation.lock, mutation.preparation.Transaction.ID, intent, effect)
+	postcondition, err := runRuntimeEffect(
+		ctx, mutation.effectJournal(), mutation.preparation.Transaction.ID, intent, effect,
+	)
 	if err != nil || !postcondition.Satisfied {
 		return postcondition, publication, err
 	}

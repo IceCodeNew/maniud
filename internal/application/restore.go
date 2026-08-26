@@ -180,7 +180,7 @@ func settleWorkloadDiscard(
 
 	postcondition, err := runWorkloadDiscard(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		preparation.Transaction.ID,
 		sequence,
 		preparation.Workload,
@@ -538,6 +538,7 @@ func completeRestore(
 	}
 
 	mutation.preparation.Transaction = transaction
+	mutation.publishTransaction(EventTransactionRestored)
 
 	return nil
 }

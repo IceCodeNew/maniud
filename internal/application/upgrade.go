@@ -299,7 +299,7 @@ func settleUpgradeImage(
 
 	postcondition, err := runImagePull(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		mutation.preparation.Transaction.ID,
 		1,
 		mutation.preparation.Workload.Image,
@@ -333,7 +333,7 @@ func settleUpgradeImagePull(
 
 	return runImagePull(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		preparation.Transaction.ID,
 		1,
 		preparation.Workload.Image,
@@ -401,7 +401,7 @@ func settleUpgradeTransition(
 
 	postcondition, err := runWorkloadTransition(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		mutation.preparation.Transaction.ID,
 		sequence,
 		transition,
@@ -521,6 +521,11 @@ func resolveUpgradeFailure(
 	}
 
 	mutation.preparation.Transaction = transaction
+	event := EventTransactionFailed
+	if transaction.State == store.TransactionDegraded {
+		event = EventTransactionDegraded
+	}
+	mutation.publishTransaction(event)
 
 	return cause
 }
