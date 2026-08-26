@@ -37,7 +37,7 @@ const (
 	testUnknownValue         = "unknown"
 	testInvalidLiteral       = "invalid"
 	testForeignOwnerLabel    = "com.example.owner"
-	testContainerListPath    = "/v1.54/containers/json"
+	testContainerListPath    = "/v1.55/containers/json"
 	testOtherValue           = "other"
 	testProcessCommand       = "serve"
 	testOversizedCase        = "oversized"
@@ -171,6 +171,63 @@ func namedContainerDocument(
 	return string(encoded)
 }
 
+func legacyContainerDocument(t *testing.T, imageReference string) string {
+	t.Helper()
+
+	labels := managedContainerLabels()
+	labels[domain.LabelPlatformManifestDigest] = testReferenceDigest
+	document := containerDocumentWithoutDescriptor(t, imageReference, testImageConfig, labels)
+
+	var payload map[string]any
+	if json.Unmarshal([]byte(document), &payload) != nil {
+		t.Fatal("decode legacy container fixture")
+	}
+	hostConfig, valid := payload["HostConfig"].(map[string]any)
+	if !valid {
+		t.Fatal("legacy container fixture host config is invalid")
+	}
+	hostConfig["CpuShares"] = float64(0)
+	hostConfig["Capabilities"] = nil
+	hostConfig["KernelMemory"] = float64(0)
+	hostConfig["KernelMemoryTCP"] = float64(0)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal(legacy container fixture) error = %v", err)
+	}
+
+	return string(encoded)
+}
+
+func containerDocumentWithoutDescriptor(
+	t *testing.T,
+	imageReference string,
+	imageID string,
+	labels map[string]string,
+) string {
+	t.Helper()
+
+	var document map[string]any
+	if json.Unmarshal(
+		[]byte(validContainerDocument(t, labels, runningContainerState())),
+		&document,
+	) != nil {
+		t.Fatal("decode descriptor-less container fixture")
+	}
+	delete(document, "ImageManifestDescriptor")
+	document["Image"] = imageID
+	config, configValid := document["Config"].(map[string]any)
+	if !configValid {
+		t.Fatal("descriptor-less container fixture shape is invalid")
+	}
+	config["Image"] = imageReference
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("json.Marshal(descriptor-less container fixture) error = %v", err)
+	}
+
+	return string(encoded)
+}
+
 func inspectPayload(t *testing.T, document string) containertypes.InspectResponse {
 	t.Helper()
 
@@ -275,11 +332,22 @@ func cloneContainerHostConfig(config *containertypes.HostConfig) *containertypes
 	return &cloned
 }
 
+func testAPIVersion(t *testing.T, value string) apiVersion {
+	t.Helper()
+
+	version, valid := parseAPIVersion(value)
+	if !valid {
+		t.Fatalf("parseAPIVersion(%q) = invalid", value)
+	}
+
+	return version
+}
+
 func observedContainerProbe(t *testing.T) ContainerProbe {
 	t.Helper()
 
 	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
-	container, valid := decodeContainer(testContainerName, payload)
+	container, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 
 	if !valid {
 		t.Fatal("decodeContainer(valid fixture) = false")

@@ -3,9 +3,13 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/moby/moby/api/types/system"
 
@@ -25,7 +29,13 @@ func (client *Client) negotiate(ctx context.Context) (Version, error) {
 		return emptyVersion, ErrProtocol
 	}
 
-	return client.serverVersion(ctx, selected, serverMaximum)
+	version, err := client.serverVersion(ctx, selected, serverMaximum)
+	if err != nil {
+		return emptyVersion, err
+	}
+	client.protocol = selected
+
+	return version, nil
 }
 
 func (client *Client) ping(ctx context.Context) (apiVersion, error) {
@@ -118,6 +128,82 @@ func (client *Client) serverVersion(
 
 func decodeStrictJSON(reader io.Reader, target any) bool {
 	return jsonstrict.Decode(reader, maximumJSONBytes, target)
+}
+
+func decodeCompatibleJSON(
+	reader io.Reader,
+	target any,
+	schema reflect.Type,
+	compatibilityFields ...string,
+) bool {
+	encoded, valid := jsonstrict.Read(reader, maximumJSONBytes)
+	if !valid || target == nil || schema.Kind() != reflect.Struct {
+		return false
+	}
+
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(encoded, &fields) != nil || fields == nil {
+		return false
+	}
+	for name := range fields {
+		if !supportedJSONField(schema, compatibilityFields, name) {
+			return false
+		}
+	}
+
+	return json.Unmarshal(encoded, target) == nil
+}
+
+func supportedJSONField(schema reflect.Type, compatibilityFields []string, name string) bool {
+	if slices.Contains(compatibilityFields, name) {
+		return true
+	}
+
+	return supportedSchemaField(schema, name, make(map[reflect.Type]bool))
+}
+
+func supportedSchemaField(schema reflect.Type, name string, visited map[reflect.Type]bool) bool {
+	schema, valid := concreteStructType(schema)
+	if !valid || visited[schema] {
+		return false
+	}
+	visited[schema] = true
+
+	for field := range schema.Fields() {
+		if supportedStructField(field, name, visited) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func supportedStructField(field reflect.StructField, name string, visited map[reflect.Type]bool) bool {
+	fieldName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	if fieldName == "-" {
+		return false
+	}
+	if fieldName != "" {
+		return fieldName == name
+	}
+	if !field.Anonymous {
+		return field.Name == name
+	}
+
+	embedded, valid := concreteStructType(field.Type)
+	if valid {
+		return supportedSchemaField(embedded, name, visited)
+	}
+
+	return field.Name == name
+}
+
+func concreteStructType(schema reflect.Type) (reflect.Type, bool) {
+	if schema.Kind() == reflect.Pointer {
+		schema = schema.Elem()
+	}
+
+	return schema, schema.Kind() == reflect.Struct
 }
 
 func isJSON(contentType string) bool {

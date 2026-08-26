@@ -11,7 +11,7 @@ func TestParseAPIVersion(t *testing.T) {
 		want  apiVersion
 		valid bool
 	}{
-		{value: minimumAPIVersion, want: apiVersion{major: 1, minor: 54}, valid: true},
+		{value: minimumAPIVersion, want: apiVersion{major: 1, minor: 40}, valid: true},
 		{value: "2.0", want: apiVersion{major: 2, minor: 0}, valid: true},
 		{value: "", want: emptyVersion, valid: false},
 		{value: "1", want: emptyVersion, valid: false},
@@ -44,6 +44,7 @@ func TestCompatibleAPIVersion(t *testing.T) {
 	}{
 		{server: testUnsupportedAPIVersion, want: "", valid: false},
 		{server: minimumAPIVersion, want: minimumAPIVersion, valid: true},
+		{server: testAPIVersion154, want: testAPIVersion154, valid: true},
 		{server: maximumAPIVersion, want: maximumAPIVersion, valid: true},
 		{server: "1.56", want: maximumAPIVersion, valid: true},
 		{server: "2.0", want: maximumAPIVersion, valid: true},

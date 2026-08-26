@@ -90,6 +90,9 @@ func (client *Client) PullImage(
 
 func (client *Client) imagePullReference(expected domain.ImageIdentity) (imageref.Reference, error) {
 	var empty imageref.Reference
+	if client.version.Protocol != client.protocol.String() || !validNegotiatedVersion(client.version) {
+		return empty, ErrProtocol
+	}
 
 	reference, err := imageref.Parse(expected.Reference)
 	if err != nil || !validDockerImage(client.version, expected) {
@@ -105,10 +108,7 @@ func (client *Client) newImagePullRequest(
 	expected domain.ImageIdentity,
 	encodedAuth string,
 ) (*http.Request, error) {
-	path, valid := client.versionedPath("/images/create")
-	if !valid {
-		return nil, ErrProtocol
-	}
+	path, _ := client.apiPath("/images/create")
 
 	repository := strings.TrimSuffix(
 		reference.DigestReference(),

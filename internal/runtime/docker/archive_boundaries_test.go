@@ -216,12 +216,12 @@ func dockerOwnedArchiveClient(
 		case testContainerListPath:
 			response.Header().Set(contentTypeHeader, jsonContentType)
 			_, _ = io.WriteString(response, `[{"Id":"`+testContainerID+`"}]`)
-		case "/v1.54/containers/" + testContainerID + "/json":
+		case "/v1.55/containers/" + testContainerID + "/json":
 			response.Header().Set(contentTypeHeader, jsonContentType)
 			_, _ = io.WriteString(response, validContainerDocument(
 				t, workloadOwnershipLabels(workload, testTransaction), runningContainerState(),
 			))
-		case "/v1.54/containers/" + testContainerID + "/archive":
+		case "/v1.55/containers/" + testContainerID + "/archive":
 			if archiveHandler != nil {
 				archiveHandler(response, request)
 			}

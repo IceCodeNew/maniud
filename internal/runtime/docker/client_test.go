@@ -20,7 +20,8 @@ func TestConnectNegotiatesSupportedVersions(t *testing.T) {
 		wantProtocol  string
 	}{
 		{serverMaximum: minimumAPIVersion, wantProtocol: minimumAPIVersion},
-		{serverMaximum: "1.55", wantProtocol: maximumAPIVersion},
+		{serverMaximum: testAPIVersion154, wantProtocol: testAPIVersion154},
+		{serverMaximum: maximumAPIVersion, wantProtocol: maximumAPIVersion},
 		{serverMaximum: "1.56", wantProtocol: maximumAPIVersion},
 	}
 
@@ -48,13 +49,15 @@ func TestConnectNegotiatesSupportedVersions(t *testing.T) {
 
 			want := Version{
 				Protocol:     test.wantProtocol,
-				Minimum:      "1.40",
+				Minimum:      minimumAPIVersion,
 				Maximum:      test.serverMaximum,
 				Product:      testProduct,
 				OS:           testOS,
 				Architecture: testArchitecture,
 			}
+			path, pathValid := client.apiPath("/info")
 			if got != want || client.Version() != want || requests.Load() != 2 ||
+				client.protocol.String() != test.wantProtocol || !pathValid || path != "/v"+test.wantProtocol+"/info" ||
 				client.httpClient.Timeout != requestTimeout {
 				t.Fatalf(
 					"Connect() = %#v, Version() = %#v, requests = %d; want %#v, 2",

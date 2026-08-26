@@ -14,13 +14,13 @@ func TestInspectDaemon(t *testing.T) {
 	t.Parallel()
 
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/v1.54/info" {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1.55/info" {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 
 		response.Header().Set(contentTypeHeader, jsonContentType)
 		_, _ = io.WriteString(response, daemonDocument(
-			"engine-id", "overlay2", testOS, dockerMachineAMD64, testProduct, true,
+			testDaemonID, "overlay2", testOS, dockerMachineAMD64, testProduct, true,
 		))
 	}))
 
@@ -30,7 +30,7 @@ func TestInspectDaemon(t *testing.T) {
 	}
 
 	want := Daemon{
-		ID:           "engine-id",
+		ID:           testDaemonID,
 		Driver:       "overlay2",
 		OS:           testOS,
 		Architecture: testArchitecture,
@@ -38,6 +38,74 @@ func TestInspectDaemon(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("InspectDaemon() = %#v, want %#v", got, want)
+	}
+}
+
+func TestInspectDaemonAcceptsAPI140LegacyFields(t *testing.T) {
+	t.Parallel()
+
+	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1.40/info" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+
+		body := strings.TrimSuffix(daemonDocument(
+			testDaemonID, "vfs", testOS, dockerMachineAMD64, testProduct, false,
+		), "}") + `,"BridgeNfIp6tables":true,"BridgeNfIptables":true,"ClusterAdvertise":"",` +
+			`"ClusterStore":"","KernelMemory":true,"KernelMemoryTCP":true,` +
+			`"RegistryConfig":{"AllowNondistributableArtifactsCIDRs":[]}}`
+		response.Header().Set(contentTypeHeader, jsonContentType)
+		_, _ = io.WriteString(response, body)
+	}))
+	setTestClientVersion(t, client, minimumAPIVersion)
+
+	got, err := client.InspectDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("InspectDaemon(API 1.40) error = %v", err)
+	}
+	if got.ID != testDaemonID || got.Driver != "vfs" || got.Architecture != testArchitecture {
+		t.Fatalf("InspectDaemon(API 1.40) = %#v", got)
+	}
+}
+
+func TestAPIPathsUseFrozenNegotiatedVersion(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/info",
+		"/containers/example-api/json",
+		"/containers/json",
+		"/containers/create",
+		"/containers/" + testContainerID,
+		"/containers/" + testContainerID + "/json",
+		"/containers/" + testContainerID + "/start",
+		"/containers/" + testContainerID + "/stop",
+		"/containers/" + testContainerID + "/rename",
+		"/containers/" + testContainerID + "/archive",
+		"/images/create",
+		"/images/example.com/team/api@" + testReferenceDigest + "/json",
+		"/images/example.com/team/api:1/get",
+	}
+	for _, protocol := range []string{"1.40", "1.54", "1.55"} {
+		client := testClient(http.DefaultTransport)
+		setTestClientVersion(t, client, protocol)
+		for _, endpoint := range paths {
+			got, valid := client.apiPath(endpoint)
+			if !valid || got != "/v"+protocol+endpoint {
+				t.Fatalf("apiPath(%q, %q) = %q, %t", protocol, endpoint, got, valid)
+			}
+		}
+
+		client.version.Protocol = maximumAPIVersion
+		if _, valid := client.apiPath("/info"); protocol != maximumAPIVersion && valid {
+			t.Fatalf("apiPath(%q after version drift) = valid", protocol)
+		}
+	}
+
+	unsupported := testClient(http.DefaultTransport)
+	setTestClientVersion(t, unsupported, testUnsupportedAPIVersion)
+	if _, valid := unsupported.apiPath("/info"); valid {
+		t.Fatal("apiPath(unsupported protocol) = valid")
 	}
 }
 
@@ -88,25 +156,25 @@ func TestInspectDaemonRejectsUnknownEvidence(t *testing.T) {
 			name:        "invalid driver",
 			status:      http.StatusOK,
 			contentType: jsonContentType,
-			body:        daemonDocument("engine-id", "bad\ndriver", testOS, testArchitecture, testProduct, false),
+			body:        daemonDocument(testDaemonID, "bad\ndriver", testOS, testArchitecture, testProduct, false),
 		},
 		{
 			name:        "OS drift",
 			status:      http.StatusOK,
 			contentType: jsonContentType,
-			body:        daemonDocument("engine-id", "overlay2", "windows", testArchitecture, testProduct, false),
+			body:        daemonDocument(testDaemonID, "overlay2", "windows", testArchitecture, testProduct, false),
 		},
 		{
 			name:        "architecture drift",
 			status:      http.StatusOK,
 			contentType: jsonContentType,
-			body:        daemonDocument("engine-id", "overlay2", testOS, "arm64", testProduct, false),
+			body:        daemonDocument(testDaemonID, "overlay2", testOS, "arm64", testProduct, false),
 		},
 		{
 			name:        "product drift",
 			status:      http.StatusOK,
 			contentType: jsonContentType,
-			body:        daemonDocument("engine-id", "overlay2", testOS, testArchitecture, "29.7.3", false),
+			body:        daemonDocument(testDaemonID, "overlay2", testOS, testArchitecture, "29.7.3", false),
 		},
 	}
 
