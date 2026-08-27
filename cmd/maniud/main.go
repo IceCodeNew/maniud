@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/IceCodeNew/maniud/internal/cli"
@@ -25,6 +26,8 @@ func run() int {
 		containerdplugin.New(),
 	)
 	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "maniud:", err)
+
 		return 1
 	}
 
