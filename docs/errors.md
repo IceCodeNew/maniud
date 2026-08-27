@@ -14,13 +14,19 @@ The default result omits private paths, endpoint details, credentials, and upstr
 | Code | Meaning | What to do |
 | --- | --- | --- |
 | `invalid_input` | The command or selected input is invalid. | Check `maniud COMMAND --help` and correct the input. |
-| `operation_cancelled` | A signal or calling context cancelled the operation. | Run the same command again so maniud can recover an unfinished transaction. |
+| `operation_cancelled` | A signal or calling context cancelled the operation. | Run the same command again so maniud can recover an unfinished operation. |
 | `generation_failed` | `gen` could not validate the image, service, or output. | Follow the standard-error hint, pull the requested image when it is missing, and rerun `gen`. |
 | `apply_failed` | `apply`, `daemon`, or `doctor` could not prove a safe result. | Retry only when `retryable` is true; otherwise preserve the current state and inspect `--debug` output. |
 | `internal_error` | The binary could not provide the selected command service. | Verify the installed release and report its version with the JSON result. |
 
 `retryable: true` means the same input may succeed after the runtime, registry, rate limit, or state store becomes available again.
 When `retryable` is false, correct the input or resolve the conflicting evidence before repeating the command.
+
+## Notification failures
+
+Bark requires `BARK_DEVICE_KEY`. To encrypt messages, also set `BARK_ENCRYPTION_KEY` to the 16-, 24-, or 32-character ASCII key configured in the Bark app. Telegram requires both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+
+An incomplete or invalid notification configuration stops `apply` or `daemon start` before the operation begins and returns `invalid_input`. Delivery problems written as `maniud notification: ...` are diagnostics: they do not change the operation result or process exit status. Do not repeat a completed operation solely because a notification failed.
 
 ## Debug output
 
