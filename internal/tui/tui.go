@@ -63,15 +63,20 @@ func (stream *EventStream) wait(ctx context.Context) tea.Cmd {
 		}
 		select {
 		case event := <-stream.queue:
-			if ctx.Err() != nil {
-				return contextDoneMsg{}
-			}
-
-			return eventMsg(event)
+			return messageForEvent(ctx, event)
 		case <-ctx.Done():
 			return contextDoneMsg{}
 		}
 	}
+}
+
+//nolint:ireturn // Bubble Tea commands communicate through the tea.Msg extension contract.
+func messageForEvent(ctx context.Context, event application.Event) tea.Msg {
+	if ctx.Err() != nil {
+		return contextDoneMsg{}
+	}
+
+	return eventMsg(event)
 }
 
 // Run opens one Bubble Tea session over an injected application façade.

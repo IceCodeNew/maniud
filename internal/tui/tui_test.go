@@ -339,7 +339,7 @@ func TestModelRoutesMessages(t *testing.T) {
 	}
 }
 
-func TestEventStreamIsBoundedAndCancellable(t *testing.T) {
+func TestEventStreamIsBounded(t *testing.T) {
 	t.Parallel()
 
 	stream := NewEventStream()
@@ -355,6 +355,10 @@ func TestEventStreamIsBoundedAndCancellable(t *testing.T) {
 		application.Event(event).Kind != application.EventPlanPrepared {
 		t.Fatalf("wait() = %#v", event)
 	}
+}
+
+func TestEventStreamPrioritizesCancellation(t *testing.T) {
+	t.Parallel()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -370,6 +374,9 @@ func TestEventStreamIsBoundedAndCancellable(t *testing.T) {
 	}
 	if _, valid := waitForContext(ctx)().(contextDoneMsg); !valid {
 		t.Fatal("waitForContext() did not return contextDoneMsg")
+	}
+	if _, valid := messageForEvent(ctx, application.Event{}).(contextDoneMsg); !valid {
+		t.Fatal("messageForEvent() did not prioritize cancellation")
 	}
 }
 
