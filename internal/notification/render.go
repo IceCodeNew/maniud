@@ -20,7 +20,7 @@ type notificationMessage struct {
 }
 
 func renderApplicationEvent(event application.Event) (notificationMessage, bool) {
-	title, supported := notificationEventTitle(event.Kind)
+	title, supported, _ := notificationEventTitle(event.Kind)
 	if !supported {
 		return notificationMessage{}, false
 	}
@@ -61,34 +61,40 @@ func renderApplicationEvent(event application.Event) (notificationMessage, bool)
 // SupportsEvent reports whether an application event can produce an external
 // notification.
 func SupportsEvent(kind application.EventKind) bool {
-	_, supported := notificationEventTitle(kind)
+	_, supported, _ := notificationEventTitle(kind)
 
 	return supported
 }
 
-func notificationEventTitle(kind application.EventKind) (string, bool) {
+func ignoredApplicationEvent(kind application.EventKind) bool {
+	_, _, ignored := notificationEventTitle(kind)
+
+	return ignored
+}
+
+func notificationEventTitle(kind application.EventKind) (string, bool, bool) {
 	switch kind {
 	case application.EventPlanPrepared:
-		return planPreparedNotificationTitle, true
+		return planPreparedNotificationTitle, true, false
 	case application.EventRuntimeEffectStarted:
-		return "maniud runtime change started", true
+		return "maniud runtime change started", true, false
 	case application.EventTransactionSucceeded:
-		return "maniud transaction succeeded", true
+		return "maniud transaction succeeded", true, false
 	case application.EventTransactionRestored:
-		return "maniud automatic recovery succeeded", true
+		return "maniud automatic recovery succeeded", true, false
 	case application.EventTransactionFailed:
-		return "maniud transaction failed", true
+		return "maniud transaction failed", true, false
 	case application.EventGitOpsServiceApplyFailed:
-		return "maniud GitOps service apply failed", true
+		return "maniud GitOps service apply failed", true, false
 	case application.EventDaemonUnavailable:
-		return "maniud daemon unavailable", true
+		return "maniud daemon unavailable", true, false
 	case application.EventActionIntentRecorded,
 		application.EventPostconditionObserved,
 		application.EventActionCompleted,
 		application.EventTransactionDegraded:
-		return "", false
+		return "", false, true
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 

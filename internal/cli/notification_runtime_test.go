@@ -78,7 +78,7 @@ func TestOpenProcessNotificationsReportsConfigurationFailures(t *testing.T) {
 	}
 }
 
-func TestProcessNotificationsFiltersInternalEventsAndDrainsDiagnostics(t *testing.T) {
+func TestProcessNotificationsFiltersInternalEvents(t *testing.T) {
 	t.Parallel()
 
 	var stderr bytes.Buffer
@@ -89,17 +89,14 @@ func TestProcessNotificationsFiltersInternalEventsAndDrainsDiagnostics(t *testin
 	if err != nil || notifications.dispatcher == nil {
 		t.Fatalf("openProcessNotifications(Bark) = %#v, %v", notifications, err)
 	}
-	if (&notifications).TryPublish(application.Event{Kind: application.EventActionCompleted}) {
-		t.Fatal("internal event was accepted for notification delivery")
+	if !(&notifications).TryPublish(application.Event{Kind: application.EventActionCompleted}) {
+		t.Fatal("internal event was reported as dropped")
 	}
-	if notifications.DroppedEvents() != 1 {
-		t.Fatalf("notification dropped events = %d, want 1", notifications.DroppedEvents())
+	if notifications.DroppedEvents() != 0 {
+		t.Fatalf("notification dropped events = %d, want 0", notifications.DroppedEvents())
 	}
 	notifications.Shutdown(t.Context())
-
-	want := "maniud notification: target=bark event=unknown code=invalid_event: " +
-		"notification event was invalid\n"
-	if stderr.String() != want {
-		t.Fatalf("notification diagnostic = %q, want %q", stderr.String(), want)
+	if stderr.Len() != 0 {
+		t.Fatalf("notification diagnostic = %q", stderr.String())
 	}
 }

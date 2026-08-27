@@ -47,6 +47,31 @@ func TestDispatcherDoesNotStartWithoutTargets(t *testing.T) {
 	}
 }
 
+func TestDispatcherIgnoresInternalApplicationEvents(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := NewDispatcher(&HTTPSender{}, &HTTPSender{}, nil)
+	if dispatcher == nil {
+		t.Fatal("NewDispatcher() = nil")
+	}
+	for _, kind := range []application.EventKind{
+		application.EventActionIntentRecorded,
+		application.EventPostconditionObserved,
+		application.EventActionCompleted,
+		application.EventTransactionDegraded,
+	} {
+		if !dispatcher.TryPublish(application.Event{Kind: kind}) {
+			t.Fatalf("TryPublish(%q) reported a drop", kind)
+		}
+	}
+	if err := dispatcher.Shutdown(t.Context()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if dispatcher.DroppedEvents() != 0 {
+		t.Fatalf("DroppedEvents() = %d, want 0", dispatcher.DroppedEvents())
+	}
+}
+
 func TestDispatcherDropsContendedAdmissionForPublicTargets(t *testing.T) {
 	t.Parallel()
 

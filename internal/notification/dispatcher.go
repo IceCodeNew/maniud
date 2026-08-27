@@ -150,6 +150,9 @@ func (dispatcher *Dispatcher) TryPublish(event application.Event) bool {
 	if dispatcher == nil {
 		return false
 	}
+	if ignoredApplicationEvent(event.Kind) {
+		return true
+	}
 	message, valid := renderApplicationEvent(event)
 	if !valid {
 		dispatcher.dropAll("", DiagnosticInvalidEvent, func(target *targetDispatcher) {
