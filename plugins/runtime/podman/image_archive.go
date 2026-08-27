@@ -2,6 +2,7 @@ package podman
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -29,7 +30,10 @@ func (client *Client) ResolveImageUser(
 	specification string,
 ) (string, error) {
 	before, err := client.ProbeImage(ctx, expected)
-	if !observedImageMatches(before, expected, err) {
+	if err != nil {
+		return "", err
+	}
+	if !observedImageMatches(before, expected) {
 		return "", ErrProtocol
 	}
 
@@ -41,7 +45,10 @@ func (client *Client) ResolveImageUser(
 	}
 
 	after, err := client.ProbeImage(ctx, expected)
-	if !observedImageMatches(after, expected, err) || after != before {
+	if err != nil {
+		return "", err
+	}
+	if !observedImageMatches(after, expected) || after != before {
 		return "", ErrProtocol
 	}
 
@@ -88,7 +95,18 @@ func (client *Client) resolveSavedImageUser(
 		},
 	)
 	closeErr := response.Body.Close()
-	if !resolvedPodmanArchiveMatches(response, analysis, expected, analyzeErr, closeErr) {
+	if analyzeErr != nil {
+		if errors.Is(analyzeErr, imagearchive.ErrInvalidArchive) ||
+			errors.Is(analyzeErr, imagearchive.ErrInvalidSource) {
+			return "", ErrProtocol
+		}
+
+		return "", fmt.Errorf("analyze Podman image export: %w", analyzeErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close Podman image export: %w", closeErr)
+	}
+	if !resolvedPodmanArchiveMatches(response, analysis, expected) {
 		return "", ErrProtocol
 	}
 
@@ -99,11 +117,8 @@ func resolvedPodmanArchiveMatches(
 	response *http.Response,
 	analysis imagearchive.Analysis,
 	expected domain.ImageIdentity,
-	analyzeErr error,
-	closeErr error,
 ) bool {
-	return analyzeErr == nil && closeErr == nil &&
-		(response.ContentLength < 0 || response.ContentLength == analysis.ArchiveSize) &&
+	return (response.ContentLength < 0 || response.ContentLength == analysis.ArchiveSize) &&
 		analysis.MemberIndex == 0 && analysis.Identity.ImageConfig == expected.ImageConfig &&
 		analysis.Identity.Platform == expected.Platform
 }
@@ -111,9 +126,8 @@ func resolvedPodmanArchiveMatches(
 func observedImageMatches(
 	probe application.ImageProbe,
 	expected domain.ImageIdentity,
-	err error,
 ) bool {
-	return err == nil && probe.State == application.ImageProbeObserved && probe.Matches(expected)
+	return probe.State == application.ImageProbeObserved && probe.Matches(expected)
 }
 
 func validPodmanSavedArchive(response *http.Response) bool {

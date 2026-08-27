@@ -14,13 +14,27 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imagearchive"
+	"github.com/IceCodeNew/maniud/internal/imagerootfs"
 )
 
 const testPodmanImageUser = "service"
 
+type podmanCancelOnCloseBody struct {
+	io.Reader
+
+	cancel context.CancelFunc
+}
+
+func (body podmanCancelOnCloseBody) Close() error {
+	body.cancel()
+
+	return nil
+}
+
 type podmanImageUserFailureTest struct {
 	name          string
 	specification string
+	want          error
 	export        func(http.ResponseWriter)
 	after         func(http.ResponseWriter)
 }
@@ -63,7 +77,10 @@ func TestResolveImageUserReadsImmutablePodmanExport(t *testing.T) {
 	if err != nil || resolved != "1001:1002" || requests.Load() != 3 {
 		t.Fatalf("ResolveImageUser() = %q, %v, requests %d", resolved, err, requests.Load())
 	}
-	if _, err = (*Client)(nil).ResolveImageUser(t.Context(), expected, testPodmanImageUser); !errors.Is(err, ErrProtocol) {
+	if _, err = (*Client)(nil).ResolveImageUser(t.Context(), expected, testPodmanImageUser); !errors.Is(
+		err,
+		ErrUnsupportedWorkload,
+	) {
 		t.Fatalf("ResolveImageUser(nil client) = %v", err)
 	}
 }
@@ -103,6 +120,7 @@ func podmanImageUserFailureTests(raw []byte) []podmanImageUserFailureTest {
 		{
 			name:          "export request",
 			specification: testPodmanImageUser,
+			want:          ErrProtocol,
 			export: func(writer http.ResponseWriter) {
 				writer.WriteHeader(http.StatusInternalServerError)
 			},
@@ -110,6 +128,7 @@ func podmanImageUserFailureTests(raw []byte) []podmanImageUserFailureTest {
 		{
 			name:          "export response",
 			specification: testPodmanImageUser,
+			want:          ErrProtocol,
 			export: func(writer http.ResponseWriter) {
 				writer.Header().Set(podmanContentType, podmanJSONType)
 				_, _ = io.WriteString(writer, `{}`)
@@ -118,6 +137,7 @@ func podmanImageUserFailureTests(raw []byte) []podmanImageUserFailureTest {
 		{
 			name:          "archive analysis",
 			specification: testPodmanImageUser,
+			want:          ErrProtocol,
 			export: func(writer http.ResponseWriter) {
 				writer.Header().Set(podmanContentType, podmanArchiveContentType)
 				_, _ = io.WriteString(writer, "not an archive")
@@ -126,6 +146,7 @@ func podmanImageUserFailureTests(raw []byte) []podmanImageUserFailureTest {
 		{
 			name:          "post-probe failure",
 			specification: testPodmanImageUser,
+			want:          ErrProtocol,
 			export: func(writer http.ResponseWriter) {
 				writer.Header().Set(podmanContentType, podmanArchiveContentType)
 				_, _ = writer.Write(raw)
@@ -135,14 +156,44 @@ func podmanImageUserFailureTests(raw []byte) []podmanImageUserFailureTest {
 			},
 		},
 		{
+			name:          "post-probe missing",
+			specification: testPodmanImageUser,
+			want:          ErrProtocol,
+			export: func(writer http.ResponseWriter) {
+				writer.Header().Set(podmanContentType, podmanArchiveContentType)
+				_, _ = writer.Write(raw)
+			},
+			after: writeMissingPodmanImage,
+		},
+		{
 			name:          "user resolution",
 			specification: "missing-user",
+			want:          imagerootfs.ErrUnknownUser,
 			export: func(writer http.ResponseWriter) {
 				writer.Header().Set(podmanContentType, podmanArchiveContentType)
 				_, _ = writer.Write(raw)
 			},
 		},
 	}
+}
+
+func TestResolveImageUserRejectsMissingInitialImage(t *testing.T) {
+	t.Parallel()
+
+	_, expected := podmanUserArchiveFixture(t)
+	client := connectedPodmanImageClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writeMissingPodmanImage(writer)
+	})
+	resolved, err := client.ResolveImageUser(t.Context(), expected, testPodmanImageUser)
+	if resolved != "" || !errors.Is(err, ErrProtocol) {
+		t.Fatalf("ResolveImageUser(missing) = %q, %v", resolved, err)
+	}
+}
+
+func writeMissingPodmanImage(writer http.ResponseWriter) {
+	writer.Header().Set(podmanContentType, podmanJSONType)
+	writer.WriteHeader(http.StatusNotFound)
+	_, _ = io.WriteString(writer, `{"cause":"image unknown","message":"image unknown","response":404}`)
 }
 
 func assertPodmanImageUserFailure(
@@ -168,8 +219,8 @@ func assertPodmanImageUserFailure(
 		}
 	})
 	resolved, err := client.ResolveImageUser(t.Context(), expected, test.specification)
-	if resolved != "" || err == nil {
-		t.Fatalf("ResolveImageUser() = %q, %v", resolved, err)
+	if resolved != "" || !errors.Is(err, test.want) {
+		t.Fatalf("ResolveImageUser() = %q, %v, want %v", resolved, err, test.want)
 	}
 }
 
@@ -189,8 +240,97 @@ func TestResolveImageUserContainsExportTransportFailure(t *testing.T) {
 		return transport.RoundTrip(request)
 	})
 	resolved, err := client.ResolveImageUser(t.Context(), expected, testPodmanImageUser)
-	if resolved != "" || err == nil {
+	if resolved != "" || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrProtocol) {
 		t.Fatalf("ResolveImageUser() = %q, %v", resolved, err)
+	}
+}
+
+func TestResolveSavedImageUserPreservesArchiveFailures(t *testing.T) {
+	t.Parallel()
+
+	raw, expected := podmanUserArchiveFixture(t)
+	drifted := expected
+	drifted.ImageConfig = domain.Hash([]byte("another image config"))
+	tests := []struct {
+		name     string
+		expected domain.ImageIdentity
+		body     func() io.ReadCloser
+		want     error
+	}{
+		{
+			name: "archive read", expected: expected, want: io.ErrUnexpectedEOF,
+			body: func() io.ReadCloser {
+				return &podmanArchiveTestBody{data: nil, readErr: io.ErrUnexpectedEOF, closeErr: nil}
+			},
+		},
+		{
+			name: "archive close", expected: expected, want: errPodmanImageTest,
+			body: func() io.ReadCloser {
+				return &podmanArchiveTestBody{data: bytes.Clone(raw), readErr: nil, closeErr: errPodmanImageTest}
+			},
+		},
+		{
+			name: "archive identity", expected: drifted, want: ErrProtocol,
+			body: func() io.ReadCloser {
+				return &podmanArchiveTestBody{data: bytes.Clone(raw), readErr: nil, closeErr: nil}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := connectedPodmanImageClient(t, func(http.ResponseWriter, *http.Request) {})
+			client.httpClient.Transport = podmanRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // The archive proof reads only these response fields.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{podmanContentType: {podmanArchiveContentType}},
+					Body:          test.body(),
+					ContentLength: int64(len(raw)),
+					Request:       request,
+				}, nil
+			})
+			resolved, err := client.resolveSavedImageUser(t.Context(), test.expected, testPodmanImageUser)
+			if resolved != "" || !errors.Is(err, test.want) {
+				t.Fatalf("resolveSavedImageUser() = %q, %v, want %v", resolved, err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveImageUserPreservesProbeCancellation(t *testing.T) {
+	t.Parallel()
+
+	raw, expected := podmanUserArchiveFixture(t)
+	client := connectedPodmanImageClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writePodmanJSON(writer, podmanUserImageDocument(expected))
+	})
+
+	cancelled, cancelBefore := context.WithCancel(t.Context())
+	cancelBefore()
+	if _, err := client.ResolveImageUser(cancelled, expected, testPodmanImageUser); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResolveImageUser(initial cancellation) = %v", err)
+	}
+
+	ctx, cancelAfter := context.WithCancel(t.Context())
+	transport := client.httpClient.Transport
+	client.httpClient.Transport = podmanRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(request.URL.Path, "/get") {
+			return &http.Response{ //nolint:exhaustruct // The archive proof reads only these response fields.
+				StatusCode: http.StatusOK,
+				Header:     http.Header{podmanContentType: {podmanArchiveContentType}},
+				Body: podmanCancelOnCloseBody{
+					Reader: bytes.NewReader(raw), cancel: cancelAfter,
+				},
+				ContentLength: int64(len(raw)),
+				Request:       request,
+			}, nil
+		}
+
+		return transport.RoundTrip(request)
+	})
+	if _, err := client.ResolveImageUser(ctx, expected, testPodmanImageUser); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResolveImageUser(post-probe cancellation) = %v", err)
 	}
 }
 
