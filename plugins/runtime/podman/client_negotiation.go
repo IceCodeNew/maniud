@@ -336,26 +336,28 @@ func validSemanticPrerelease(value string) bool {
 		return false
 	}
 	for identifier := range strings.SplitSeq(value, ".") {
-		if identifier == "" {
-			return false
-		}
-		numeric := true
-		for index := range identifier {
-			character := identifier[index]
-			if character < '0' || character > '9' {
-				numeric = false
-			}
-			if character != '-' && (character < '0' || character > '9') &&
-				(character < 'A' || character > 'Z') && (character < 'a' || character > 'z') {
-				return false
-			}
-		}
-		if numeric && len(identifier) > 1 && identifier[0] == '0' {
+		if !validSemanticPrereleaseIdentifier(identifier) {
 			return false
 		}
 	}
 
 	return true
+}
+
+func validSemanticPrereleaseIdentifier(identifier string) bool {
+	if identifier == "" {
+		return false
+	}
+	numeric := true
+	for index := range identifier {
+		character := identifier[index]
+		numeric = numeric && character >= '0' && character <= '9'
+		if !strings.ContainsRune("-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", rune(character)) {
+			return false
+		}
+	}
+
+	return !numeric || len(identifier) == 1 || identifier[0] != '0'
 }
 
 func (version semanticVersion) String() string {
