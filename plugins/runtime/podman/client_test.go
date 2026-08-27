@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -106,10 +107,13 @@ func TestConnectNegotiatesAndPinsNativeLibpodScope(t *testing.T) {
 
 func testPodmanNegotiation(t *testing.T, test podmanNegotiationTest) {
 	t.Helper()
+	var requestsLock sync.Mutex
 	requests := make([]string, 0, len(test.wantPaths))
 	negotiation := podmanNegotiationHandler(test.maximum, test.minimum, test.maximum)
 	path := startPodmanTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestsLock.Lock()
 		requests = append(requests, request.URL.Path)
+		requestsLock.Unlock()
 		if request.URL.Path == testPodmanPingPath && test.pingRoute != testPodmanPingPath {
 			http.NotFound(writer, request)
 
@@ -129,10 +133,13 @@ func testPodmanNegotiation(t *testing.T, test podmanNegotiationTest) {
 		Product: libpodAPIVersion, OS: podmanOSLinux, Architecture: podmanArchAMD64,
 	}
 	apiPath := client.apiPath("/containers/json")
+	requestsLock.Lock()
+	recordedRequests := slices.Clone(requests)
+	requestsLock.Unlock()
 	got := podmanNegotiationEvidence{
 		Version: version, ClientVersion: client.Version(), ScopePinned: client.scope != (domain.Digest{}),
 		PeerPinned: client.peer != (peerIdentity{}), Protocol: client.protocol.String(),
-		APIPath: apiPath, Requests: requests,
+		APIPath: apiPath, Requests: recordedRequests,
 	}
 	want := podmanNegotiationEvidence{
 		Version: wantVersion, ClientVersion: wantVersion, ScopePinned: true, PeerPinned: true,
@@ -232,9 +239,9 @@ func TestPingFallbackPropagatesTransportFailure(t *testing.T) {
 
 	client := connectedPodmanImageClient(t, func(http.ResponseWriter, *http.Request) {})
 	client.CloseIdleConnections()
-	var requests int
+	var requests atomic.Int32
 	client.httpClient = &http.Client{Transport: podmanRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		requests++
+		requests.Add(1)
 		if request.URL.Path == testPodmanPingPath {
 			return &http.Response{
 				StatusCode: http.StatusNotFound,
@@ -245,8 +252,8 @@ func TestPingFallbackPropagatesTransportFailure(t *testing.T) {
 
 		return nil, errPodmanClientTest
 	})}
-	if _, err := client.ping(context.Background()); !errors.Is(err, ErrUnavailable) || requests != 2 {
-		t.Fatalf("ping(fallback transport) = %v, requests=%d", err, requests)
+	if _, err := client.ping(context.Background()); !errors.Is(err, ErrUnavailable) || requests.Load() != 2 {
+		t.Fatalf("ping(fallback transport) = %v, requests=%d", err, requests.Load())
 	}
 }
 
