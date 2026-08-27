@@ -132,8 +132,14 @@ func TestNativeTaskStopLifecycle(t *testing.T) {
 
 	fixture.task.Process.Status = tasktypes.Status_RUNNING
 	waits := 0
-	fixture.tasks.wait = func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error) {
+	fixture.tasks.waitContext = func(
+		waitContext context.Context,
+		_ *tasksapi.WaitRequest,
+	) (*tasksapi.WaitResponse, error) {
 		waits++
+		if _, bounded := waitContext.Deadline(); !bounded {
+			t.Fatal("Stop timeout wait context has no deadline")
+		}
 		if waits == 1 {
 			return nil, context.DeadlineExceeded
 		}
@@ -143,6 +149,81 @@ func TestNativeTaskStopLifecycle(t *testing.T) {
 	if err := fixture.backend.Stop(context.Background(), fixture.container.GetID(), time.Nanosecond); err != nil ||
 		waits != 2 || len(kills) != 4 {
 		t.Fatalf("Stop(timeout) = %v, waits %d, signals %#v", err, waits, kills)
+	}
+}
+
+//nolint:funlen // The table covers each task-disappearance race in the stop sequence.
+func TestNativeTaskStopTreatsDisappearingTaskAsStopped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(nativeManagedFixture)
+	}{
+		{name: "resume", mutate: func(fixture nativeManagedFixture) {
+			fixture.task.Process.Status = tasktypes.Status_PAUSED
+			fixture.tasks.resume = func(*tasksapi.ResumeTaskRequest) (*emptypb.Empty, error) {
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+		}},
+		{name: "TERM", mutate: func(fixture nativeManagedFixture) {
+			fixture.tasks.kill = func(*tasksapi.KillRequest) (*emptypb.Empty, error) {
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+		}},
+		{name: "wait", mutate: func(fixture nativeManagedFixture) {
+			fixture.tasks.wait = func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error) {
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+		}},
+		{name: "KILL", mutate: func(fixture nativeManagedFixture) {
+			kills := 0
+			fixture.tasks.kill = func(*tasksapi.KillRequest) (*emptypb.Empty, error) {
+				kills++
+				if kills == 2 {
+					return nil, status.Error(codes.NotFound, "missing")
+				}
+
+				return &emptypb.Empty{}, nil
+			}
+			fixture.tasks.wait = func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error) {
+				return nil, status.Error(codes.DeadlineExceeded, "timeout")
+			}
+		}},
+		{name: "final wait", mutate: func(fixture nativeManagedFixture) {
+			waits := 0
+			fixture.tasks.wait = func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error) {
+				waits++
+				if waits == 1 {
+					return nil, status.Error(codes.DeadlineExceeded, "timeout")
+				}
+
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := testNativeManagedBackend(t)
+			configureContainerUpdate(fixture)
+			fixture.task.Process = &tasktypes.Process{
+				ContainerID: fixture.container.GetID(), ID: fixture.container.GetID(),
+				Status: tasktypes.Status_RUNNING,
+			}
+			fixture.tasks.kill = func(*tasksapi.KillRequest) (*emptypb.Empty, error) {
+				return &emptypb.Empty{}, nil
+			}
+			fixture.tasks.wait = func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error) {
+				return &tasksapi.WaitResponse{ExitedAt: timestamppb.Now()}, nil
+			}
+			test.mutate(fixture)
+
+			if err := fixture.backend.Stop(t.Context(), fixture.container.GetID(), time.Second); err != nil {
+				t.Fatalf("Stop() error = %v", err)
+			}
+		})
 	}
 }
 

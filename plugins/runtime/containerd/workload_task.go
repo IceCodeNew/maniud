@@ -131,7 +131,6 @@ func (backend *nativeWorkloadBackendV1) createTask(ctx context.Context, identifi
 	return nil
 }
 
-//nolint:cyclop // Stop handles each task lifecycle and the TERM-to-KILL timeout sequence.
 func (backend *nativeWorkloadBackendV1) Stop(
 	ctx context.Context,
 	identifier string,
@@ -144,6 +143,16 @@ func (backend *nativeWorkloadBackendV1) Stop(
 	if err = backend.setRestartState(ctx, identifier, containerdRestartDesiredStopped, true); err != nil {
 		return err
 	}
+
+	return backend.stopTask(ctx, identifier, timeout)
+}
+
+//nolint:cyclop // stopTask handles each task lifecycle and the TERM-to-KILL timeout sequence.
+func (backend *nativeWorkloadBackendV1) stopTask(
+	ctx context.Context,
+	identifier string,
+	timeout time.Duration,
+) error {
 	lifecycle, found, err := backend.taskLifecycle(ctx, identifier)
 	if err != nil || !found || lifecycle == application.WorkloadLifecycleCreated ||
 		lifecycle == application.WorkloadLifecycleExited {
@@ -151,24 +160,44 @@ func (backend *nativeWorkloadBackendV1) Stop(
 	}
 	if lifecycle == application.WorkloadLifecyclePaused {
 		if _, err = backend.tasks.Resume(ctx, &tasksapi.ResumeTaskRequest{ContainerID: identifier}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				return nil
+			}
+
 			return classifyRPCError(err)
 		}
 	}
 	if _, err = backend.tasks.Kill(ctx, &tasksapi.KillRequest{
 		ContainerID: identifier, Signal: uint32(syscall.SIGTERM), All: true,
 	}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+
 		return classifyRPCError(err)
 	}
 	waitContext, cancel := context.WithTimeout(ctx, timeout)
 	wait, waitErr := backend.tasks.Wait(waitContext, &tasksapi.WaitRequest{ContainerID: identifier})
 	cancel()
+	if status.Code(waitErr) == codes.NotFound {
+		return nil
+	}
 	if errors.Is(waitErr, context.DeadlineExceeded) || status.Code(waitErr) == codes.DeadlineExceeded {
 		if _, err = backend.tasks.Kill(ctx, &tasksapi.KillRequest{
 			ContainerID: identifier, Signal: uint32(syscall.SIGKILL), All: true,
 		}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				return nil
+			}
+
 			return classifyRPCError(err)
 		}
-		wait, waitErr = backend.tasks.Wait(ctx, &tasksapi.WaitRequest{ContainerID: identifier})
+		killWaitContext, killWaitCancel := context.WithTimeout(ctx, timeout)
+		wait, waitErr = backend.tasks.Wait(killWaitContext, &tasksapi.WaitRequest{ContainerID: identifier})
+		killWaitCancel()
+		if status.Code(waitErr) == codes.NotFound {
+			return nil
+		}
 	}
 	if waitErr != nil {
 		return classifyRPCError(waitErr)

@@ -70,13 +70,14 @@ func (client fakeContainersAPI) Delete(
 }
 
 type fakeTasksAPI struct {
-	create func(*tasksapi.CreateTaskRequest) (*tasksapi.CreateTaskResponse, error)
-	get    func(*tasksapi.GetRequest) (*tasksapi.GetResponse, error)
-	start  func(*tasksapi.StartRequest) (*tasksapi.StartResponse, error)
-	kill   func(*tasksapi.KillRequest) (*emptypb.Empty, error)
-	resume func(*tasksapi.ResumeTaskRequest) (*emptypb.Empty, error)
-	wait   func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error)
-	delete func(*tasksapi.DeleteTaskRequest) (*tasksapi.DeleteResponse, error)
+	create      func(*tasksapi.CreateTaskRequest) (*tasksapi.CreateTaskResponse, error)
+	get         func(*tasksapi.GetRequest) (*tasksapi.GetResponse, error)
+	start       func(*tasksapi.StartRequest) (*tasksapi.StartResponse, error)
+	kill        func(*tasksapi.KillRequest) (*emptypb.Empty, error)
+	resume      func(*tasksapi.ResumeTaskRequest) (*emptypb.Empty, error)
+	wait        func(*tasksapi.WaitRequest) (*tasksapi.WaitResponse, error)
+	waitContext func(context.Context, *tasksapi.WaitRequest) (*tasksapi.WaitResponse, error)
+	delete      func(*tasksapi.DeleteTaskRequest) (*tasksapi.DeleteResponse, error)
 }
 
 func (client fakeTasksAPI) Create(
@@ -120,10 +121,14 @@ func (client fakeTasksAPI) Resume(
 }
 
 func (client fakeTasksAPI) Wait(
-	_ context.Context,
+	ctx context.Context,
 	request *tasksapi.WaitRequest,
 	_ ...grpc.CallOption,
 ) (*tasksapi.WaitResponse, error) {
+	if client.waitContext != nil {
+		return client.waitContext(ctx, request)
+	}
+
 	return client.wait(request)
 }
 
