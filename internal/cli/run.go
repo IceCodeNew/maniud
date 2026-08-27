@@ -8,10 +8,17 @@ import (
 	"os"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
 // Run parses and executes one command without terminating the process.
-func Run(ctx context.Context, args []string, _ io.Reader, stdout, stderr io.Writer) int {
+func Run(
+	ctx context.Context,
+	args []string,
+	_ io.Reader,
+	stdout, stderr io.Writer,
+	runtimes runtimeplugin.Set,
+) int {
 	return runProduction(
 		ctx,
 		args,
@@ -19,6 +26,7 @@ func Run(ctx context.Context, args []string, _ io.Reader, stdout, stderr io.Writ
 		stderr,
 		environmentMap(os.Environ()),
 		os.Getwd,
+		runtimes,
 	)
 }
 
@@ -29,9 +37,10 @@ func runProduction(
 	stderr io.Writer,
 	environment map[string]string,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) int {
 	return runWithEnvironment(ctx, args, stdout, environment, func(arguments genInvocation) error {
-		dependencies, err := defaultGenDependencies(environment, stderr, getWorkingDirectory)
+		dependencies, err := defaultGenDependencies(environment, stderr, getWorkingDirectory, runtimes)
 		if err != nil {
 			return err
 		}
@@ -39,18 +48,20 @@ func runProduction(
 		err = executeGen(ctx, arguments, stdout, dependencies)
 		writeGenFailureHint(stderr, err)
 
-		return err
+		return runtimes.Classify(err)
 	}, func(arguments applyInvocation) error {
-		dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory)
+		dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, runtimes)
 		if err != nil {
 			return err
 		}
 
-		return executeApply(ctx, arguments, stdout, dependencies)
+		return runtimes.Classify(executeApply(ctx, arguments, stdout, dependencies))
 	}, func(arguments gitOpsInitInvocation) error {
 		return executeGitOpsInit(ctx, arguments, environment)
 	}, func(arguments daemonInvocation) error {
-		return executeDaemon(ctx, arguments, stdout, environment, stderr, getWorkingDirectory)
+		return runtimes.Classify(executeDaemon(
+			ctx, arguments, stdout, environment, stderr, getWorkingDirectory, runtimes,
+		))
 	}, func(arguments doctorInvocation) error {
 		return executeDoctor(ctx, arguments, stdout, environment)
 	})

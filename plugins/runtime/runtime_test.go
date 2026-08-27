@@ -70,6 +70,16 @@ func TestSetRejectsUnknownAndOmittedRuntimes(t *testing.T) {
 	if _, err = set.Select(domain.RuntimeKind("invalid"), nil, nil); !errors.Is(err, application.ErrInvalidRequest) {
 		t.Fatalf("Select(invalid) error = %v", err)
 	}
+	if _, err = set.ResolveLocalImage(
+		t.Context(), domain.RuntimePodman, nil, imageref.Source{}, domain.Platform{},
+	); !errors.Is(err, ErrNotBuilt) {
+		t.Fatalf("ResolveLocalImage(omitted) error = %v", err)
+	}
+	if _, err = set.ResolveLocalImage(
+		t.Context(), domain.RuntimeKind("invalid"), nil, imageref.Source{}, domain.Platform{},
+	); !errors.Is(err, application.ErrInvalidRequest) {
+		t.Fatalf("ResolveLocalImage(invalid) error = %v", err)
+	}
 }
 
 func TestSetResolvesLocalImagesAndClassifiesAvailability(t *testing.T) {
@@ -115,6 +125,9 @@ func TestSetRejectsMissingLocalImageCapability(t *testing.T) {
 		t.Context(), domain.RuntimeContainerd, nil, imageref.Source{}, domain.Platform{},
 	); !errors.Is(err, ErrInvalidPlugin) {
 		t.Fatalf("ResolveLocalImage() error = %v", err)
+	}
+	if got := set.Classify(errRuntimePluginTest); !errors.Is(got, errRuntimePluginTest) {
+		t.Fatalf("Classify(unmatched) = %v", got)
 	}
 }
 

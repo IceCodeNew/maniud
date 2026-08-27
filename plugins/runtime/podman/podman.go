@@ -1,4 +1,3 @@
-// Package podman provides the statically linked Podman Libpod capability.
 package podman
 
 import (
@@ -12,7 +11,6 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
-	podmanruntime "github.com/IceCodeNew/maniud/internal/runtime/podman"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
@@ -29,7 +27,7 @@ func New() runtimeplugin.Plugin {
 	return runtimeplugin.Plugin{
 		Kind:        domain.RuntimePodman,
 		Open:        open,
-		Unavailable: func(err error) bool { return errors.Is(err, podmanruntime.ErrUnavailable) },
+		Unavailable: func(err error) bool { return errors.Is(err, ErrUnavailable) },
 	}
 }
 
@@ -43,7 +41,7 @@ func open(
 	if err != nil {
 		return nil, err
 	}
-	client, _, err := podmanruntime.Connect(ctx, path)
+	client, _, err := Connect(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("connect Podman runtime: %w", err)
 	}
@@ -53,13 +51,13 @@ func open(
 
 func socketPath(environment runtimeplugin.Environment, effectiveUserID int) (string, error) {
 	if effectiveUserID < 0 {
-		return "", podmanruntime.ErrInvalidEndpoint
+		return "", ErrInvalidEndpoint
 	}
 	host := environmentValue(environment, containerHostEnvironment)
 	if host != "" {
 		path, found := strings.CutPrefix(host, "unix://")
 		if !found || !validAbsolutePath(path) {
-			return "", podmanruntime.ErrInvalidEndpoint
+			return "", ErrInvalidEndpoint
 		}
 
 		return path, nil
@@ -68,7 +66,7 @@ func socketPath(environment runtimeplugin.Environment, effectiveUserID int) (str
 	runtimeDirectory := environmentValue(environment, xdgRuntimeEnvironment)
 	if runtimeDirectory != "" {
 		if !validAbsolutePath(runtimeDirectory) {
-			return "", podmanruntime.ErrInvalidEndpoint
+			return "", ErrInvalidEndpoint
 		}
 
 		return filepath.Join(runtimeDirectory, socketDirectory, socketName), nil

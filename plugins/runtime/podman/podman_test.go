@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	podmanruntime "github.com/IceCodeNew/maniud/internal/runtime/podman"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
@@ -54,7 +53,7 @@ func TestSocketPathUsesOnlyLocalUnixEndpoints(t *testing.T) {
 		t.Fatalf("socketPath(rootless default) = %q, %v", got, err)
 	}
 	got, err = socketPath(testEnvironment(nil), -1)
-	if got != "" || !errors.Is(err, podmanruntime.ErrInvalidEndpoint) {
+	if got != "" || !errors.Is(err, ErrInvalidEndpoint) {
 		t.Fatalf("socketPath(invalid user) = %q, %v", got, err)
 	}
 }
@@ -63,10 +62,40 @@ func TestPluginClassifiesPodmanAvailability(t *testing.T) {
 	t.Parallel()
 
 	plugin := New()
-	if plugin.Open == nil || !plugin.Unavailable(podmanruntime.ErrUnavailable) ||
-		plugin.Unavailable(podmanruntime.ErrInvalidEndpoint) {
+	if plugin.Open == nil || !plugin.Unavailable(ErrUnavailable) ||
+		plugin.Unavailable(ErrInvalidEndpoint) {
 		t.Fatalf("New() = %#v", plugin)
 	}
+	if got := environmentValue(nil, containerHostEnvironment); got != "" {
+		t.Fatalf("environmentValue(nil) = %q", got)
+	}
+}
+
+func TestPluginOpenContainsConfigurationAndConnectionFailures(t *testing.T) {
+	t.Parallel()
+
+	if _, err := open(t.Context(), testEnvironment(map[string]string{
+		containerHostEnvironment: "invalid://engine",
+	}), nil); !errors.Is(err, ErrInvalidEndpoint) {
+		t.Fatalf("open(invalid endpoint) error = %v", err)
+	}
+	if _, err := open(t.Context(), testEnvironment(map[string]string{
+		containerHostEnvironment: "unix:///missing/podman.sock",
+	}), nil); !errors.Is(err, ErrInvalidEndpoint) {
+		t.Fatalf("open(missing endpoint) error = %v", err)
+	}
+
+	path := startPodmanTestServer(
+		t,
+		podmanNegotiationHandler(maximumLibpodAPIVersion, testLibpodServerMinimum, maximumLibpodAPIVersion),
+	)
+	runtime, err := open(t.Context(), testEnvironment(map[string]string{
+		containerHostEnvironment: "unix://" + path,
+	}), nil)
+	if err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+	runtime.CloseIdleConnections()
 }
 
 func testEnvironment(values map[string]string) runtimeplugin.Environment {

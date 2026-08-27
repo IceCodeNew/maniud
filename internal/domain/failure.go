@@ -13,6 +13,8 @@ const (
 	ErrorApplyFailed ErrorCode = "apply_failed"
 	// ErrorGenerationFailed identifies generation that could not complete.
 	ErrorGenerationFailed ErrorCode = "generation_failed"
+	// ErrorRuntimeNotBuilt identifies a selected runtime omitted from the binary.
+	ErrorRuntimeNotBuilt ErrorCode = "runtime_not_built"
 	// ErrorInternal identifies a build or programming failure.
 	ErrorInternal ErrorCode = "internal_error"
 
@@ -67,6 +69,16 @@ func GenerationFailed(retryable bool) *FailureError {
 		code:       ErrorGenerationFailed,
 		message:    generationFailedMessage,
 		retryable:  retryable,
+		exitStatus: 1,
+	}
+}
+
+// RuntimeNotBuilt reports a selected runtime capability omitted at build time.
+func RuntimeNotBuilt() *FailureError {
+	return &FailureError{
+		code:       ErrorRuntimeNotBuilt,
+		message:    "selected container runtime is not included in this build",
+		retryable:  false,
 		exitStatus: 1,
 	}
 }

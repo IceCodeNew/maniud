@@ -26,28 +26,29 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/registry"
-	containerdruntime "github.com/IceCodeNew/maniud/internal/runtime/containerd"
-	dockerruntime "github.com/IceCodeNew/maniud/internal/runtime/docker"
-	podmanruntime "github.com/IceCodeNew/maniud/internal/runtime/podman"
 	"github.com/IceCodeNew/maniud/internal/store"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
+	dockerruntime "github.com/IceCodeNew/maniud/plugins/runtime/docker"
 )
 
 const (
-	closeRuntimeEvent   = "close-runtime"
-	closeReaderEvent    = "close-reader"
-	dockerHostKey       = "DOCKER_HOST"
-	homeKey             = "HOME"
-	inspectEvent        = "inspect"
-	invalidPathValue    = "bad\x00path"
-	linuxOS             = "linux"
-	mutationEvent       = "mutation"
-	readerEvent         = "reader"
-	runtimeEvent        = "runtime"
-	sourceEvent         = "source"
-	stateEvent          = "state"
-	testApplyWarning    = "capacity proof unavailable"
-	testPlainDockerHost = "tcp://engine.example:2375"
-	xdgStateHomeKey     = "XDG_STATE_HOME"
+	closeRuntimeEvent      = "close-runtime"
+	closeReaderEvent       = "close-reader"
+	containerHostKey       = "CONTAINER_HOST"
+	containerdAddressKey   = "CONTAINERD_ADDRESS"
+	containerdNamespaceKey = "CONTAINERD_NAMESPACE"
+	dockerHostKey          = "DOCKER_HOST"
+	homeKey                = "HOME"
+	inspectEvent           = "inspect"
+	invalidPathValue       = "bad\x00path"
+	linuxOS                = "linux"
+	mutationEvent          = "mutation"
+	readerEvent            = "reader"
+	runtimeEvent           = "runtime"
+	sourceEvent            = "source"
+	stateEvent             = "state"
+	testApplyWarning       = "capacity proof unavailable"
+	xdgStateHomeKey        = "XDG_STATE_HOME"
 )
 
 var (
@@ -856,93 +857,23 @@ func TestEnvironmentMapUsesLastCompleteValue(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The table keeps every supported and rejected endpoint form together.
-func TestDockerEndpointSelection(t *testing.T) {
+func TestRuntimeWarningSinkUsesStableJSON(t *testing.T) {
 	t.Parallel()
 
-	for _, environment := range []map[string]string{
-		{},
-		{dockerHostKey: "unix:///tmp/docker.sock"},
-	} {
-		endpoint, err := dockerEndpoint(environment, io.Discard)
-		if err != nil || reflect.ValueOf(endpoint).IsZero() {
-			t.Fatalf("dockerEndpoint(%v) = %#v, %v", environment, endpoint, err)
-		}
-	}
-
 	warnings := new(bytes.Buffer)
-
-	endpoint, err := dockerEndpoint(map[string]string{dockerHostKey: testPlainDockerHost}, warnings)
-	if err != nil || reflect.ValueOf(endpoint).IsZero() ||
-		!strings.Contains(warnings.String(), `"code":"insecure_remote_engine"`) {
-		t.Fatalf("dockerEndpoint(VPN) = %#v, %v, warning %q", endpoint, err, warnings.String())
+	if err := runtimeWarningSink(warnings)(runtimeplugin.Warning{
+		Code: "insecure_remote_engine", Message: "plain TCP endpoint",
+	}); err != nil || warnings.String() !=
+		"{\"code\":\"insecure_remote_engine\",\"message\":\"plain TCP endpoint\"}\n" {
+		t.Fatalf("runtimeWarningSink() = %v, %q", err, warnings.String())
 	}
-
-	tests := []struct {
-		name        string
-		environment map[string]string
-		stderr      io.Writer
-		want        error
-	}{
-		{
-			name:        "invalid Unix",
-			environment: map[string]string{dockerHostKey: "unix://relative.sock"},
-			stderr:      io.Discard,
-			want:        dockerruntime.ErrInvalidEndpoint,
-		},
-		{
-			name:        "SSH without explicit authentication",
-			environment: map[string]string{dockerHostKey: "ssh://engine.example"},
-			stderr:      io.Discard,
-			want:        dockerruntime.ErrInvalidEndpoint,
-		},
-		{
-			name:        "VPN without warning transport",
-			environment: map[string]string{dockerHostKey: testPlainDockerHost},
-			stderr:      nil,
-			want:        dockerruntime.ErrWarningDelivery,
-		},
-		{
-			name:        "VPN warning failure",
-			environment: map[string]string{dockerHostKey: testPlainDockerHost},
-			stderr:      failingWriterWithError{err: errApplyOutputTest},
-			want:        dockerruntime.ErrWarningDelivery,
-		},
-		{
-			name: "TLS not configured",
-			environment: map[string]string{
-				dockerHostKey:       "tcp://engine.example:2376",
-				"DOCKER_TLS_VERIFY": "1",
-			},
-			stderr: io.Discard,
-			want:   dockerruntime.ErrInvalidEndpoint,
-		},
-		{
-			name: "non-empty TLS verification uses Docker semantics",
-			environment: map[string]string{
-				dockerHostKey:       "tcp://engine.example:2376",
-				"DOCKER_TLS_VERIFY": "true",
-			},
-			stderr: io.Discard,
-			want:   dockerruntime.ErrInvalidEndpoint,
-		},
-		{
-			name:        "unknown scheme",
-			environment: map[string]string{dockerHostKey: "http://engine.example:2375"},
-			stderr:      io.Discard,
-			want:        dockerruntime.ErrInvalidEndpoint,
-		},
+	if runtimeWarningSink(nil) != nil {
+		t.Fatal("runtimeWarningSink(nil) is configured")
 	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := dockerEndpoint(test.environment, test.stderr)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("dockerEndpoint() error = %v, want %v", err, test.want)
-			}
-		})
+	if err := runtimeWarningSink(failingWriterWithError{err: errApplyTest})(runtimeplugin.Warning{
+		Code: "warning", Message: "message",
+	}); !errors.Is(err, errApplyTest) {
+		t.Fatalf("runtimeWarningSink(write failure) = %v", err)
 	}
 }
 
@@ -983,57 +914,6 @@ func TestApplyRuntimeKindUsesValidatedComposeMetadata(t *testing.T) {
 				t.Fatalf("applyRuntimeKind() = %q, %v", got, err)
 			}
 		})
-	}
-}
-
-func TestPodmanSocketPathUsesOnlyLocalUnixEndpoints(t *testing.T) {
-	t.Parallel()
-
-	for _, test := range []struct {
-		name        string
-		environment map[string]string
-		want        string
-		wantErr     bool
-	}{
-		{
-			name: "explicit", environment: map[string]string{containerHostEnvironment: "unix:///tmp/podman.sock"},
-			want: "/tmp/podman.sock",
-		},
-		{
-			name: "XDG runtime", environment: map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
-			want: "/run/user/1000/podman/podman.sock",
-		},
-		{
-			name: "remote", environment: map[string]string{containerHostEnvironment: "ssh://host/run/podman.sock"},
-			wantErr: true,
-		},
-		{
-			name: testRelativePath, environment: map[string]string{containerHostEnvironment: "unix://podman.sock"},
-			wantErr: true,
-		},
-		{name: "unclean", environment: map[string]string{"XDG_RUNTIME_DIR": "/run/../tmp"}, wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := podmanSocketPath(test.environment, 1000)
-			if (err != nil) != test.wantErr || got != test.want {
-				t.Fatalf("podmanSocketPath() = %q, %v", got, err)
-			}
-		})
-	}
-
-	got, err := podmanSocketPath(map[string]string{}, 0)
-	if err != nil || got != defaultRootfulPodmanSocket {
-		t.Fatalf("podmanSocketPath(root) = %q, %v", got, err)
-	}
-	got, err = podmanSocketPath(map[string]string{}, 1000)
-	if err != nil || got != "/run/user/1000/podman/podman.sock" {
-		t.Fatalf("podmanSocketPath(rootless default) = %q, %v", got, err)
-	}
-	got, err = podmanSocketPath(map[string]string{}, -1)
-	if got != "" || !errors.Is(err, podmanruntime.ErrInvalidEndpoint) {
-		t.Fatalf("podmanSocketPath(invalid user) = %q, %v", got, err)
 	}
 }
 
@@ -1111,7 +991,7 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 		homeKey:         directory,
 		xdgStateHomeKey: directory,
 		dockerHostKey:   "unix:///missing/docker.sock",
-	}, io.Discard, os.Getwd)
+	}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -1159,7 +1039,7 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 		t.Fatal("defaultApplyDependencies() has no image resolver")
 	}
 
-	_, err = defaultApplyDependencies(map[string]string{}, io.Discard, os.Getwd)
+	_, err = defaultApplyDependencies(map[string]string{}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err == nil {
 		t.Fatal("defaultApplyDependencies(missing home) succeeded")
 	}
@@ -1168,6 +1048,7 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 		map[string]string{homeKey: directory, dockerHostKey: "invalid://engine"},
 		io.Discard,
 		os.Getwd,
+		testRuntimePlugins(t),
 	)
 	if err == nil {
 		_, err = invalidDependencies.openRuntime(context.Background(), domain.RuntimeDocker)
@@ -1215,7 +1096,7 @@ func TestDefaultApplyDependenciesOpenRuntime(t *testing.T) {
 	dependencies, err := defaultApplyDependencies(map[string]string{
 		homeKey:       t.TempDir(),
 		dockerHostKey: "tcp" + strings.TrimPrefix(server.URL, "http"),
-	}, io.Discard, os.Getwd)
+	}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -1237,11 +1118,11 @@ func TestDefaultApplyDependenciesOpenPodmanRuntime(t *testing.T) {
 
 	socketPath := startApplyPodmanServer(t)
 	dependencies, err := defaultApplyDependencies(map[string]string{
-		homeKey:                  t.TempDir(),
-		xdgStateHomeKey:          t.TempDir(),
-		dockerHostKey:            "invalid://must-not-be-read",
-		containerHostEnvironment: "unix://" + socketPath,
-	}, io.Discard, os.Getwd)
+		homeKey:          t.TempDir(),
+		xdgStateHomeKey:  t.TempDir(),
+		dockerHostKey:    "invalid://must-not-be-read",
+		containerHostKey: "unix://" + socketPath,
+	}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -1262,11 +1143,11 @@ func TestDefaultApplyDependenciesOpenContainerdRuntime(t *testing.T) {
 
 	socketPath := startApplyContainerdServer(t)
 	dependencies, err := defaultApplyDependencies(map[string]string{
-		homeKey:                        t.TempDir(),
-		xdgStateHomeKey:                t.TempDir(),
-		containerdAddressEnvironment:   "unix://" + socketPath,
-		containerdNamespaceEnvironment: "maniud-test",
-	}, io.Discard, os.Getwd)
+		homeKey:                t.TempDir(),
+		xdgStateHomeKey:        t.TempDir(),
+		containerdAddressKey:   "unix://" + socketPath,
+		containerdNamespaceKey: "maniud-test",
+	}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -1284,7 +1165,9 @@ func TestDefaultApplyDependenciesOpenContainerdRuntime(t *testing.T) {
 func TestDefaultApplyDependenciesRejectsInvalidRuntimes(t *testing.T) {
 	t.Parallel()
 
-	dependencies, err := defaultApplyDependencies(map[string]string{homeKey: t.TempDir()}, io.Discard, os.Getwd)
+	dependencies, err := defaultApplyDependencies(
+		map[string]string{homeKey: t.TempDir()}, io.Discard, os.Getwd, testRuntimePlugins(t),
+	)
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -1300,8 +1183,8 @@ func TestDefaultApplyDependenciesRejectsInvalidRuntimes(t *testing.T) {
 
 	for _, host := range []string{"invalid://podman", "unix:///missing/podman.sock"} {
 		invalidDependencies, dependencyErr := defaultApplyDependencies(map[string]string{
-			homeKey: t.TempDir(), containerHostEnvironment: host,
-		}, io.Discard, os.Getwd)
+			homeKey: t.TempDir(), containerHostKey: host,
+		}, io.Discard, os.Getwd, testRuntimePlugins(t))
 		if dependencyErr != nil {
 			t.Fatalf("defaultApplyDependencies(%q) error = %v", host, dependencyErr)
 		}
@@ -1422,6 +1305,7 @@ func TestDefaultApplyDependenciesRejectsMissingWorkingDirectory(t *testing.T) {
 		map[string]string{homeKey: "/tmp"},
 		io.Discard,
 		func() (string, error) { return "", io.ErrUnexpectedEOF },
+		testRuntimePlugins(t),
 	)
 	if err == nil || dependencies.loadSource != nil || dependencies.openRuntime != nil ||
 		dependencies.openReader != nil || dependencies.openState != nil || dependencies.mutate != nil ||
@@ -1453,7 +1337,7 @@ func TestRunDispatchesApplyAndMapsFailure(t *testing.T) {
 		},
 		{
 			name:       "retryable failure",
-			execute:    func(applyInvocation) error { return dockerruntime.ErrUnavailable },
+			execute:    func(applyInvocation) error { return runtimeplugin.ErrUnavailable },
 			wantStatus: 1,
 			wantOutput: "{\"code\":\"apply_failed\",\"message\":\"apply validation failed\",\"retryable\":true}\n",
 		},
@@ -1516,6 +1400,7 @@ func TestRunBuildsDefaultDryRunDependencies(t *testing.T) {
 		nil,
 		output,
 		io.Discard,
+		testRuntimePlugins(t),
 	)
 	if status != 1 || output.String() !=
 		"{\"code\":\"apply_failed\",\"message\":\"apply validation failed\",\"retryable\":false}\n" {
@@ -1532,6 +1417,7 @@ func TestRunBuildsDefaultDryRunDependencies(t *testing.T) {
 		nil,
 		output,
 		io.Discard,
+		testRuntimePlugins(t),
 	)
 	if status != 1 || !strings.Contains(output.String(), `"code":"apply_failed"`) {
 		t.Fatalf("Run(invalid defaults) = %d, %q", status, output.String())
@@ -1562,10 +1448,9 @@ func TestClassifyApplyFailure(t *testing.T) {
 	}{
 		{err: context.Canceled, code: domain.ErrorOperationCancelled, retryable: false},
 		{err: registry.ErrCancelled, code: domain.ErrorOperationCancelled, retryable: false},
-		{err: containerdruntime.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
-		{err: fmt.Errorf("wrapped: %w", containerdruntime.ErrUnavailable), code: domain.ErrorApplyFailed, retryable: true},
-		{err: dockerruntime.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
-		{err: podmanruntime.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
+		{err: runtimeplugin.ErrNotBuilt, code: domain.ErrorRuntimeNotBuilt, retryable: false},
+		{err: runtimeplugin.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
+		{err: fmt.Errorf("wrapped: %w", runtimeplugin.ErrUnavailable), code: domain.ErrorApplyFailed, retryable: true},
 		{err: registry.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
 		{err: registry.ErrRateLimited, code: domain.ErrorApplyFailed, retryable: true},
 		{err: store.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},

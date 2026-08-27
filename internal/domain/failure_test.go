@@ -63,6 +63,14 @@ func TestFailuresExposeStableOperatorContracts(t *testing.T) {
 			exitStatus: 1,
 		},
 		{
+			name:       "runtime not built",
+			failure:    RuntimeNotBuilt(),
+			code:       ErrorRuntimeNotBuilt,
+			message:    "selected container runtime is not included in this build",
+			retryable:  false,
+			exitStatus: 1,
+		},
+		{
 			name:       "unavailable",
 			failure:    CommandUnavailable(),
 			code:       ErrorInternal,

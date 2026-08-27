@@ -28,6 +28,7 @@ func TestExecuteDaemonStopsPollingWhenCancelled(t *testing.T) {
 		map[string]string{homeKey: t.TempDir()},
 		new(bytes.Buffer),
 		func() (string, error) { return t.TempDir(), nil },
+		testRuntimePlugins(t),
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("executeDaemon(cancelled poll) = %v", err)
@@ -44,6 +45,7 @@ func TestExecuteDaemonRequiresRegistration(t *testing.T) {
 		map[string]string{homeKey: t.TempDir()},
 		io.Discard,
 		func() (string, error) { return t.TempDir(), nil },
+		testRuntimePlugins(t),
 	)
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("executeDaemon(unregistered) = %v", err)
@@ -69,13 +71,14 @@ func TestExecuteDaemonRejectsInitializedRepositoryWithoutRemote(t *testing.T) {
 		environment,
 		io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	)
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("executeDaemon(without remote) = %v", err)
 	}
 }
 
-//nolint:paralleltest // SIGUSR1 is process-wide and this test owns its daemon receiver.
+//nolint:funlen,paralleltest // SIGUSR1 is process-wide and this test owns its daemon receiver.
 func TestDaemonStartAndStopLifecycle(t *testing.T) {
 	root := initGitOpsTestRepository(t)
 	environment := registerGitOpsTestRepository(t, root)
@@ -84,6 +87,7 @@ func TestDaemonStartAndStopLifecycle(t *testing.T) {
 		t.Fatalf("defaultStatePath() error = %v", err)
 	}
 	directory := filepath.Dir(statePath)
+	runtimes := testRuntimePlugins(t)
 	startResult := make(chan error, 1)
 	go func() {
 		startResult <- executeDaemon(
@@ -93,6 +97,7 @@ func TestDaemonStartAndStopLifecycle(t *testing.T) {
 			environment,
 			io.Discard,
 			func() (string, error) { return root, nil },
+			runtimes,
 		)
 	}()
 	waitForDaemonLease(t, directory)
@@ -104,6 +109,7 @@ func TestDaemonStartAndStopLifecycle(t *testing.T) {
 		environment,
 		io.Discard,
 		func() (string, error) { return root, nil },
+		runtimes,
 	)
 	if !errors.Is(duplicate, errDaemonAlreadyRunning) {
 		t.Fatalf("executeDaemon(duplicate start) = %v", duplicate)
@@ -117,6 +123,7 @@ func TestDaemonStartAndStopLifecycle(t *testing.T) {
 		environment,
 		io.Discard,
 		os.Getwd,
+		runtimes,
 	); err != nil {
 		t.Fatalf("executeDaemon(stop) error = %v", err)
 	}
@@ -130,6 +137,7 @@ func TestDaemonStartAndStopLifecycle(t *testing.T) {
 	output.Reset()
 	if err = executeDaemon(
 		t.Context(), daemonInvocation{operation: commandDaemonStop}, output, environment, io.Discard, os.Getwd,
+		runtimes,
 	); err != nil {
 		t.Fatalf("executeDaemon(idempotent stop) error = %v", err)
 	}
@@ -209,11 +217,13 @@ func TestExecuteDaemonContainsControlFailures(t *testing.T) {
 		environment,
 		io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	); !errors.Is(err, errDaemonControlUnavailable) {
 		t.Fatalf("executeDaemon(start invalid control) = %v", err)
 	}
 	if err = executeDaemon(
 		t.Context(), daemonInvocation{operation: commandDaemonStop}, io.Discard, environment, io.Discard, os.Getwd,
+		testRuntimePlugins(t),
 	); !errors.Is(err, errDaemonControlUnavailable) {
 		t.Fatalf("executeDaemon(stop invalid control) = %v", err)
 	}
@@ -231,6 +241,7 @@ func TestExecuteDaemonRejectsUnknownOperation(t *testing.T) {
 	} {
 		err := executeDaemon(
 			t.Context(), daemonInvocation{operation: operation}, io.Discard, nil, io.Discard, os.Getwd,
+			testRuntimePlugins(t),
 		)
 		if !errors.Is(err, errGitOpsRepositoryInvalid) {
 			t.Fatalf("executeDaemon(%q) = %v", operation, err)
@@ -263,6 +274,7 @@ func TestDaemonReconcilesRegisteredRepositoryImmediatelyAndThenPolls(t *testing.
 	err := executeDaemon(
 		timed, daemonInvocation{operation: commandDaemonStart, interval: time.Hour}, io.Discard, environment, io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("executeDaemon(poll wait) error = %v", err)
@@ -277,6 +289,7 @@ func TestDaemonReconcilesRegisteredRepositoryImmediatelyAndThenPolls(t *testing.
 		environment,
 		io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	); err == nil {
 		t.Fatal("executeDaemon(rapid poll) returned without cancellation")
 	}
@@ -287,11 +300,13 @@ func TestReconcileRegisteredRepositoryRejectsStateAndCheckoutFailures(t *testing
 
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, nil, io.Discard, os.Getwd,
+		testRuntimePlugins(t),
 	); !errors.Is(err, errStateHomeUnavailable) {
 		t.Fatalf("reconcileRegisteredRepository(missing state home) = %v", err)
 	}
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, map[string]string{homeKey: t.TempDir()}, io.Discard, os.Getwd,
+		testRuntimePlugins(t),
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("reconcileRegisteredRepository(missing registration) = %v", err)
 	}
@@ -301,6 +316,7 @@ func TestReconcileRegisteredRepositoryRejectsStateAndCheckoutFailures(t *testing
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, environment, io.Discard,
 		func() (string, error) { return "", errClosedOutput },
+		testRuntimePlugins(t),
 	); !errors.Is(err, errClosedOutput) {
 		t.Fatalf("reconcileRegisteredRepository(dependencies) = %v", err)
 	}
@@ -313,6 +329,7 @@ func TestReconcileRegisteredRepositoryRejectsStateAndCheckoutFailures(t *testing
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, environment, io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("reconcileRegisteredRepository(dirty) = %v", err)
 	}
@@ -326,6 +343,7 @@ func TestReconcileRegisteredRepositoryRejectsRecoveryAndFetchFailures(t *testing
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, environment, io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	); err == nil {
 		t.Fatal("reconcileRegisteredRepository(recovery failure) succeeded")
 	}
@@ -339,6 +357,7 @@ func TestReconcileRegisteredRepositoryRejectsRecoveryAndFetchFailures(t *testing
 	if err := reconcileRegisteredRepository(
 		t.Context(), io.Discard, environment, io.Discard,
 		func() (string, error) { return root, nil },
+		testRuntimePlugins(t),
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("reconcileRegisteredRepository(fetch failure) = %v", err)
 	}

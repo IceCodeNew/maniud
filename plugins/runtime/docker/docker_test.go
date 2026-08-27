@@ -3,10 +3,11 @@ package docker
 import (
 	"errors"
 	"io"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
-	dockerruntime "github.com/IceCodeNew/maniud/internal/runtime/docker"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
@@ -50,25 +51,25 @@ func TestEndpointSelection(t *testing.T) {
 			name:        "invalid Unix",
 			environment: map[string]string{dockerHostEnvironment: "unix://relative.sock"},
 			warnings:    func(runtimeplugin.Warning) error { return nil },
-			want:        dockerruntime.ErrInvalidEndpoint,
+			want:        ErrInvalidEndpoint,
 		},
 		{
 			name:        "SSH without explicit authentication",
 			environment: map[string]string{dockerHostEnvironment: "ssh://engine.example"},
 			warnings:    func(runtimeplugin.Warning) error { return nil },
-			want:        dockerruntime.ErrInvalidEndpoint,
+			want:        ErrInvalidEndpoint,
 		},
 		{
 			name:        "VPN without warning transport",
 			environment: map[string]string{dockerHostEnvironment: testPlainHost},
 			warnings:    nil,
-			want:        dockerruntime.ErrWarningDelivery,
+			want:        ErrWarningDelivery,
 		},
 		{
 			name:        "VPN warning failure",
 			environment: map[string]string{dockerHostEnvironment: testPlainHost},
 			warnings:    func(runtimeplugin.Warning) error { return io.ErrClosedPipe },
-			want:        dockerruntime.ErrWarningDelivery,
+			want:        ErrWarningDelivery,
 		},
 		{
 			name: "TLS not configured",
@@ -77,13 +78,13 @@ func TestEndpointSelection(t *testing.T) {
 				dockerTLSVerifyEnvironment: "1",
 			},
 			warnings: func(runtimeplugin.Warning) error { return nil },
-			want:     dockerruntime.ErrInvalidEndpoint,
+			want:     ErrInvalidEndpoint,
 		},
 		{
 			name:        "unknown scheme",
 			environment: map[string]string{dockerHostEnvironment: "http://engine.example:2375"},
 			warnings:    func(runtimeplugin.Warning) error { return nil },
-			want:        dockerruntime.ErrInvalidEndpoint,
+			want:        ErrInvalidEndpoint,
 		},
 	}
 
@@ -103,10 +104,38 @@ func TestPluginClassifiesDockerAvailability(t *testing.T) {
 	t.Parallel()
 
 	plugin := New()
-	if plugin.Open == nil || !plugin.Unavailable(dockerruntime.ErrUnavailable) ||
-		plugin.Unavailable(dockerruntime.ErrInvalidEndpoint) {
+	if plugin.Open == nil || !plugin.Unavailable(ErrUnavailable) ||
+		plugin.Unavailable(ErrInvalidEndpoint) {
 		t.Fatalf("New() = %#v", plugin)
 	}
+	if got := environmentValue(nil, dockerHostEnvironment); got != "" {
+		t.Fatalf("environmentValue(nil) = %q", got)
+	}
+}
+
+func TestPluginOpenContainsConfigurationAndConnectionFailures(t *testing.T) {
+	t.Parallel()
+
+	if _, err := open(t.Context(), testEnvironment(map[string]string{
+		dockerHostEnvironment: "invalid://engine",
+	}), nil); !errors.Is(err, ErrInvalidEndpoint) {
+		t.Fatalf("open(invalid endpoint) error = %v", err)
+	}
+	if _, err := open(t.Context(), testEnvironment(map[string]string{
+		dockerHostEnvironment: "unix:///missing/docker.sock",
+	}), nil); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("open(unavailable endpoint) error = %v", err)
+	}
+
+	server := httptest.NewServer(engineHandler(t, validEngineFixture(maximumAPIVersion)))
+	t.Cleanup(server.Close)
+	runtime, err := open(t.Context(), testEnvironment(map[string]string{
+		dockerHostEnvironment: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
+	}), func(runtimeplugin.Warning) error { return nil })
+	if err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+	runtime.CloseIdleConnections()
 }
 
 func testEnvironment(values map[string]string) runtimeplugin.Environment {

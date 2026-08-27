@@ -14,6 +14,7 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
 const gitOpsServicesDirectory = "services"
@@ -25,10 +26,11 @@ func executeDaemon(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) error {
 	switch arguments.operation {
 	case commandDaemonStart:
-		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory)
+		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory, runtimes)
 	case commandDaemonStop:
 		return executeDaemonStop(ctx, output, environment)
 	case commandGen, commandApply, commandGitOpsInit, commandDoctor:
@@ -45,6 +47,7 @@ func executeDaemonStart(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
@@ -68,7 +71,7 @@ func executeDaemonStart(
 	}
 
 	reconcile := func() error {
-		return reconcileRegisteredRepository(ctx, output, environment, stderr, getWorkingDirectory)
+		return reconcileRegisteredRepository(ctx, output, environment, stderr, getWorkingDirectory, runtimes)
 	}
 	runErr := pollRegisteredRepositoryUntilStop(ctx, arguments.interval, output, reconcile, requested)
 
@@ -172,6 +175,7 @@ func reconcileRegisteredRepository(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) error {
 	statePath, err := defaultStatePath(environment)
 	if err != nil {
@@ -183,7 +187,7 @@ func reconcileRegisteredRepository(
 		return errGitOpsRepositoryInvalid
 	}
 
-	dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory)
+	dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, runtimes)
 	if err != nil {
 		return err
 	}

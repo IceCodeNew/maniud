@@ -1,4 +1,3 @@
-// Package docker provides the statically linked Docker Engine capability.
 package docker
 
 import (
@@ -9,7 +8,6 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
-	dockerruntime "github.com/IceCodeNew/maniud/internal/runtime/docker"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
@@ -25,7 +23,7 @@ func New() runtimeplugin.Plugin {
 	return runtimeplugin.Plugin{
 		Kind:        domain.RuntimeDocker,
 		Open:        open,
-		Unavailable: func(err error) bool { return errors.Is(err, dockerruntime.ErrUnavailable) },
+		Unavailable: func(err error) bool { return errors.Is(err, ErrUnavailable) },
 	}
 }
 
@@ -39,7 +37,7 @@ func open(
 	if err != nil {
 		return nil, err
 	}
-	client, _, err := dockerruntime.Connect(ctx, endpoint)
+	client, _, err := Connect(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("connect Docker runtime: %w", err)
 	}
@@ -50,34 +48,34 @@ func open(
 func endpoint(
 	environment runtimeplugin.Environment,
 	warnings runtimeplugin.WarningSink,
-) (dockerruntime.Endpoint, error) {
+) (Endpoint, error) {
 	host := environmentValue(environment, dockerHostEnvironment)
 	if host == "" {
 		host = defaultHost
 	}
 
 	if socketPath, found := strings.CutPrefix(host, "unix://"); found {
-		return configuredEndpoint(dockerruntime.UnixEndpoint(socketPath))
+		return configuredEndpoint(UnixEndpoint(socketPath))
 	}
 
 	if strings.HasPrefix(host, "ssh://") {
-		return configuredEndpoint(dockerruntime.SSHEndpoint(host, dockerruntime.SSHOptions{
-			Auth: dockerruntime.SSHAuth{
+		return configuredEndpoint(SSHEndpoint(host, SSHOptions{
+			Auth: SSHAuth{
 				AgentSocket:     environmentValue(environment, sshAuthSockEnvironment),
 				PrivateKeyFiles: nil,
 				Passphrase:      nil,
 			},
-			HostKeys:         dockerruntime.SSHHostKeys{Files: nil},
+			HostKeys:         SSHHostKeys{Files: nil},
 			RemoteDockerPath: "",
 		}))
 	}
 
 	if strings.HasPrefix(host, "tcp://") && environmentValue(environment, dockerTLSVerifyEnvironment) == "" {
 		if warnings == nil {
-			return dockerruntime.Endpoint{}, dockerruntime.ErrWarningDelivery
+			return Endpoint{}, ErrWarningDelivery
 		}
 
-		return configuredEndpoint(dockerruntime.VPNEndpoint(host, func(warning dockerruntime.Warning) error {
+		return configuredEndpoint(VPNEndpoint(host, func(warning Warning) error {
 			err := warnings(runtimeplugin.Warning{Code: string(warning.Code), Message: warning.Message})
 			if err != nil {
 				return fmt.Errorf("emit Docker endpoint warning: %w", err)
@@ -87,15 +85,15 @@ func endpoint(
 		}))
 	}
 
-	return dockerruntime.Endpoint{}, dockerruntime.ErrInvalidEndpoint
+	return Endpoint{}, ErrInvalidEndpoint
 }
 
 func configuredEndpoint(
-	endpoint dockerruntime.Endpoint,
+	endpoint Endpoint,
 	err error,
-) (dockerruntime.Endpoint, error) {
+) (Endpoint, error) {
 	if err != nil {
-		return dockerruntime.Endpoint{}, fmt.Errorf("configure Docker endpoint: %w", err)
+		return Endpoint{}, fmt.Errorf("configure Docker endpoint: %w", err)
 	}
 
 	return endpoint, nil
