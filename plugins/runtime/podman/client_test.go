@@ -398,14 +398,18 @@ func TestClientRequestRejectsSocketMutationAfterResponse(t *testing.T) {
 	t.Parallel()
 
 	var mutate atomic.Bool
-	var path string
+	var socketPath atomic.Pointer[string]
 	negotiation := podmanNegotiationHandler(libpodAPIVersion, "5.0.0", libpodAPIVersion)
-	path = startPodmanTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	path := startPodmanTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		negotiation.ServeHTTP(writer, request)
 		if mutate.Load() {
-			_ = os.Chmod(path, 0o622) //nolint:gosec // The test must mutate the endpoint to an unsafe mode.
+			current := socketPath.Load()
+			if current != nil {
+				_ = os.Chmod(*current, 0o622) //nolint:gosec // The test must mutate the endpoint to an unsafe mode.
+			}
 		}
 	}))
+	socketPath.Store(&path)
 	client, _, err := Connect(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
