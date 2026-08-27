@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -27,7 +28,7 @@ func reconcileGitOpsSnapshot(
 	}
 
 	for _, service := range services {
-		if err = executeMutation(ctx, service.arguments, output, service.dependencies); err != nil {
+		if err = executeGitOpsMutation(ctx, service, output); err != nil {
 			return err
 		}
 	}
@@ -59,12 +60,37 @@ func recoverGitOpsServices(
 		if !gitOpsRecoveryPlan(service.plan.Kind) {
 			continue
 		}
-		if err := executeMutation(ctx, service.arguments, output, service.dependencies); err != nil {
+		if err := executeGitOpsMutation(ctx, service, output); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func executeGitOpsMutation(
+	ctx context.Context,
+	service gitOpsServiceSnapshot,
+	output io.Writer,
+) error {
+	request, err := loadApplyRequest(ctx, service.arguments, service.dependencies)
+	if err != nil {
+		return err
+	}
+	plan, err := service.dependencies.operations.Apply(ctx, request)
+	if err != nil {
+		publishCLIEvent(service.dependencies.events, application.Event{
+			Kind:    application.EventGitOpsServiceApplyFailed,
+			Plan:    service.plan.Kind,
+			Project: service.plan.Project,
+			Service: service.plan.Service,
+			Runtime: service.plan.Runtime,
+		})
+
+		return errors.Join(err)
+	}
+
+	return writeApplyPlan(output, plan, false, service.arguments.json)
 }
 
 func gitOpsRecoveryPlan(kind application.PlanKind) bool {

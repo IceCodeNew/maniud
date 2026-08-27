@@ -25,15 +25,13 @@ import (
 )
 
 const (
-	closeRuntimeEvent         = "close-runtime"
-	dockerHostKey             = "DOCKER_HOST"
-	dryRunEvent               = "dry-run"
-	homeKey                   = "HOME"
-	inspectEvent              = "inspect"
-	invalidPathValue          = "bad\x00path"
-	linuxOS                   = "linux"
-	retryableApplyFailureJSON = "{\"code\":\"apply_failed\",\"message\":\"apply validation failed\"," +
-		"\"retryable\":true}\n"
+	closeRuntimeEvent   = "close-runtime"
+	dockerHostKey       = "DOCKER_HOST"
+	dryRunEvent         = "dry-run"
+	homeKey             = "HOME"
+	inspectEvent        = "inspect"
+	invalidPathValue    = "bad\x00path"
+	linuxOS             = "linux"
 	sourceEvent         = "source"
 	testApplyWarning    = "capacity proof unavailable"
 	testPlainDockerHost = "tcp://engine.example:2375"
@@ -717,7 +715,7 @@ func TestDefaultApplyDependenciesBuildsApplicationFacade(t *testing.T) {
 		homeKey:         directory,
 		xdgStateHomeKey: directory,
 		dockerHostKey:   "tcp" + strings.TrimPrefix(server.URL, "http"),
-	}, io.Discard, os.Getwd, testRuntimePlugins(t))
+	}, io.Discard, os.Getwd, nil, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
 	}
@@ -741,7 +739,7 @@ func TestDefaultApplyDependenciesRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 
 	_, err := defaultApplyDependencies(
-		map[string]string{}, io.Discard, os.Getwd, testRuntimePlugins(t),
+		map[string]string{}, io.Discard, os.Getwd, nil, testRuntimePlugins(t),
 	)
 	if err == nil {
 		t.Fatal("defaultApplyDependencies(missing home) succeeded")
@@ -752,6 +750,7 @@ func TestDefaultApplyDependenciesRejectsInvalidConfiguration(t *testing.T) {
 		map[string]string{homeKey: directory, dockerHostKey: "invalid://engine"},
 		io.Discard,
 		os.Getwd,
+		nil,
 		testRuntimePlugins(t),
 	)
 	if err == nil {
@@ -811,6 +810,7 @@ func TestDefaultApplyDependenciesRejectsMissingWorkingDirectory(t *testing.T) {
 		map[string]string{homeKey: "/tmp"},
 		io.Discard,
 		func() (string, error) { return "", io.ErrUnexpectedEOF },
+		nil,
 		testRuntimePlugins(t),
 	)
 	if err == nil || dependencies.loadSource != nil || dependencies.operations != nil {

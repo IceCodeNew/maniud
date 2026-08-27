@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
@@ -26,11 +27,12 @@ func executeDaemon(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	events application.EventSink,
 	runtimes runtimeplugin.Set,
 ) error {
 	switch arguments.operation {
 	case commandDaemonStart:
-		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory, runtimes)
+		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory, events, runtimes)
 	case commandDaemonStop:
 		return executeDaemonStop(ctx, output, environment)
 	case commandGen, commandApply, commandGitOpsInit, commandDoctor:
@@ -47,6 +49,7 @@ func executeDaemonStart(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	events application.EventSink,
 	runtimes runtimeplugin.Set,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -71,9 +74,11 @@ func executeDaemonStart(
 	}
 
 	reconcile := func() error {
-		return reconcileRegisteredRepository(ctx, output, environment, stderr, getWorkingDirectory, runtimes)
+		return reconcileRegisteredRepository(
+			ctx, output, environment, stderr, getWorkingDirectory, events, runtimes,
+		)
 	}
-	runErr := pollRegisteredRepositoryUntilStop(ctx, arguments.interval, output, reconcile, requested)
+	runErr := pollRegisteredRepositoryUntilStop(ctx, arguments.interval, output, reconcile, events, requested)
 
 	return errors.Join(runErr, lease.Close())
 }
@@ -117,7 +122,7 @@ func pollRegisteredRepository(
 	output io.Writer,
 	reconcile func() error,
 ) error {
-	return pollRegisteredRepositoryUntilStop(ctx, interval, output, reconcile, nil)
+	return pollRegisteredRepositoryUntilStop(ctx, interval, output, reconcile, nil, nil)
 }
 
 func pollRegisteredRepositoryUntilStop(
@@ -125,6 +130,7 @@ func pollRegisteredRepositoryUntilStop(
 	interval time.Duration,
 	output io.Writer,
 	reconcile func() error,
+	events application.EventSink,
 	stop <-chan struct{},
 ) error {
 	if interval <= 0 || reconcile == nil {
@@ -140,6 +146,7 @@ func pollRegisteredRepositoryUntilStop(
 			if !failure.Retryable() {
 				return err
 			}
+			publishCLIEvent(events, application.Event{Kind: application.EventDaemonUnavailable})
 			emitFailure(output, failure)
 		}
 		if channelClosed(stop) {
@@ -149,6 +156,17 @@ func pollRegisteredRepositoryUntilStop(
 			return err
 		}
 	}
+}
+
+func publishCLIEvent(events application.EventSink, event application.Event) {
+	if events == nil {
+		return
+	}
+
+	defer func() {
+		_ = recover()
+	}()
+	events.TryPublish(event)
 }
 
 func waitDaemonInterval(ctx context.Context, interval time.Duration) error {
@@ -175,6 +193,7 @@ func reconcileRegisteredRepository(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	events application.EventSink,
 	runtimes runtimeplugin.Set,
 ) error {
 	statePath, err := defaultStatePath(environment)
@@ -187,7 +206,7 @@ func reconcileRegisteredRepository(
 		return errGitOpsRepositoryInvalid
 	}
 
-	dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, runtimes)
+	dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, events, runtimes)
 	if err != nil {
 		return err
 	}
