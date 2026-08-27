@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"reflect"
@@ -137,7 +138,8 @@ func decodeCompatibleJSON(
 	compatibilityFields ...string,
 ) bool {
 	encoded, valid := jsonstrict.Read(reader, maximumJSONBytes)
-	if !valid || target == nil || schema.Kind() != reflect.Struct {
+	schema, validSchema := concreteStructType(schema)
+	if !valid || target == nil || !validSchema {
 		return false
 	}
 
@@ -145,13 +147,68 @@ func decodeCompatibleJSON(
 	if json.Unmarshal(encoded, &fields) != nil || fields == nil {
 		return false
 	}
+	if !supportedJSONFields(schema, compatibilityFields, fields) {
+		return false
+	}
+	strictDocument, validDocument := removeCompatibilityFields(fields, compatibilityFields)
+	if !validDocument || !jsonstrict.Decode(
+		bytes.NewReader(strictDocument), maximumJSONBytes, reflect.New(schema).Interface(),
+	) {
+		return false
+	}
+
+	return json.Unmarshal(encoded, target) == nil
+}
+
+func supportedJSONFields(
+	schema reflect.Type,
+	compatibilityFields []string,
+	fields map[string]json.RawMessage,
+) bool {
 	for name := range fields {
 		if !supportedJSONField(schema, compatibilityFields, name) {
 			return false
 		}
 	}
 
-	return json.Unmarshal(encoded, target) == nil
+	return true
+}
+
+func removeCompatibilityFields(
+	fields map[string]json.RawMessage,
+	compatibilityFields []string,
+) ([]byte, bool) {
+	strictFields := maps.Clone(fields)
+	for _, path := range compatibilityFields {
+		if !removeCompatibilityField(strictFields, strings.Split(path, ".")) {
+			return nil, false
+		}
+	}
+
+	encoded, _ := json.Marshal(strictFields) //nolint:errchkjson // Values came from duplicate-checked valid JSON.
+
+	return encoded, true
+}
+
+func removeCompatibilityField(fields map[string]json.RawMessage, path []string) bool {
+	encoded, exists := fields[path[0]]
+	if !exists {
+		return true
+	}
+	if len(path) == 1 {
+		delete(fields, path[0])
+
+		return true
+	}
+
+	var nested map[string]json.RawMessage
+	if json.Unmarshal(encoded, &nested) != nil || nested == nil || !removeCompatibilityField(nested, path[1:]) {
+		return false
+	}
+	encoded, _ = json.Marshal(nested) //nolint:errchkjson // Values came from duplicate-checked valid JSON.
+	fields[path[0]] = encoded
+
+	return true
 }
 
 func supportedJSONField(schema reflect.Type, compatibilityFields []string, name string) bool {
@@ -199,7 +256,10 @@ func supportedStructField(field reflect.StructField, name string, visited map[re
 }
 
 func concreteStructType(schema reflect.Type) (reflect.Type, bool) {
-	if schema.Kind() == reflect.Pointer {
+	if schema == nil {
+		return nil, false
+	}
+	for schema.Kind() == reflect.Pointer {
 		schema = schema.Elem()
 	}
 

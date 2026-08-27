@@ -72,6 +72,7 @@ func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 		"ClusterStore",
 		"KernelMemory",
 		"KernelMemoryTCP",
+		"RegistryConfig.AllowNondistributableArtifactsCIDRs",
 	) {
 		return emptyDaemon, ErrProtocol
 	}

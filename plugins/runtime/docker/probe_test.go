@@ -23,6 +23,8 @@ type compatibleProtocolDocument struct {
 	*embeddedProtocolDocument
 	EmbeddedProtocolText
 
+	Nested embeddedProtocolDocument `json:"nested"`
+
 	Ignored bool `json:"-"`
 }
 
@@ -303,5 +305,56 @@ func TestCompatibleJSONSchemaBoundaries(t *testing.T) {
 	}
 	if supportedSchemaField(reflect.TypeFor[string](), "missing", make(map[reflect.Type]bool)) {
 		t.Fatal("supportedSchemaField(non-struct schema) = true")
+	}
+}
+
+func TestCompatibleJSONNormalizesSchemaTypes(t *testing.T) {
+	t.Parallel()
+
+	schema := reflect.TypeFor[compatibleProtocolDocument]()
+	if decodeCompatibleJSON(strings.NewReader(`{}`), &compatibleProtocolDocument{}, nil) {
+		t.Fatal("decodeCompatibleJSON(nil schema) = true")
+	}
+	if !decodeCompatibleJSON(
+		strings.NewReader(`{"nested":{"value":1}}`),
+		&compatibleProtocolDocument{},
+		reflect.PointerTo(schema),
+	) {
+		t.Fatal("decodeCompatibleJSON(pointer schema) = false")
+	}
+}
+
+func TestCompatibleJSONRejectsNestedUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	schema := reflect.TypeFor[compatibleProtocolDocument]()
+	if decodeCompatibleJSON(
+		strings.NewReader(`{"nested":{"unknown":true}}`),
+		&compatibleProtocolDocument{},
+		schema,
+	) {
+		t.Fatal("decodeCompatibleJSON(nested unknown field) = true")
+	}
+	if !decodeCompatibleJSON(
+		strings.NewReader(`{"nested":{"unknown":true}}`),
+		&compatibleProtocolDocument{},
+		schema,
+		"nested.unknown",
+	) {
+		t.Fatal("decodeCompatibleJSON(nested compatibility field) = false")
+	}
+	for _, document := range []string{
+		`{"nested":"invalid"}`,
+		`{"nested":null}`,
+		`{"nested":{"unknown":"invalid"}}`,
+	} {
+		if decodeCompatibleJSON(
+			strings.NewReader(document),
+			&compatibleProtocolDocument{},
+			schema,
+			"nested.unknown.value",
+		) {
+			t.Fatalf("decodeCompatibleJSON(malformed compatibility path %s) = true", document)
+		}
 	}
 }
