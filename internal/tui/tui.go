@@ -58,8 +58,15 @@ func (stream *EventStream) DroppedEvents() uint64 {
 
 func (stream *EventStream) wait(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			return contextDoneMsg{}
+		}
 		select {
 		case event := <-stream.queue:
+			if ctx.Err() != nil {
+				return contextDoneMsg{}
+			}
+
 			return eventMsg(event)
 		case <-ctx.Done():
 			return contextDoneMsg{}

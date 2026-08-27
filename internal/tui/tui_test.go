@@ -361,6 +361,13 @@ func TestEventStreamIsBoundedAndCancellable(t *testing.T) {
 	if _, valid := NewEventStream().wait(ctx)().(contextDoneMsg); !valid {
 		t.Fatal("cancelled wait did not return contextDoneMsg")
 	}
+	queued := NewEventStream()
+	if !queued.TryPublish(application.Event{Kind: application.EventPlanPrepared}) {
+		t.Fatal("cancelled wait fixture dropped its event")
+	}
+	if _, valid := queued.wait(ctx)().(contextDoneMsg); !valid {
+		t.Fatal("cancelled wait consumed a queued event")
+	}
 	if _, valid := waitForContext(ctx)().(contextDoneMsg); !valid {
 		t.Fatal("waitForContext() did not return contextDoneMsg")
 	}
