@@ -16,20 +16,14 @@ import (
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
-type applyRuntime = application.OperationRuntime
-
-type applyTransactionReader interface {
-	application.TransactionReader
-	Close() error
+type applyOperations interface {
+	DryRun(ctx context.Context, request application.Request) (application.Plan, error)
+	Apply(ctx context.Context, request application.Request) (application.Plan, error)
 }
 
 type applyDependencies struct {
-	loadSource  func(context.Context, string) (compose.Source, error)
-	openRuntime func(context.Context, domain.RuntimeKind) (applyRuntime, error)
-	openReader  func(context.Context) (applyTransactionReader, error)
-	openState   func(context.Context) (*store.Store, error)
-	mutate      func(context.Context, application.Request, *store.Store, applyRuntime) (application.Plan, error)
-	images      application.ImageResolver
+	loadSource func(context.Context, string) (compose.Source, error)
+	operations applyOperations
 }
 
 func defaultApplyDependencies(
@@ -51,54 +45,31 @@ func defaultApplyDependencies(
 	resolver := registry.NewResolver(registry.Options{
 		Credentials: nil, DockerConfigPath: dockerConfigPath(environment),
 	})
+	operations := application.NewApplyFacade(
+		resolver,
+		resolver,
+		func(runtimeKind domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+			return runtimes.Select(
+				runtimeKind,
+				runtimeEnvironment(environment),
+				runtimeWarningSink(stderr),
+			)
+		},
+		func(ctx context.Context) (application.OperationReader, error) {
+			return store.OpenReader(ctx, statePath)
+		},
+		func(ctx context.Context) (*store.Store, error) {
+			return store.Open(ctx, statePath)
+		},
+		nil,
+	)
 
 	return applyDependencies{
 		loadSource: func(ctx context.Context, path string) (compose.Source, error) {
 			return loadComposeSource(ctx, path, workingDirectory, environment, filepath.Dir(statePath))
 		},
-		openRuntime: func(ctx context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-			return openApplyRuntime(ctx, runtimeKind, environment, stderr, runtimes)
-		},
-		openReader: func(ctx context.Context) (applyTransactionReader, error) {
-			return store.OpenReader(ctx, statePath)
-		},
-		openState: func(ctx context.Context) (*store.Store, error) {
-			return store.Open(ctx, statePath)
-		},
-		mutate: func(
-			ctx context.Context,
-			request application.Request,
-			state *store.Store,
-			runtime applyRuntime,
-		) (application.Plan, error) {
-			return application.NewService(resolver, runtime, state).Apply(ctx, request, state, resolver)
-		},
-		images: resolver,
+		operations: operations,
 	}, nil
-}
-
-//nolint:ireturn // Runtime selection intentionally returns the application boundary.
-func openApplyRuntime(
-	ctx context.Context,
-	runtimeKind domain.RuntimeKind,
-	environment map[string]string,
-	stderr io.Writer,
-	runtimes runtimeplugin.Set,
-) (applyRuntime, error) {
-	factory, err := runtimes.Select(
-		runtimeKind,
-		runtimeEnvironment(environment),
-		runtimeWarningSink(stderr),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("select apply runtime: %w", err)
-	}
-	runtime, err := factory(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("open apply runtime: %w", err)
-	}
-
-	return runtime, nil
 }
 
 func runtimeEnvironment(environment map[string]string) runtimeplugin.Environment {
@@ -121,23 +92,6 @@ func runtimeWarningSink(stderr io.Writer) runtimeplugin.WarningSink {
 
 		return nil
 	}
-}
-
-func applyRuntimeKind(
-	ctx context.Context,
-	source compose.Source,
-	service string,
-) (domain.RuntimeKind, error) {
-	project, err := compose.Load(ctx, source)
-	if err != nil {
-		return "", fmt.Errorf("load Compose runtime metadata: %w", err)
-	}
-	runtimeKind, err := project.Runtime(service)
-	if err != nil {
-		return "", fmt.Errorf("select Compose service runtime: %w", err)
-	}
-
-	return runtimeKind, nil
 }
 
 func classifyApplyFailure(err error) *domain.FailureError {

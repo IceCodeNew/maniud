@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,15 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	introspectionapi "github.com/containerd/containerd/api/services/introspection/v1" //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
-	versionapi "github.com/containerd/containerd/api/services/version/v1"             //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
-	"google.golang.org/grpc"                                                          //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
-	"google.golang.org/protobuf/types/known/emptypb"                                  //nolint:depguard // This composition test serves the adapter's gRPC probe boundary.
-
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
-	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/registry"
 	"github.com/IceCodeNew/maniud/internal/store"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
@@ -32,30 +25,26 @@ import (
 )
 
 const (
-	closeRuntimeEvent      = "close-runtime"
-	closeReaderEvent       = "close-reader"
-	containerHostKey       = "CONTAINER_HOST"
-	containerdAddressKey   = "CONTAINERD_ADDRESS"
-	containerdNamespaceKey = "CONTAINERD_NAMESPACE"
-	dockerHostKey          = "DOCKER_HOST"
-	homeKey                = "HOME"
-	inspectEvent           = "inspect"
-	invalidPathValue       = "bad\x00path"
-	linuxOS                = "linux"
-	mutationEvent          = "mutation"
-	readerEvent            = "reader"
-	runtimeEvent           = "runtime"
-	sourceEvent            = "source"
-	stateEvent             = "state"
-	testApplyWarning       = "capacity proof unavailable"
-	xdgStateHomeKey        = "XDG_STATE_HOME"
+	closeRuntimeEvent         = "close-runtime"
+	dockerHostKey             = "DOCKER_HOST"
+	dryRunEvent               = "dry-run"
+	homeKey                   = "HOME"
+	inspectEvent              = "inspect"
+	invalidPathValue          = "bad\x00path"
+	linuxOS                   = "linux"
+	retryableApplyFailureJSON = "{\"code\":\"apply_failed\",\"message\":\"apply validation failed\"," +
+		"\"retryable\":true}\n"
+	sourceEvent         = "source"
+	testApplyWarning    = "capacity proof unavailable"
+	testPlainDockerHost = "tcp://engine.example:2375"
+	testProjectName     = "example"
+	writeEvent          = "write"
+	xdgStateHomeKey     = "XDG_STATE_HOME"
 )
 
 var (
 	errApplyTest       = errors.New("apply test failure")
-	errApplyCloseTest  = errors.New("apply close test failure")
 	errApplyOutputTest = errors.New("apply output test failure")
-	errStateOpenTest   = errors.New("apply state remained open")
 )
 
 type applyRuntimeFixture struct {
@@ -121,83 +110,99 @@ func (runtime *applyRuntimeFixture) CloseIdleConnections() {
 	*runtime.events = append(*runtime.events, closeRuntimeEvent)
 }
 
-type applyReaderFixture struct {
-	events   *[]string
-	closeErr error
+type applyOperationsFixture struct {
+	events        *[]string
+	dryRun        func(application.Request) (application.Plan, error)
+	apply         func(application.Request) (application.Plan, error)
+	dryRunPlan    application.Plan
+	applyPlan     application.Plan
+	dryRunErr     error
+	applyErr      error
+	dryRunRequest application.Request
+	applyRequest  application.Request
 }
 
-func (reader *applyReaderFixture) UnresolvedTransaction(
-	context.Context,
-	string,
-	string,
-) (store.Transaction, bool, error) {
-	*reader.events = append(*reader.events, "journal")
-
-	return store.Transaction{
-		ID:              store.TransactionID{},
-		State:           "",
-		Runtime:         "",
-		SourceDigest:    domain.Digest{},
-		EffectiveDigest: domain.Digest{},
-		ExecutionDigest: domain.Digest{},
-	}, false, nil
-}
-
-func (*applyReaderFixture) AppliedService(
-	context.Context,
-	string,
-	string,
-) (store.AppliedService, bool, error) {
-	return store.AppliedService{}, false, nil
-}
-
-func (*applyReaderFixture) Actions(context.Context, store.TransactionID) ([]store.Action, error) {
-	return nil, errApplyTest
-}
-
-func (reader *applyReaderFixture) Close() error {
-	*reader.events = append(*reader.events, closeReaderEvent)
-
-	return reader.closeErr
-}
-
-type applyImageResolverFixture struct {
-	events *[]string
-}
-
-func (resolver applyImageResolverFixture) Resolve(
+func (operations *applyOperationsFixture) DryRun(
 	_ context.Context,
-	source imageref.Source,
-	platform domain.Platform,
-) (domain.ImageIdentity, error) {
-	*resolver.events = append(*resolver.events, "resolve")
-	referenceDigest := domain.Hash([]byte("reference"))
-
-	reference, err := source.Pin(referenceDigest)
-	if err != nil {
-		return domain.ImageIdentity{}, fmt.Errorf("pin test image: %w", err)
+	request application.Request,
+) (application.Plan, error) {
+	*operations.events = append(*operations.events, dryRunEvent)
+	operations.dryRunRequest = request
+	if operations.dryRun != nil {
+		return operations.dryRun(request)
 	}
 
-	return domain.ImageIdentity{
-		Origin:           domain.ImageOriginRegistry,
-		Reference:        reference.String(),
-		ReferenceDigest:  referenceDigest,
-		Platform:         platform,
-		PlatformManifest: domain.Hash([]byte("manifest")),
-		ImageConfig:      domain.Hash([]byte("config")),
-		Entrypoint:       []string{"/usr/local/bin/api"},
-		Command:          []string{"serve"},
-	}, nil
+	return operations.dryRunPlan, operations.dryRunErr
 }
 
-//nolint:cyclop // The event assertions keep one full lifecycle and every unexpected call in one test.
-func TestExecuteDryRunEmitsPlanAfterClosingEvidence(t *testing.T) {
+func (operations *applyOperationsFixture) Apply(
+	_ context.Context,
+	request application.Request,
+) (application.Plan, error) {
+	*operations.events = append(*operations.events, string(commandApply))
+	operations.applyRequest = request
+	if operations.apply != nil {
+		return operations.apply(request)
+	}
+
+	return operations.applyPlan, operations.applyErr
+}
+
+type applyBoundaryTest struct {
+	name       string
+	mutate     func(*applyDependencies, *applyOperationsFixture)
+	want       error
+	wantEvents []string
+	output     io.Writer
+}
+
+func assertApplyBoundaryFailures(
+	t *testing.T,
+	tests []applyBoundaryTest,
+	execute func(context.Context, applyInvocation, io.Writer, applyDependencies) error,
+	arguments applyInvocation,
+) {
+	t.Helper()
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			events := make([]string, 0, 3)
+			operations := &applyOperationsFixture{
+				events:     &events,
+				dryRunPlan: application.Plan{Kind: application.PlanUnchanged},
+				applyPlan:  application.Plan{Kind: application.PlanUnchanged},
+			}
+			dependencies := operationApplyDependencies(t, &events, operations)
+			test.mutate(&dependencies, operations)
+			if writer, ok := test.output.(eventWriter); ok {
+				writer.events = &events
+				test.output = writer
+			}
+
+			err := execute(context.Background(), arguments, test.output, dependencies)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("execute apply boundary error = %v, want %v", err, test.want)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("execute apply boundary events = %q, want %q", events, test.wantEvents)
+			}
+		})
+	}
+}
+
+func TestExecuteDryRunLoadsSourceBeforeCallingFacadeAndWriting(t *testing.T) {
 	t.Parallel()
 
-	events := make([]string, 0, 10)
-	reader := &applyReaderFixture{events: &events, closeErr: nil}
-	runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-	dependencies := validApplyDependencies(t, &events, reader, runtime)
+	events := make([]string, 0, 3)
+	operations := &applyOperationsFixture{
+		events: &events,
+		dryRunPlan: application.Plan{
+			Kind: application.PlanBootstrap,
+		},
+	}
+	dependencies := operationApplyDependencies(t, &events, operations)
 	output := eventWriter{events: &events, destination: new(bytes.Buffer), err: nil}
 
 	err := executeDryRun(
@@ -210,161 +215,75 @@ func TestExecuteDryRunEmitsPlanAfterClosingEvidence(t *testing.T) {
 		t.Fatalf("executeDryRun() error = %v", err)
 	}
 
-	wantEvents := []string{
-		sourceEvent, readerEvent, runtimeEvent, inspectEvent, "resolve", "check", "journal", "observe",
-		closeRuntimeEvent, closeReaderEvent, "write",
-	}
+	wantEvents := []string{sourceEvent, dryRunEvent, writeEvent}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("executeDryRun() events = %q, want %q", events, wantEvents)
 	}
-
-	var got applyPlan
-
-	decodeErr := jsonDecode(output.destination, &got)
-	if decodeErr != nil {
-		t.Fatalf("decode dry-run plan: %v", decodeErr)
+	if operations.dryRunRequest.Source.Content == nil ||
+		operations.dryRunRequest.Service != applyServiceValue {
+		t.Fatalf("DryRun() request = %#v", operations.dryRunRequest)
 	}
 
-	valid := got.Project == "example" && got.Service == applyServiceValue && got.Status == "bootstrap" &&
-		got.Runtime == testDockerRuntime && got.Platform == testPlatformAMD64 &&
-		strings.HasPrefix(got.Image, "example.com/team/api:1@sha256:") &&
-		strings.HasPrefix(got.SourceDigest, "sha256:") && strings.HasPrefix(got.DesiredDigest, "sha256:")
-	if !valid {
-		t.Fatalf("executeDryRun() plan = %#v", got)
+	var got applyPlan
+	if decodeErr := jsonDecode(output.destination, &got); decodeErr != nil ||
+		got.Status != string(application.PlanBootstrap) {
+		t.Fatalf("executeDryRun() plan = %#v, %v", got, decodeErr)
 	}
 }
 
-//nolint:funlen // The table keeps error precedence and lifecycle evidence adjacent.
-func TestExecuteDryRunContainsOpenAndCloseFailures(t *testing.T) {
+func TestExecuteDryRunContainsBoundaryFailures(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name         string
-		mutate       func(*applyDependencies, *applyReaderFixture, *applyRuntimeFixture)
-		want         []error
-		wantEvents   []string
-		outputWriter io.Writer
-	}{
+	tests := []applyBoundaryTest{
 		{
 			name: sourceEvent,
-			mutate: func(dependencies *applyDependencies, _ *applyReaderFixture, _ *applyRuntimeFixture) {
+			mutate: func(dependencies *applyDependencies, _ *applyOperationsFixture) {
 				dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 					return compose.Source{}, errApplyTest
 				}
 			},
-			want:         []error{errApplyTest},
-			wantEvents:   []string{},
-			outputWriter: io.Discard,
+			want:       errApplyTest,
+			wantEvents: []string{},
+			output:     io.Discard,
 		},
 		{
-			name: "runtime selection",
-			mutate: func(dependencies *applyDependencies, _ *applyReaderFixture, _ *applyRuntimeFixture) {
-				loadSource := dependencies.loadSource
-				dependencies.loadSource = func(ctx context.Context, path string) (compose.Source, error) {
-					source, err := loadSource(ctx, path)
-					source.Content = []byte("invalid: [")
-
-					return source, err
-				}
+			name: "facade",
+			mutate: func(_ *applyDependencies, operations *applyOperationsFixture) {
+				operations.dryRunErr = errApplyTest
 			},
-			want:         []error{compose.ErrInvalidSource},
-			wantEvents:   []string{sourceEvent},
-			outputWriter: io.Discard,
+			want:       errApplyTest,
+			wantEvents: []string{sourceEvent, dryRunEvent},
+			output:     io.Discard,
 		},
 		{
-			name: "reader",
-			mutate: func(dependencies *applyDependencies, _ *applyReaderFixture, _ *applyRuntimeFixture) {
-				dependencies.openReader = func(context.Context) (applyTransactionReader, error) {
-					return nil, errApplyTest
-				}
-			},
-			want:         []error{errApplyTest},
-			wantEvents:   []string{sourceEvent},
-			outputWriter: io.Discard,
-		},
-		{
-			name: "runtime and reader close",
-			mutate: func(dependencies *applyDependencies, reader *applyReaderFixture, _ *applyRuntimeFixture) {
-				reader.closeErr = errApplyCloseTest
-				dependencies.openRuntime = func(context.Context, domain.RuntimeKind) (applyRuntime, error) {
-					return nil, errApplyTest
-				}
-			},
-			want:         []error{errApplyTest, errApplyCloseTest},
-			wantEvents:   []string{sourceEvent, readerEvent, closeReaderEvent},
-			outputWriter: io.Discard,
-		},
-		{
-			name: "operation and reader close",
-			mutate: func(_ *applyDependencies, reader *applyReaderFixture, runtime *applyRuntimeFixture) {
-				reader.closeErr = errApplyCloseTest
-				runtime.inspectErr = errApplyTest
-			},
-			want:         []error{errApplyTest, errApplyCloseTest},
-			wantEvents:   []string{sourceEvent, readerEvent, runtimeEvent, inspectEvent, closeRuntimeEvent, closeReaderEvent},
-			outputWriter: io.Discard,
-		},
-		{
-			name: "output after close",
-			mutate: func(_ *applyDependencies, _ *applyReaderFixture, _ *applyRuntimeFixture) {
-			},
-			want: []error{errApplyOutputTest},
+			name:   "output",
+			mutate: func(*applyDependencies, *applyOperationsFixture) {},
+			want:   errApplyOutputTest,
 			wantEvents: []string{
-				sourceEvent, readerEvent, runtimeEvent, inspectEvent, "resolve", "check", "journal", "observe",
-				closeRuntimeEvent, closeReaderEvent,
+				sourceEvent, dryRunEvent, writeEvent,
 			},
-			outputWriter: failingWriterWithError{err: errApplyOutputTest},
+			output: eventWriter{err: errApplyOutputTest},
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			events := make([]string, 0, 10)
-			reader := &applyReaderFixture{events: &events, closeErr: nil}
-			runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-			dependencies := validApplyDependencies(t, &events, reader, runtime)
-			test.mutate(&dependencies, reader, runtime)
-
-			err := executeDryRun(
-				context.Background(),
-				applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: true},
-				test.outputWriter,
-				dependencies,
-			)
-			for _, want := range test.want {
-				if !errors.Is(err, want) {
-					t.Fatalf("executeDryRun() error = %v, want %v", err, want)
-				}
-			}
-
-			if !reflect.DeepEqual(events, test.wantEvents) {
-				t.Fatalf("executeDryRun() events = %q, want %q", events, test.wantEvents)
-			}
-		})
-	}
+	assertApplyBoundaryFailures(
+		t,
+		tests,
+		executeDryRun,
+		applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: true},
+	)
 }
 
-func TestExecuteMutationEmitsPlanAfterClosingResources(t *testing.T) {
+func TestExecuteMutationLoadsSourceBeforeCallingFacadeAndWriting(t *testing.T) {
 	t.Parallel()
 
-	events := make([]string, 0, 6)
-	runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-	dependencies := mutationApplyDependencies(t, &events, runtime)
-	var opened *store.Store
-	openState := dependencies.openState
-	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
-		state, err := openState(ctx)
-		opened = state
-
-		return state, err
+	events := make([]string, 0, 3)
+	operations := &applyOperationsFixture{
+		events:    &events,
+		applyPlan: application.Plan{Kind: application.PlanBootstrap},
 	}
-	output := &closedStateWriter{
-		state:       &opened,
-		events:      &events,
-		destination: new(bytes.Buffer),
-	}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	output := eventWriter{events: &events, destination: new(bytes.Buffer)}
 
 	err := executeMutation(
 		context.Background(),
@@ -376,9 +295,13 @@ func TestExecuteMutationEmitsPlanAfterClosingResources(t *testing.T) {
 		t.Fatalf("executeMutation() error = %v", err)
 	}
 
-	wantEvents := []string{sourceEvent, runtimeEvent, stateEvent, mutationEvent, closeRuntimeEvent, "write"}
+	wantEvents := []string{sourceEvent, string(commandApply), writeEvent}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("executeMutation() events = %q, want %q", events, wantEvents)
+	}
+	if operations.applyRequest.Source.Content == nil ||
+		operations.applyRequest.Service != applyServiceValue {
+		t.Fatalf("Apply() request = %#v", operations.applyRequest)
 	}
 
 	var got applyPlan
@@ -449,7 +372,7 @@ func TestWriteHumanApplyPlanReportsCompletedApply(t *testing.T) {
 
 func applyPlanTestFixture(kind application.PlanKind) application.Plan {
 	return application.Plan{
-		Kind: kind, Project: "example", Service: "api", Runtime: domain.RuntimeDocker,
+		Kind: kind, Project: testProjectName, Service: "api", Runtime: domain.RuntimeDocker,
 		Platform: domain.Platform{OS: linuxOS, Architecture: testArchitectureAMD64},
 		Image:    domain.ImageIdentity{Reference: "example.invalid/api:1"},
 		Warnings: []application.Warning{{
@@ -515,20 +438,13 @@ func (writer *failAtWriter) Write(value []byte) (int, error) {
 	return len(value), nil
 }
 
-//nolint:funlen // The table keeps mutation resource ownership and error precedence together.
-func TestExecuteMutationContainsOpenRunAndOutputFailures(t *testing.T) {
+func TestExecuteMutationContainsBoundaryFailures(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		mutate     func(*applyDependencies, *applyRuntimeFixture)
-		want       error
-		wantEvents []string
-		output     io.Writer
-	}{
+	tests := []applyBoundaryTest{
 		{
 			name: "source",
-			mutate: func(dependencies *applyDependencies, _ *applyRuntimeFixture) {
+			mutate: func(dependencies *applyDependencies, _ *applyOperationsFixture) {
 				dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 					return compose.Source{}, errApplyTest
 				}
@@ -538,96 +454,37 @@ func TestExecuteMutationContainsOpenRunAndOutputFailures(t *testing.T) {
 			output:     io.Discard,
 		},
 		{
-			name: "runtime selection",
-			mutate: func(dependencies *applyDependencies, _ *applyRuntimeFixture) {
-				loadSource := dependencies.loadSource
-				dependencies.loadSource = func(ctx context.Context, path string) (compose.Source, error) {
-					source, err := loadSource(ctx, path)
-					source.Content = []byte("invalid: [")
-
-					return source, err
-				}
-			},
-			want:       compose.ErrInvalidSource,
-			wantEvents: []string{sourceEvent},
-			output:     io.Discard,
-		},
-		{
-			name: "runtime",
-			mutate: func(dependencies *applyDependencies, _ *applyRuntimeFixture) {
-				dependencies.openRuntime = func(context.Context, domain.RuntimeKind) (applyRuntime, error) {
-					return nil, errApplyTest
-				}
+			name: "facade",
+			mutate: func(_ *applyDependencies, operations *applyOperationsFixture) {
+				operations.applyErr = errApplyTest
 			},
 			want:       errApplyTest,
-			wantEvents: []string{sourceEvent},
+			wantEvents: []string{sourceEvent, string(commandApply)},
 			output:     io.Discard,
 		},
 		{
-			name: "state",
-			mutate: func(dependencies *applyDependencies, _ *applyRuntimeFixture) {
-				dependencies.openState = func(context.Context) (*store.Store, error) {
-					return nil, errApplyTest
-				}
+			name:   "output",
+			mutate: func(*applyDependencies, *applyOperationsFixture) {},
+			want:   errApplyOutputTest,
+			wantEvents: []string{
+				sourceEvent, string(commandApply), writeEvent,
 			},
-			want:       errApplyTest,
-			wantEvents: []string{sourceEvent, runtimeEvent, closeRuntimeEvent},
-			output:     io.Discard,
-		},
-		{
-			name: "mutation",
-			mutate: func(dependencies *applyDependencies, _ *applyRuntimeFixture) {
-				dependencies.mutate = func(
-					context.Context,
-					application.Request,
-					*store.Store,
-					applyRuntime,
-				) (application.Plan, error) {
-					return application.Plan{}, errApplyTest
-				}
-			},
-			want:       errApplyTest,
-			wantEvents: []string{sourceEvent, runtimeEvent, stateEvent, closeRuntimeEvent},
-			output:     io.Discard,
-		},
-		{
-			name:       "output",
-			mutate:     func(*applyDependencies, *applyRuntimeFixture) {},
-			want:       errApplyOutputTest,
-			wantEvents: []string{sourceEvent, runtimeEvent, stateEvent, mutationEvent, closeRuntimeEvent},
-			output:     failingWriterWithError{err: errApplyOutputTest},
+			output: eventWriter{err: errApplyOutputTest},
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			events := make([]string, 0, 6)
-			runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-			dependencies := mutationApplyDependencies(t, &events, runtime)
-			test.mutate(&dependencies, runtime)
-
-			err := executeMutation(
-				context.Background(),
-				applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: false},
-				test.output,
-				dependencies,
-			)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("executeMutation() error = %v, want %v", err, test.want)
-			}
-			if !reflect.DeepEqual(events, test.wantEvents) {
-				t.Fatalf("executeMutation() events = %q, want %q", events, test.wantEvents)
-			}
-		})
-	}
+	assertApplyBoundaryFailures(
+		t,
+		tests,
+		executeMutation,
+		applyInvocation{compose: composeFileValue, service: applyServiceValue, dryRun: false},
+	)
 }
 
-func mutationApplyDependencies(
+func operationApplyDependencies(
 	t *testing.T,
 	events *[]string,
-	runtime applyRuntime,
+	operations applyOperations,
 ) applyDependencies {
 	t.Helper()
 
@@ -637,98 +494,7 @@ func mutationApplyDependencies(
 
 			return testComposeSource(t), nil
 		},
-		openRuntime: func(_ context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-			*events = append(*events, runtimeEvent)
-			if runtimeKind != domain.RuntimeDocker {
-				return nil, errApplyTest
-			}
-
-			return runtime, nil
-		},
-		openReader: nil,
-		openState: func(ctx context.Context) (*store.Store, error) {
-			*events = append(*events, stateEvent)
-			directory, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				return nil, fmt.Errorf("resolve state test directory: %w", err)
-			}
-
-			return store.Open(ctx, filepath.Join(directory, "maniud", stateDatabaseName))
-		},
-		mutate: func(
-			_ context.Context,
-			request application.Request,
-			state *store.Store,
-			gotRuntime applyRuntime,
-		) (application.Plan, error) {
-			*events = append(*events, mutationEvent)
-			if request.Source.Content == nil || request.Service != applyServiceValue ||
-				state == nil || gotRuntime != runtime {
-				return application.Plan{}, errApplyTest
-			}
-
-			return application.Plan{Kind: application.PlanBootstrap}, nil
-		},
-		images: nil,
-	}
-}
-
-type closedStateWriter struct {
-	state       **store.Store
-	events      *[]string
-	destination *bytes.Buffer
-}
-
-func (writer *closedStateWriter) Write(value []byte) (int, error) {
-	if writer.state == nil || *writer.state == nil {
-		return 0, errStateOpenTest
-	}
-
-	_, _, err := (*writer.state).AppliedService(context.Background(), "example", applyServiceValue)
-	if err == nil {
-		return 0, errStateOpenTest
-	}
-
-	*writer.events = append(*writer.events, "write")
-
-	written, err := writer.destination.Write(value)
-	if err != nil {
-		return written, fmt.Errorf("write state-close test output: %w", err)
-	}
-
-	return written, nil
-}
-
-func validApplyDependencies(
-	t *testing.T,
-	events *[]string,
-	reader applyTransactionReader,
-	runtime applyRuntime,
-) applyDependencies {
-	t.Helper()
-
-	return applyDependencies{
-		loadSource: func(context.Context, string) (compose.Source, error) {
-			*events = append(*events, sourceEvent)
-
-			return testComposeSource(t), nil
-		},
-		openRuntime: func(_ context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-			*events = append(*events, runtimeEvent)
-			if runtimeKind != domain.RuntimeDocker {
-				return nil, errApplyTest
-			}
-
-			return runtime, nil
-		},
-		openReader: func(context.Context) (applyTransactionReader, error) {
-			*events = append(*events, readerEvent)
-
-			return reader, nil
-		},
-		openState: nil,
-		mutate:    nil,
-		images:    applyImageResolverFixture{events: events},
+		operations: operations,
 	}
 }
 
@@ -756,7 +522,7 @@ type eventWriter struct {
 }
 
 func (writer eventWriter) Write(value []byte) (int, error) {
-	*writer.events = append(*writer.events, "write")
+	*writer.events = append(*writer.events, writeEvent)
 	if writer.err != nil {
 		return 0, writer.err
 	}
@@ -877,46 +643,6 @@ func TestRuntimeWarningSinkUsesStableJSON(t *testing.T) {
 	}
 }
 
-func TestApplyRuntimeKindUsesValidatedComposeMetadata(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		extension string
-		want      domain.RuntimeKind
-		wantErr   error
-	}{
-		{name: "Docker default", want: domain.RuntimeDocker},
-		{
-			name: "Podman", extension: "x-maniud:\n  services:\n    api:\n      runtime: podman\n",
-			want: domain.RuntimePodman,
-		},
-		{
-			name:      "containerd",
-			extension: "x-maniud:\n  services:\n    api:\n      runtime: containerd\n",
-			want:      domain.RuntimeContainerd,
-		},
-		{name: "invalid source", extension: "x-maniud: []\n", wantErr: compose.ErrInvalidSource},
-		{
-			name:      "missing service metadata",
-			extension: "x-maniud:\n  services:\n    worker:\n      runtime: podman\n",
-			wantErr:   compose.ErrInvalidSource,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			source := testComposeSource(t)
-			source.Content = append(source.Content, test.extension...)
-			got, err := applyRuntimeKind(context.Background(), source, applyServiceValue)
-			if !errors.Is(err, test.wantErr) || got != test.want {
-				t.Fatalf("applyRuntimeKind() = %q, %v", got, err)
-			}
-		})
-	}
-}
-
 func TestLoadComposeSourcePinsCommittedEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -970,8 +696,7 @@ func TestLoadTrackedComposeSourceRejectsDirtyRepository(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,funlen // The assertions audit each default factory and its construction failures together.
-func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
+func TestDefaultApplyDependenciesBuildsApplicationFacade(t *testing.T) {
 	t.Parallel()
 
 	directory, err := filepath.EvalSymlinks(t.TempDir())
@@ -986,11 +711,12 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitApplyTestRepository(t, directory, "compose.yaml")
+	server := startApplyDockerServer(t)
 
 	dependencies, err := defaultApplyDependencies(map[string]string{
 		homeKey:         directory,
 		xdgStateHomeKey: directory,
-		dockerHostKey:   "unix:///missing/docker.sock",
+		dockerHostKey:   "tcp" + strings.TrimPrefix(server.URL, "http"),
 	}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err != nil {
 		t.Fatalf("defaultApplyDependencies() error = %v", err)
@@ -1000,50 +726,28 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 	if err != nil || !bytes.Equal(source.Content, []byte("services: {}\n")) {
 		t.Fatalf("loadSource() = %#v, %v", source, err)
 	}
-
-	reader, err := dependencies.openReader(context.Background())
-	if err != nil {
-		t.Fatalf("openReader() error = %v", err)
+	if dependencies.operations == nil {
+		t.Fatal("defaultApplyDependencies() has no application facade")
 	}
-
-	err = reader.Close()
-	if err != nil {
-		t.Fatalf("reader.Close() error = %v", err)
-	}
-
-	state, err := dependencies.openState(context.Background())
-	if err != nil {
-		t.Fatalf("openState() error = %v", err)
-	}
-
-	events := make([]string, 0, 1)
-	_, err = dependencies.mutate(
+	if _, err = dependencies.operations.Apply(
 		context.Background(),
-		application.Request{},
-		state,
-		&applyRuntimeFixture{events: &events, inspectErr: nil},
+		application.Request{Source: testComposeSource(t), Service: applyServiceValue},
+	); err == nil {
+		t.Fatal("Apply(runtime probe failure) succeeded")
+	}
+}
+
+func TestDefaultApplyDependenciesRejectsInvalidConfiguration(t *testing.T) {
+	t.Parallel()
+
+	_, err := defaultApplyDependencies(
+		map[string]string{}, io.Discard, os.Getwd, testRuntimePlugins(t),
 	)
-	if !errors.Is(err, application.ErrInvalidRequest) {
-		t.Fatalf("mutate(read-only runtime) error = %v", err)
-	}
-	if err = state.Close(); err != nil {
-		t.Fatalf("state.Close() error = %v", err)
-	}
-
-	runtime, err := dependencies.openRuntime(context.Background(), domain.RuntimeDocker)
-	if runtime != nil || !errors.Is(err, dockerruntime.ErrUnavailable) {
-		t.Fatalf("openRuntime() = %#v, %v", runtime, err)
-	}
-
-	if dependencies.images == nil {
-		t.Fatal("defaultApplyDependencies() has no image resolver")
-	}
-
-	_, err = defaultApplyDependencies(map[string]string{}, io.Discard, os.Getwd, testRuntimePlugins(t))
 	if err == nil {
 		t.Fatal("defaultApplyDependencies(missing home) succeeded")
 	}
 
+	directory := t.TempDir()
 	invalidDependencies, err := defaultApplyDependencies(
 		map[string]string{homeKey: directory, dockerHostKey: "invalid://engine"},
 		io.Discard,
@@ -1051,7 +755,10 @@ func TestDefaultApplyDependenciesOwnLifecycleFactories(t *testing.T) {
 		testRuntimePlugins(t),
 	)
 	if err == nil {
-		_, err = invalidDependencies.openRuntime(context.Background(), domain.RuntimeDocker)
+		_, err = invalidDependencies.operations.DryRun(
+			context.Background(),
+			application.Request{Source: testComposeSource(t), Service: applyServiceValue},
+		)
 	}
 	if !errors.Is(err, dockerruntime.ErrInvalidEndpoint) {
 		t.Fatalf("defaultApplyDependencies(invalid endpoint) error = %v", err)
@@ -1074,9 +781,8 @@ func commitApplyTestRepository(t *testing.T, directory string, paths ...string) 
 	}
 }
 
-func TestDefaultApplyDependenciesOpenRuntime(t *testing.T) {
-	t.Parallel()
-
+func startApplyDockerServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/_ping":
@@ -1086,6 +792,8 @@ func TestDefaultApplyDependenciesOpenRuntime(t *testing.T) {
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(response, `{"Version":"29.0.0","ApiVersion":"1.54",`+
 				`"MinAPIVersion":"1.54","Os":"`+linuxOS+`","Arch":"`+testArchitectureAMD64+`"}`)
+		case "/v1.54/info":
+			response.WriteHeader(http.StatusInternalServerError)
 		default:
 			t.Errorf("unexpected Docker request = %s %s", request.Method, request.URL.Path)
 			response.WriteHeader(http.StatusNotFound)
@@ -1093,209 +801,7 @@ func TestDefaultApplyDependenciesOpenRuntime(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	dependencies, err := defaultApplyDependencies(map[string]string{
-		homeKey:       t.TempDir(),
-		dockerHostKey: "tcp" + strings.TrimPrefix(server.URL, "http"),
-	}, io.Discard, os.Getwd, testRuntimePlugins(t))
-	if err != nil {
-		t.Fatalf("defaultApplyDependencies() error = %v", err)
-	}
-
-	runtimeAdapter, err := dependencies.openRuntime(context.Background(), domain.RuntimeDocker)
-	if err != nil {
-		t.Fatalf("openRuntime() error = %v", err)
-	}
-
-	if runtimeAdapter == nil {
-		t.Fatal("openRuntime() returned a nil adapter")
-	}
-
-	runtimeAdapter.CloseIdleConnections()
-}
-
-func TestDefaultApplyDependenciesOpenPodmanRuntime(t *testing.T) {
-	t.Parallel()
-
-	socketPath := startApplyPodmanServer(t)
-	dependencies, err := defaultApplyDependencies(map[string]string{
-		homeKey:          t.TempDir(),
-		xdgStateHomeKey:  t.TempDir(),
-		dockerHostKey:    "invalid://must-not-be-read",
-		containerHostKey: "unix://" + socketPath,
-	}, io.Discard, os.Getwd, testRuntimePlugins(t))
-	if err != nil {
-		t.Fatalf("defaultApplyDependencies() error = %v", err)
-	}
-
-	runtimeAdapter, err := dependencies.openRuntime(context.Background(), domain.RuntimePodman)
-	if err != nil {
-		t.Fatalf("openRuntime(Podman) error = %v", err)
-	}
-	evidence, err := runtimeAdapter.Inspect(context.Background())
-	if err != nil || evidence.Kind != domain.RuntimePodman {
-		t.Fatalf("Inspect(Podman) = %#v, %v", evidence, err)
-	}
-	runtimeAdapter.CloseIdleConnections()
-}
-
-func TestDefaultApplyDependenciesOpenContainerdRuntime(t *testing.T) {
-	t.Parallel()
-
-	socketPath := startApplyContainerdServer(t)
-	dependencies, err := defaultApplyDependencies(map[string]string{
-		homeKey:                t.TempDir(),
-		xdgStateHomeKey:        t.TempDir(),
-		containerdAddressKey:   "unix://" + socketPath,
-		containerdNamespaceKey: "maniud-test",
-	}, io.Discard, os.Getwd, testRuntimePlugins(t))
-	if err != nil {
-		t.Fatalf("defaultApplyDependencies() error = %v", err)
-	}
-
-	runtimeAdapter, err := dependencies.openRuntime(context.Background(), domain.RuntimeContainerd)
-	if err != nil {
-		t.Fatalf("openRuntime(containerd) error = %v", err)
-	}
-	if runtimeAdapter == nil {
-		t.Fatal("openRuntime(containerd) returned a nil adapter")
-	}
-	runtimeAdapter.CloseIdleConnections()
-}
-
-func TestDefaultApplyDependenciesRejectsInvalidRuntimes(t *testing.T) {
-	t.Parallel()
-
-	dependencies, err := defaultApplyDependencies(
-		map[string]string{homeKey: t.TempDir()}, io.Discard, os.Getwd, testRuntimePlugins(t),
-	)
-	if err != nil {
-		t.Fatalf("defaultApplyDependencies() error = %v", err)
-	}
-	var runtimeAdapter applyRuntime
-	runtimeAdapter, err = dependencies.openRuntime(context.Background(), domain.RuntimeContainerd)
-	if runtimeAdapter != nil || err == nil {
-		t.Fatalf("openRuntime(containerd) = %#v, %v", runtimeAdapter, err)
-	}
-	runtimeAdapter, err = dependencies.openRuntime(context.Background(), domain.RuntimeKind("invalid"))
-	if runtimeAdapter != nil || !errors.Is(err, application.ErrInvalidRequest) {
-		t.Fatalf("openRuntime(invalid) = %#v, %v", runtimeAdapter, err)
-	}
-
-	for _, host := range []string{"invalid://podman", "unix:///missing/podman.sock"} {
-		invalidDependencies, dependencyErr := defaultApplyDependencies(map[string]string{
-			homeKey: t.TempDir(), containerHostKey: host,
-		}, io.Discard, os.Getwd, testRuntimePlugins(t))
-		if dependencyErr != nil {
-			t.Fatalf("defaultApplyDependencies(%q) error = %v", host, dependencyErr)
-		}
-		runtimeAdapter, err = invalidDependencies.openRuntime(context.Background(), domain.RuntimePodman)
-		if runtimeAdapter != nil || err == nil {
-			t.Fatalf("openRuntime(Podman %q) = %#v, %v", host, runtimeAdapter, err)
-		}
-	}
-}
-
-type applyContainerdVersionServer struct {
-	versionapi.UnimplementedVersionServer
-}
-
-func (*applyContainerdVersionServer) Version(
-	context.Context,
-	*emptypb.Empty,
-) (*versionapi.VersionResponse, error) {
-	return &versionapi.VersionResponse{Version: "2.3.4", Revision: "test"}, nil
-}
-
-type applyContainerdIntrospectionServer struct {
-	introspectionapi.UnimplementedIntrospectionServer
-}
-
-func (*applyContainerdIntrospectionServer) Server(
-	context.Context,
-	*emptypb.Empty,
-) (*introspectionapi.ServerResponse, error) {
-	return &introspectionapi.ServerResponse{UUID: "maniud-test", Pid: 42, Pidns: 84}, nil
-}
-
-func startApplyContainerdServer(t *testing.T) string {
-	t.Helper()
-
-	directory, err := os.MkdirTemp("/tmp", "maniud-") //nolint:usetesting // Darwin test paths must fit sockaddr_un.
-	if err != nil {
-		t.Fatalf("create containerd test socket directory: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	path := filepath.Join(directory, "containerd.sock")
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
-	if err != nil {
-		t.Fatalf("listen on containerd test socket: %v", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = listener.Close()
-		t.Fatalf("protect containerd test socket: %v", err)
-	}
-	server := grpc.NewServer()
-	versionapi.RegisterVersionServer(server, &applyContainerdVersionServer{})
-	introspectionapi.RegisterIntrospectionServer(server, &applyContainerdIntrospectionServer{})
-	done := make(chan struct{})
-	go func() {
-		_ = server.Serve(listener)
-		close(done)
-	}()
-	t.Cleanup(func() {
-		server.Stop()
-		_ = listener.Close()
-		<-done
-	})
-
-	return path
-}
-
-func startApplyPodmanServer(t *testing.T) string {
-	t.Helper()
-
-	directory, err := os.MkdirTemp("/tmp", "maniud-") //nolint:usetesting // Darwin test paths must fit sockaddr_un.
-	if err != nil {
-		t.Fatalf("create Podman test socket directory: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	path := filepath.Join(directory, "podman.sock")
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
-	if err != nil {
-		t.Fatalf("listen Podman test socket: %v", err)
-	}
-	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // The test socket is private to the current user.
-		_ = listener.Close()
-		t.Fatalf("protect Podman test socket: %v", err)
-	}
-	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/_ping":
-			writer.Header().Set("Libpod-Api-Version", "6.1.0")
-			_, _ = io.WriteString(writer, "OK")
-		case "/version":
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(writer, `{"Version":"6.1.0","Components":[{"Name":"Podman Engine",`+
-				`"Version":"6.1.0","Details":{"APIVersion":"6.1.0","MinAPIVersion":"5.0.0"}}]}`)
-		case "/v6.1.0/libpod/info":
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(writer,
-				`{"host":{"os":"linux","arch":"amd64"},`+
-					`"store":{"graphRoot":"/var/lib/containers/storage"}}`,
-			)
-		default:
-			t.Errorf("unexpected Podman request = %s %s", request.Method, request.URL.Path)
-			http.NotFound(writer, request)
-		}
-	})
-	server := &http.Server{Handler: handler} //nolint:gosec // The test server binds only the private Unix socket.
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() {
-		_ = server.Close()
-		_ = listener.Close()
-	})
-
-	return path
+	return server
 }
 
 func TestDefaultApplyDependenciesRejectsMissingWorkingDirectory(t *testing.T) {
@@ -1307,9 +813,7 @@ func TestDefaultApplyDependenciesRejectsMissingWorkingDirectory(t *testing.T) {
 		func() (string, error) { return "", io.ErrUnexpectedEOF },
 		testRuntimePlugins(t),
 	)
-	if err == nil || dependencies.loadSource != nil || dependencies.openRuntime != nil ||
-		dependencies.openReader != nil || dependencies.openState != nil || dependencies.mutate != nil ||
-		dependencies.images != nil {
+	if err == nil || dependencies.loadSource != nil || dependencies.operations != nil {
 		t.Fatalf("defaultApplyDependencies() = (%+v, %v), want empty dependencies and error", dependencies, err)
 	}
 }
@@ -1339,7 +843,14 @@ func TestRunDispatchesApplyAndMapsFailure(t *testing.T) {
 			name:       "retryable failure",
 			execute:    func(applyInvocation) error { return runtimeplugin.ErrUnavailable },
 			wantStatus: 1,
-			wantOutput: "{\"code\":\"apply_failed\",\"message\":\"apply validation failed\",\"retryable\":true}\n",
+			wantOutput: retryableApplyFailureJSON,
+		},
+		{
+			name:       "runtime not built",
+			execute:    func(applyInvocation) error { return runtimeplugin.ErrNotBuilt },
+			wantStatus: 1,
+			wantOutput: "{\"code\":\"runtime_not_built\",\"message\":" +
+				"\"selected container runtime is not included in this build\",\"retryable\":false}\n",
 		},
 		{
 			name:       "missing executor",
@@ -1448,9 +959,9 @@ func TestClassifyApplyFailure(t *testing.T) {
 	}{
 		{err: context.Canceled, code: domain.ErrorOperationCancelled, retryable: false},
 		{err: registry.ErrCancelled, code: domain.ErrorOperationCancelled, retryable: false},
-		{err: runtimeplugin.ErrNotBuilt, code: domain.ErrorRuntimeNotBuilt, retryable: false},
 		{err: runtimeplugin.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
 		{err: fmt.Errorf("wrapped: %w", runtimeplugin.ErrUnavailable), code: domain.ErrorApplyFailed, retryable: true},
+		{err: runtimeplugin.ErrNotBuilt, code: domain.ErrorRuntimeNotBuilt, retryable: false},
 		{err: registry.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
 		{err: registry.ErrRateLimited, code: domain.ErrorApplyFailed, retryable: true},
 		{err: store.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},

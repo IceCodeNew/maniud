@@ -82,8 +82,12 @@ func defaultGenDependencies(
 	if !filepath.IsAbs(workingDirectory) {
 		return genDependencies{}, fmt.Errorf("resolve generation working directory: %w", runtimeargv.ErrInvalid)
 	}
-	openRuntime := func(ctx context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-		return openApplyRuntime(ctx, runtimeKind, environment, stderr, runtimes)
+	selectRuntime := func(runtimeKind domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+		return runtimes.Select(
+			runtimeKind,
+			runtimeEnvironment(environment),
+			runtimeWarningSink(stderr),
+		)
 	}
 
 	return genDependencies{
@@ -110,7 +114,7 @@ func defaultGenDependencies(
 			runtimeKind domain.RuntimeKind,
 			expected domain.ImageIdentity,
 		) (application.ImageProbe, error) {
-			return probeGeneratedRuntimeImage(ctx, runtimeKind, expected, openRuntime)
+			return probeGeneratedRuntimeImage(ctx, runtimeKind, expected, selectRuntime)
 		},
 		resolveImageUser: func(
 			ctx context.Context,
@@ -118,7 +122,7 @@ func defaultGenDependencies(
 			expected domain.ImageIdentity,
 			specification string,
 		) (string, error) {
-			return resolveGeneratedImageUser(ctx, runtimeKind, expected, specification, openRuntime)
+			return resolveGeneratedImageUser(ctx, runtimeKind, expected, specification, selectRuntime)
 		},
 		analyzeArchive:  imagearchive.Analyze,
 		recommendations: defaultImageRecommendationOptions(environment),
@@ -131,9 +135,13 @@ func probeGeneratedRuntimeImage(
 	ctx context.Context,
 	runtimeKind domain.RuntimeKind,
 	expected domain.ImageIdentity,
-	openRuntime func(context.Context, domain.RuntimeKind) (applyRuntime, error),
+	selectRuntime func(domain.RuntimeKind) (application.OperationRuntimeFactory, error),
 ) (application.ImageProbe, error) {
-	runtime, err := openRuntime(ctx, runtimeKind)
+	openRuntime, err := selectRuntime(runtimeKind)
+	if err != nil {
+		return application.ImageProbe{}, fmt.Errorf("select generated runtime: %w", err)
+	}
+	runtime, err := openRuntime(ctx)
 	if err != nil {
 		return application.ImageProbe{}, fmt.Errorf("open generated runtime: %w", err)
 	}
@@ -152,9 +160,13 @@ func resolveGeneratedImageUser(
 	runtimeKind domain.RuntimeKind,
 	expected domain.ImageIdentity,
 	specification string,
-	openRuntime func(context.Context, domain.RuntimeKind) (applyRuntime, error),
+	selectRuntime func(domain.RuntimeKind) (application.OperationRuntimeFactory, error),
 ) (string, error) {
-	runtime, err := openRuntime(ctx, runtimeKind)
+	openRuntime, err := selectRuntime(runtimeKind)
+	if err != nil {
+		return "", fmt.Errorf("select generated runtime: %w", err)
+	}
+	runtime, err := openRuntime(ctx)
 	if err != nil {
 		return "", fmt.Errorf("open generated runtime: %w", err)
 	}

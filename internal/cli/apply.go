@@ -43,34 +43,14 @@ func prepareApplyPlan(
 	arguments applyInvocation,
 	dependencies applyDependencies,
 ) (application.Plan, error) {
-	source, err := dependencies.loadSource(ctx, arguments.compose)
+	request, err := loadApplyRequest(ctx, arguments, dependencies)
 	if err != nil {
-		return application.Plan{}, fmt.Errorf("load apply source: %w", err)
-	}
-	runtimeKind, err := applyRuntimeKind(ctx, source, arguments.service)
-	if err != nil {
-		return application.Plan{}, fmt.Errorf("select apply runtime: %w", err)
+		return application.Plan{}, err
 	}
 
-	reader, err := dependencies.openReader(ctx)
+	plan, err := dependencies.operations.DryRun(ctx, request)
 	if err != nil {
-		return application.Plan{}, fmt.Errorf("open apply state: %w", err)
-	}
-
-	runtime, err := dependencies.openRuntime(ctx, runtimeKind)
-	if err != nil {
-		return application.Plan{}, errors.Join(fmt.Errorf("open apply runtime: %w", err), reader.Close())
-	}
-
-	plan, runErr := application.NewService(dependencies.images, runtime, reader).DryRun(
-		ctx,
-		application.Request{Source: source, Service: arguments.service},
-	)
-	runtime.CloseIdleConnections()
-
-	closeErr := reader.Close()
-	if runErr != nil || closeErr != nil {
-		return application.Plan{}, errors.Join(runErr, closeErr)
+		return application.Plan{}, errors.Join(err)
 	}
 
 	return plan, nil
@@ -82,41 +62,29 @@ func executeMutation(
 	output io.Writer,
 	dependencies applyDependencies,
 ) error {
-	source, err := dependencies.loadSource(ctx, arguments.compose)
+	request, err := loadApplyRequest(ctx, arguments, dependencies)
 	if err != nil {
-		return fmt.Errorf("load apply source: %w", err)
+		return err
 	}
-	runtimeKind, err := applyRuntimeKind(ctx, source, arguments.service)
+	plan, err := dependencies.operations.Apply(ctx, request)
 	if err != nil {
-		return fmt.Errorf("select apply runtime: %w", err)
-	}
-
-	runtime, err := dependencies.openRuntime(ctx, runtimeKind)
-	if err != nil {
-		return fmt.Errorf("open apply runtime: %w", err)
-	}
-
-	state, err := dependencies.openState(ctx)
-	if err != nil {
-		runtime.CloseIdleConnections()
-
-		return fmt.Errorf("open apply state: %w", err)
-	}
-
-	plan, runErr := dependencies.mutate(
-		ctx,
-		application.Request{Source: source, Service: arguments.service},
-		state,
-		runtime,
-	)
-	runtime.CloseIdleConnections()
-
-	closeErr := state.Close()
-	if runErr != nil || closeErr != nil {
-		return errors.Join(runErr, closeErr)
+		return errors.Join(err)
 	}
 
 	return writeApplyPlan(output, plan, false, arguments.json)
+}
+
+func loadApplyRequest(
+	ctx context.Context,
+	arguments applyInvocation,
+	dependencies applyDependencies,
+) (application.Request, error) {
+	source, err := dependencies.loadSource(ctx, arguments.compose)
+	if err != nil {
+		return application.Request{}, fmt.Errorf("load apply source: %w", err)
+	}
+
+	return application.Request{Source: source, Service: arguments.service}, nil
 }
 
 type applyPlan struct {
