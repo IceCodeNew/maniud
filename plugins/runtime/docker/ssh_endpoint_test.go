@@ -756,7 +756,7 @@ func TestSSHConnectionDeadlines(t *testing.T) {
 		t.Fatalf("SetDeadline(past) error = %v", err)
 	}
 
-	time.Sleep(10 * time.Millisecond)
+	waitForSSHConnectionClose(t, connection)
 
 	err = connection.SetDeadline(time.Time{})
 	if !errors.Is(err, net.ErrClosed) {
@@ -764,6 +764,20 @@ func TestSSHConnectionDeadlines(t *testing.T) {
 	}
 
 	_ = connection.Close()
+}
+
+func waitForSSHConnectionClose(t *testing.T, connection net.Conn) {
+	t.Helper()
+
+	sshConnection, ok := connection.(*sshChannelConnection)
+	if !ok {
+		t.Fatalf("SSH connection type = %T, want *sshChannelConnection", connection)
+	}
+	select {
+	case <-sshConnection.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSH connection did not close after its deadline")
+	}
 }
 
 func TestSSHHandshakeAndChannelCancellation(t *testing.T) {
