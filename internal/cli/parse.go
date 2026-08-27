@@ -33,6 +33,7 @@ const (
 	intervalOption                    = "--interval"
 	dryRunOption                      = "--dry-run"
 	jsonOption                        = "--json"
+	tuiOption                         = "--tui"
 	debugOption                       = "--debug"
 	helpOption                        = "--help"
 	shortHelpOption                   = "-h"
@@ -76,6 +77,7 @@ type applyInvocation struct {
 	service string
 	dryRun  bool
 	json    bool
+	tui     bool
 }
 
 func (applyInvocation) kind() command {
@@ -144,6 +146,7 @@ func (*genCommandLine) Help() string {
 type applyCommandLine struct {
 	DryRun  bool   `help:"Validate and show the planned action without changing anything." name:"dry-run"`
 	JSON    bool   `help:"Print one detailed JSON object instead of the short summary."`
+	TUI     bool   `help:"Open an interactive apply session."`
 	Compose string `arg:""                                                                 help:"Compose file to apply."                                  name:"compose"`
 	Service string `arg:""                                                                 help:"Service to select when the file contains more than one." name:"service" optional:""`
 }
@@ -245,12 +248,7 @@ func (value commandLine) invocation(path string, args []string) (invocation, err
 	case commandGen:
 		return value.genInvocation(args)
 	case commandApply:
-		return invocation{arguments: applyInvocation{
-			compose: value.Apply.Compose,
-			service: value.Apply.Service,
-			dryRun:  value.Apply.DryRun,
-			json:    value.Apply.JSON,
-		}, debug: value.Debug}, nil
+		return value.parsedApplyInvocation()
 	case commandGitOpsInit:
 		return invocation{arguments: gitOpsInitInvocation{
 			repository: value.GitOps.Init.Repository,
@@ -280,6 +278,20 @@ func (value commandLine) invocation(path string, args []string) (invocation, err
 	default:
 		return invocation{}, errInvalidArguments
 	}
+}
+
+func (value commandLine) parsedApplyInvocation() (invocation, error) {
+	if value.Apply.TUI && (value.Apply.DryRun || value.Apply.JSON) {
+		return invocation{}, errInvalidArguments
+	}
+
+	return invocation{arguments: applyInvocation{
+		compose: value.Apply.Compose,
+		service: value.Apply.Service,
+		dryRun:  value.Apply.DryRun,
+		json:    value.Apply.JSON,
+		tui:     value.Apply.TUI,
+	}, debug: value.Debug}, nil
 }
 
 func (value commandLine) genInvocation(args []string) (invocation, error) {

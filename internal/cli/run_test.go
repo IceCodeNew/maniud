@@ -243,7 +243,7 @@ func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
 
 			output := new(bytes.Buffer)
 			status := runProduction(
-				context.Background(), test.args, output, io.Discard, map[string]string{}, test.getwd,
+				context.Background(), test.args, nil, output, io.Discard, map[string]string{}, test.getwd,
 				testRuntimePlugins(t),
 			)
 			if status != 1 || !strings.Contains(output.String(), test.wantCode) {
@@ -265,7 +265,7 @@ func TestRunProductionWiresLongRunningCommands(t *testing.T) {
 	for _, arguments := range commands {
 		var output bytes.Buffer
 		status := runProduction(
-			t.Context(), arguments, &output, io.Discard, map[string]string{}, os.Getwd,
+			t.Context(), arguments, nil, &output, io.Discard, map[string]string{}, os.Getwd,
 			testRuntimePlugins(t),
 		)
 		if status != 1 {
@@ -283,6 +283,7 @@ func TestRunProductionValidatesNotificationsBeforeApplyDependencies(t *testing.T
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{telegramBotTokenEnvironment: testTelegramBotToken},
@@ -311,6 +312,7 @@ func TestRunProductionValidatesBarkEncryptionBeforeApplyDependencies(t *testing.
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{barkEncryptionKeyEnvironment: testBarkEncryptionKey},
@@ -338,6 +340,7 @@ func TestRunProductionValidatesNotificationsBeforeDaemonStart(t *testing.T) {
 	status := runProduction(
 		t.Context(),
 		[]string{daemonCommand, startCommand},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{telegramChatIDEnvironment: testTelegramChatID},
@@ -372,7 +375,7 @@ func TestRunProductionLimitsNotificationConfigurationToEventProducingCommands(t 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		status := runProduction(
-			t.Context(), test.arguments, &stdout, &stderr, environment, os.Getwd,
+			t.Context(), test.arguments, nil, &stdout, &stderr, environment, os.Getwd,
 			testRuntimePlugins(t),
 		)
 		if status != test.wantStatus || stderr.Len() != 0 {
@@ -389,6 +392,7 @@ func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{homeKey: t.TempDir(), barkDeviceKeyEnvironment: testBarkDeviceKey},
@@ -397,6 +401,25 @@ func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
 	)
 	if status != 1 || !strings.Contains(stdout.String(), `"code":"apply_failed"`) || stderr.Len() != 0 {
 		t.Fatalf("runProduction(Bark lifecycle) = %d, %q, %q", status, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunProductionWiresInteractiveApply(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{string(commandApply), tuiOption, composeFileValue},
+		strings.NewReader("q"),
+		&stdout,
+		io.Discard,
+		map[string]string{homeKey: t.TempDir()},
+		func() (string, error) { return t.TempDir(), nil },
+		testRuntimePlugins(t),
+	)
+	if status != 1 || !strings.Contains(stdout.String(), `"code":"apply_failed"`) {
+		t.Fatalf("runProduction(TUI) = %d, %q", status, stdout.String())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/tui"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
@@ -16,13 +17,14 @@ import (
 func Run(
 	ctx context.Context,
 	args []string,
-	_ io.Reader,
+	stdin io.Reader,
 	stdout, stderr io.Writer,
 	runtimes runtimeplugin.Set,
 ) int {
 	return runProduction(
 		ctx,
 		args,
+		stdin,
 		stdout,
 		stderr,
 		environmentMap(os.Environ()),
@@ -35,6 +37,7 @@ func Run(
 func runProduction(
 	ctx context.Context,
 	args []string,
+	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
 	environment map[string]string,
@@ -59,9 +62,17 @@ func runProduction(
 		if err != nil {
 			return err
 		}
+		var tuiEvents *tui.EventStream
+		if arguments.tui {
+			tuiEvents = tui.NewEventStream()
+			events = combinedEventSink{first: events, second: tuiEvents}
+		}
 		dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, events, runtimes)
 		if err != nil {
 			return err
+		}
+		if arguments.tui {
+			return runtimes.Classify(executeTUI(ctx, arguments, stdin, stdout, dependencies, tuiEvents))
 		}
 
 		return runtimes.Classify(executeApply(ctx, arguments, stdout, dependencies))

@@ -19,6 +19,8 @@ import (
 type applyOperations interface {
 	DryRun(ctx context.Context, request application.Request) (application.Plan, error)
 	Apply(ctx context.Context, request application.Request) (application.Plan, error)
+	Snapshot(ctx context.Context, request application.Request) (application.OperationSnapshot, error)
+	Evidence(snapshot application.OperationSnapshot) (application.EvidenceBundle, error)
 }
 
 type applyDependencies struct {

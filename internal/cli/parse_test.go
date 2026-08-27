@@ -87,6 +87,16 @@ func TestParseAcceptedCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "apply interactively",
+			args: []string{string(commandApply), composeFileValue, applyServiceValue, tuiOption},
+			want: invocation{
+				arguments: applyInvocation{
+					compose: composeFileValue, service: applyServiceValue, tui: true,
+				},
+				debug: false,
+			},
+		},
+		{
 			name: "gitops init",
 			args: []string{gitOpsCommand, initCommand, repositoryValue, branchOption, "stable"},
 			want: invocation{
@@ -192,6 +202,8 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandGen), imageValue, unknownOption, "value"},
 		{string(commandApply)},
 		{string(commandApply), "one", "two", "three"},
+		{string(commandApply), composeFileValue, tuiOption, dryRunOption},
+		{string(commandApply), composeFileValue, tuiOption, jsonOption},
 		{gitOpsCommand},
 		{gitOpsCommand, unknownValue},
 		{gitOpsCommand, initCommand},
