@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,8 +61,14 @@ func TestPullImageSendsImmutableAuthenticatedRequestAndConsumesStream(t *testing
 		}, nil
 	})
 
+	var requestValid atomic.Bool
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		assertImagePullRequest(t, request, expected.ReferenceDigest.String())
+		if !validImagePullRequest(request, expected.ReferenceDigest.String()) {
+			response.WriteHeader(http.StatusBadRequest)
+
+			return
+		}
+		requestValid.Store(true)
 		response.Header().Set(contentTypeHeader, jsonContentType+"; charset=utf-8")
 		_, _ = io.WriteString(response,
 			`{"status":"Pulling manifest","id":"sha256:layer","progress":"1 B / 2 B",`+
@@ -70,9 +77,9 @@ func TestPullImageSendsImmutableAuthenticatedRequestAndConsumesStream(t *testing
 		)
 	}))
 
-	err := client.PullImage(context.Background(), expected, authenticator)
-	if err != nil {
-		t.Fatalf("PullImage() error = %v", err)
+	err := client.PullImage(t.Context(), expected, authenticator)
+	if err != nil || !requestValid.Load() {
+		t.Fatalf("PullImage() error = %v, request valid = %t", err, requestValid.Load())
 	}
 }
 
@@ -95,20 +102,24 @@ func TestPullImageSupportsAnonymousVariantPulls(t *testing.T) {
 			Username: "", Password: "", RefreshToken: "", AccessToken: "",
 		}, nil
 	})
+	var requestValid atomic.Bool
 	client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		auth, err := authconfig.Decode(request.Header.Get(dockerRegistryAuthHeader))
-		if err != nil || request.URL.Query().Get(imagePullPlatformQuery) != "linux/arm64/v8" ||
+		if err != nil || auth == nil || request.URL.Query().Get(imagePullPlatformQuery) != "linux/arm64/v8" ||
 			auth.ServerAddress != "example.com" || auth.Username != "" || auth.Password != "" {
-			t.Fatal("anonymous variant pull request is invalid")
+			response.WriteHeader(http.StatusBadRequest)
+
+			return
 		}
+		requestValid.Store(true)
 
 		response.Header().Set(contentTypeHeader, jsonContentType)
 	}))
 	client.version.Architecture = dockerArchitectureARM64
 
-	err := client.PullImage(context.Background(), expected, authenticator)
-	if err != nil {
-		t.Fatalf("PullImage(anonymous) error = %v", err)
+	err := client.PullImage(t.Context(), expected, authenticator)
+	if err != nil || !requestValid.Load() {
+		t.Fatalf("PullImage(anonymous) error = %v, request valid = %t", err, requestValid.Load())
 	}
 }
 
@@ -441,12 +452,8 @@ func assertInvalidImagePullStreams(
 	}
 }
 
-func assertImagePullRequest(t *testing.T, request *http.Request, digest string) {
-	t.Helper()
-
-	if !validImagePullRequestTarget(request, digest) || !validImagePullRequestAuth(request) {
-		t.Fatal("image pull request is invalid")
-	}
+func validImagePullRequest(request *http.Request, digest string) bool {
+	return validImagePullRequestTarget(request, digest) && validImagePullRequestAuth(request)
 }
 
 func validImagePullRequestTarget(request *http.Request, digest string) bool {
