@@ -300,7 +300,7 @@ func hasPodmanPullContent(message imagePullMessage) bool {
 }
 
 func validPodmanPullProgress(progress podmanImagePullProgress) bool {
-	validStatus := progress.Status == pullStatusPulling || progress.Status == pullStatusSuccess ||
+	validStatus := progress.Status == "" || progress.Status == pullStatusPulling || progress.Status == pullStatusSuccess ||
 		progress.Status == "skipped"
 
 	return validStatus &&

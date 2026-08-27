@@ -387,6 +387,10 @@ func TestPodmanPullMessageValidators(t *testing.T) {
 	if !validImagePullMessage(progress) || !validPodmanPullProgress(*progress.Progress) {
 		t.Fatal("valid pull progress rejected")
 	}
+	progress.Progress.Status = ""
+	if !validImagePullMessage(progress) {
+		t.Fatal("pull progress with omitted status rejected")
+	}
 	progress.Progress.Total = -2
 	if validImagePullMessage(progress) {
 		t.Fatal("invalid pull progress accepted")

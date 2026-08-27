@@ -89,6 +89,11 @@ func TestConnectNegotiatesAndPinsNativeLibpodScope(t *testing.T) {
 				testPodmanPingPath, testPodmanFallbackPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info",
 			},
 		},
+		{
+			name: "future prerelease maximum", minimum: testLibpodServerMinimum, maximum: "7.0.0-dev",
+			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -117,8 +122,9 @@ func testPodmanNegotiation(t *testing.T, test podmanNegotiationTest) {
 	}
 	t.Cleanup(client.CloseIdleConnections)
 
+	maximumEvidence, _ := parseSemanticVersion(test.maximum)
 	wantVersion := Version{
-		Protocol: test.protocol, Minimum: test.minimum, Maximum: test.maximum,
+		Protocol: test.protocol, Minimum: test.minimum, Maximum: maximumEvidence.String(),
 		Product: libpodAPIVersion, OS: podmanOSLinux, Architecture: podmanArchAMD64,
 	}
 	apiPath := client.apiPath("/containers/json")
@@ -487,10 +493,19 @@ func TestInspectSocketRejectsUnsafeFilesystemObjects(t *testing.T) {
 func TestSemanticVersionHelpers(t *testing.T) {
 	t.Parallel()
 
-	versions := []string{"", "1", "1.2", "1.2.3.4", "01.2.3", "1.-2.3", "x.2.3"}
+	versions := []string{
+		"", "1", "1.2", "1.2.3.4", "01.2.3", "1.-2.3", "x.2.3",
+		"1.2.3-", "1.2.3-rc..1", "1.2.3-01", "1.2.3-rc+build",
+	}
 	for _, value := range versions {
 		if validSemanticVersion(value) {
 			t.Fatalf("validSemanticVersion(%q) = true", value)
+		}
+	}
+	for _, value := range []string{"6.2.0-dev", "5.6.0-rc1", "5.6.0-rc.1", "5.6.0-RC-1"} {
+		version, valid := parseSemanticVersion(value)
+		if !valid || version.String() != strings.Split(value, "-")[0] {
+			t.Fatalf("parseSemanticVersion(%q) = %#v, %t", value, version, valid)
 		}
 	}
 	minimum, _ := parseSemanticVersion(minimumLibpodAPIVersion)

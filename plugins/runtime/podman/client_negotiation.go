@@ -308,7 +308,11 @@ func validSemanticVersion(value string) bool {
 
 func parseSemanticVersion(value string) (semanticVersion, bool) {
 	var empty semanticVersion
-	parts := strings.Split(value, ".")
+	core, prerelease, hasPrerelease := strings.Cut(value, "-")
+	if hasPrerelease && !validSemanticPrerelease(prerelease) {
+		return empty, false
+	}
+	parts := strings.Split(core, ".")
 	if len(parts) != semanticVersionParts {
 		return empty, false
 	}
@@ -325,6 +329,33 @@ func parseSemanticVersion(value string) (semanticVersion, bool) {
 	}
 
 	return semanticVersion{major: values[0], minor: values[1], patch: values[2]}, true
+}
+
+func validSemanticPrerelease(value string) bool {
+	if value == "" {
+		return false
+	}
+	for identifier := range strings.SplitSeq(value, ".") {
+		if identifier == "" {
+			return false
+		}
+		numeric := true
+		for index := range identifier {
+			character := identifier[index]
+			if character < '0' || character > '9' {
+				numeric = false
+			}
+			if character != '-' && (character < '0' || character > '9') &&
+				(character < 'A' || character > 'Z') && (character < 'a' || character > 'z') {
+				return false
+			}
+		}
+		if numeric && len(identifier) > 1 && identifier[0] == '0' {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (version semanticVersion) String() string {
