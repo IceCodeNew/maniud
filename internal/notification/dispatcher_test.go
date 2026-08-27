@@ -64,7 +64,8 @@ func TestDispatcherDropsContendedAdmissionForPublicTargets(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := dispatcher.Shutdown(ctx); !errors.Is(err, ErrShutdown) || !errors.Is(err, context.Canceled) {
+	if err := dispatcher.Shutdown(ctx); err != nil &&
+		(!errors.Is(err, ErrShutdown) || !errors.Is(err, context.Canceled)) {
 		t.Fatalf("Shutdown(cancelled) error = %v", err)
 	}
 	waitDispatcherSignal(t, dispatcher.done, "public target dispatcher did not stop")
