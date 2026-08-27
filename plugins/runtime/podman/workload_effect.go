@@ -147,10 +147,14 @@ func (client *Client) probeWorkloadEffect(
 	if !found {
 		return application.WorkloadEffectProbe{State: application.WorkloadEffectProbeMissing}, nil
 	}
+	evidence, valid := podmanWorkloadEffectEvidence(selected, workload, client.version.Protocol)
+	if !valid {
+		return empty, ErrProtocol
+	}
 
 	return application.WorkloadEffectProbe{
 		State:    application.WorkloadEffectProbeObserved,
-		Workload: podmanWorkloadEffectEvidence(selected, workload, client.version.Protocol),
+		Workload: evidence,
 	}, nil
 }
 
@@ -287,8 +291,11 @@ func podmanWorkloadEffectEvidence(
 	container Container,
 	workload domain.DesiredWorkload,
 	apiVersion string,
-) application.WorkloadEffectEvidence {
-	storageDigest, _ := domain.ComputeStorageDigest(workload, container.RuntimeMounts)
+) (application.WorkloadEffectEvidence, bool) {
+	storageDigest, valid := domain.ComputeStorageDigest(workload, container.RuntimeMounts)
+	if !valid {
+		return application.WorkloadEffectEvidence{}, false
+	}
 
 	return application.WorkloadEffectEvidence{
 		ID:                   container.ID,
@@ -299,7 +306,7 @@ func podmanWorkloadEffectEvidence(
 		ConfigurationMatches: containerConfigurationMatches(container, workload, apiVersion),
 		Lifecycle:            podmanWorkloadLifecycle(container.State),
 		Ownership:            container.Ownership,
-	}
+	}, true
 }
 
 func podmanWorkloadLifecycle(state ContainerState) application.WorkloadLifecycle {

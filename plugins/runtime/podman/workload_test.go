@@ -1005,6 +1005,25 @@ func TestPodmanEffectCandidateIntegrityBranches(t *testing.T) {
 	}
 }
 
+func TestPodmanEffectProbeRejectsInvalidStorageEvidence(t *testing.T) {
+	t.Parallel()
+
+	workload := podmanTestWorkload(t)
+	workload.Mounts = []domain.Mount{{Kind: domain.MountVolume, Target: "/state"}}
+	workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
+	state := &podmanWorkloadRuntimeState{
+		t: t, workload: workload, transaction: podmanTestTransaction,
+		present: true, name: workload.ContainerName, lifecycle: ContainerCreated,
+	}
+	client := connectedPodmanWorkloadClient(t, state.handler)
+	probe, err := client.ProbeCreatedWorkload(
+		context.Background(), workload, podmanTestTransaction, "",
+	)
+	if !reflect.DeepEqual(probe, application.WorkloadEffectProbe{}) || !errors.Is(err, ErrProtocol) {
+		t.Fatalf("ProbeCreatedWorkload(invalid storage) = %#v, %v", probe, err)
+	}
+}
+
 func TestPodmanOwnedContainerProbeErrors(t *testing.T) {
 	t.Parallel()
 
