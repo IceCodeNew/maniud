@@ -92,14 +92,13 @@ func (backend *nativeWorkloadBackendV1) Create(
 		},
 	})
 	if err != nil {
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.deleteCreateLease(ctx, leaseID)
 
 		return "", classifyRPCError(err)
 	}
 	snapshotMounts, err := apiMounts(snapshot.GetMounts())
 	if err != nil {
-		backend.rollbackCreate(ctx, identifier, nil)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, nil)
 
 		return "", err
 	}
@@ -108,23 +107,20 @@ func (backend *nativeWorkloadBackendV1) Create(
 		snapshotMounts, request.CopyImageVolumes,
 	)
 	if err != nil {
-		backend.rollbackCreate(ctx, identifier, nil)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, nil)
 
 		return "", wrapWorkloadBackendError("host preparation", err)
 	}
 	if err = backend.host.EnsureNetworkNamespace(
 		workloadNetworkNamespace(backend.options, identifier),
 	); err != nil {
-		backend.rollbackCreate(ctx, identifier, prepared.RuntimeMounts)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, prepared.RuntimeMounts)
 
 		return "", wrapWorkloadBackendError("network namespace setup", err)
 	}
 	runtimeSpec, runtimeSpecDigest, err := encodeRuntimeSpec(prepared.Configuration)
 	if err != nil {
-		backend.rollbackCreate(ctx, identifier, prepared.RuntimeMounts)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, prepared.RuntimeMounts)
 
 		return "", err
 	}
@@ -140,8 +136,7 @@ func (backend *nativeWorkloadBackendV1) Create(
 		NetworkDigest:     info.NetworkDigest.String(),
 	})
 	if err != nil {
-		backend.rollbackCreate(ctx, identifier, prepared.RuntimeMounts)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, prepared.RuntimeMounts)
 
 		return "", err
 	}
@@ -157,8 +152,7 @@ func (backend *nativeWorkloadBackendV1) Create(
 		},
 	})
 	if err != nil || response.GetContainer() == nil || response.GetContainer().GetID() != identifier {
-		backend.rollbackCreate(ctx, identifier, prepared.RuntimeMounts)
-		_ = backend.deleteLease(ctx, leaseID)
+		backend.cleanupCreate(ctx, identifier, leaseID, prepared.RuntimeMounts)
 		if err != nil {
 			return "", classifyRPCError(err)
 		}
@@ -166,6 +160,8 @@ func (backend *nativeWorkloadBackendV1) Create(
 		return "", ErrProtocol
 	}
 	if err = backend.deleteLease(ctx, leaseID); err != nil {
+		backend.cleanupCreate(ctx, identifier, leaseID, prepared.RuntimeMounts)
+
 		return "", err
 	}
 
@@ -234,6 +230,26 @@ func (backend *nativeWorkloadBackendV1) deleteLease(ctx context.Context, identif
 	}
 
 	return nil
+}
+
+func (backend *nativeWorkloadBackendV1) deleteCreateLease(ctx context.Context, identifier string) {
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerdRequestTimeout)
+	defer cancel()
+
+	_ = backend.deleteLease(cleanupContext, identifier)
+}
+
+func (backend *nativeWorkloadBackendV1) cleanupCreate(
+	ctx context.Context,
+	identifier string,
+	leaseID string,
+	mounts []domain.RuntimeMount,
+) {
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerdRequestTimeout)
+	defer cancel()
+
+	backend.rollbackCreate(cleanupContext, identifier, mounts)
+	_ = backend.deleteLease(cleanupContext, leaseID)
 }
 
 func (backend *nativeWorkloadBackendV1) rollbackCreate(

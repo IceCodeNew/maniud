@@ -17,11 +17,12 @@ import (
 )
 
 type fakeContainersAPI struct {
-	get    func(*containersapi.GetContainerRequest) (*containersapi.GetContainerResponse, error)
-	list   func(*containersapi.ListContainersRequest) (*containersapi.ListContainersResponse, error)
-	create func(*containersapi.CreateContainerRequest) (*containersapi.CreateContainerResponse, error)
-	update func(*containersapi.UpdateContainerRequest) (*containersapi.UpdateContainerResponse, error)
-	delete func(*containersapi.DeleteContainerRequest) (*emptypb.Empty, error)
+	get           func(*containersapi.GetContainerRequest) (*containersapi.GetContainerResponse, error)
+	list          func(*containersapi.ListContainersRequest) (*containersapi.ListContainersResponse, error)
+	create        func(*containersapi.CreateContainerRequest) (*containersapi.CreateContainerResponse, error)
+	update        func(*containersapi.UpdateContainerRequest) (*containersapi.UpdateContainerResponse, error)
+	delete        func(*containersapi.DeleteContainerRequest) (*emptypb.Empty, error)
+	deleteContext func(context.Context, *containersapi.DeleteContainerRequest) (*emptypb.Empty, error)
 }
 
 func (client fakeContainersAPI) Get(
@@ -57,10 +58,14 @@ func (client fakeContainersAPI) Update(
 }
 
 func (client fakeContainersAPI) Delete(
-	_ context.Context,
+	ctx context.Context,
 	request *containersapi.DeleteContainerRequest,
 	_ ...grpc.CallOption,
 ) (*emptypb.Empty, error) {
+	if client.deleteContext != nil {
+		return client.deleteContext(ctx, request)
+	}
+
 	return client.delete(request)
 }
 
@@ -131,10 +136,11 @@ func (client fakeTasksAPI) Delete(
 }
 
 type fakeSnapshotsAPI struct {
-	prepare func(*snapshotsapi.PrepareSnapshotRequest) (*snapshotsapi.PrepareSnapshotResponse, error)
-	mounts  func(*snapshotsapi.MountsRequest) (*snapshotsapi.MountsResponse, error)
-	stat    func(*snapshotsapi.StatSnapshotRequest) (*snapshotsapi.StatSnapshotResponse, error)
-	remove  func(*snapshotsapi.RemoveSnapshotRequest) (*emptypb.Empty, error)
+	prepare       func(*snapshotsapi.PrepareSnapshotRequest) (*snapshotsapi.PrepareSnapshotResponse, error)
+	mounts        func(*snapshotsapi.MountsRequest) (*snapshotsapi.MountsResponse, error)
+	stat          func(*snapshotsapi.StatSnapshotRequest) (*snapshotsapi.StatSnapshotResponse, error)
+	remove        func(*snapshotsapi.RemoveSnapshotRequest) (*emptypb.Empty, error)
+	removeContext func(context.Context, *snapshotsapi.RemoveSnapshotRequest) (*emptypb.Empty, error)
 }
 
 func (client fakeSnapshotsAPI) Prepare(
@@ -162,16 +168,21 @@ func (client fakeSnapshotsAPI) Stat(
 }
 
 func (client fakeSnapshotsAPI) Remove(
-	_ context.Context,
+	ctx context.Context,
 	request *snapshotsapi.RemoveSnapshotRequest,
 	_ ...grpc.CallOption,
 ) (*emptypb.Empty, error) {
+	if client.removeContext != nil {
+		return client.removeContext(ctx, request)
+	}
+
 	return client.remove(request)
 }
 
 type fakeLeasesAPI struct {
-	create func(*leasesapi.CreateRequest) (*leasesapi.CreateResponse, error)
-	delete func(*leasesapi.DeleteRequest) (*emptypb.Empty, error)
+	create        func(*leasesapi.CreateRequest) (*leasesapi.CreateResponse, error)
+	delete        func(*leasesapi.DeleteRequest) (*emptypb.Empty, error)
+	deleteContext func(context.Context, *leasesapi.DeleteRequest) (*emptypb.Empty, error)
 }
 
 func (client fakeLeasesAPI) Create(
@@ -183,10 +194,14 @@ func (client fakeLeasesAPI) Create(
 }
 
 func (client fakeLeasesAPI) Delete(
-	_ context.Context,
+	ctx context.Context,
 	request *leasesapi.DeleteRequest,
 	_ ...grpc.CallOption,
 ) (*emptypb.Empty, error) {
+	if client.deleteContext != nil {
+		return client.deleteContext(ctx, request)
+	}
+
 	return client.delete(request)
 }
 

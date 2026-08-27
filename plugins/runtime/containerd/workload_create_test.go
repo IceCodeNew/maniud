@@ -409,6 +409,94 @@ func TestNativeCreateWorkloadFailureMatrix(t *testing.T) {
 	}
 }
 
+func TestNativeCreateLeaseCleanupSurvivesCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := testNativeCreateFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	leaseDeletes := 0
+	fixture.snapshots.prepare = func(
+		*snapshotsapi.PrepareSnapshotRequest,
+	) (*snapshotsapi.PrepareSnapshotResponse, error) {
+		cancel()
+
+		return nil, context.Canceled
+	}
+	fixture.leases.deleteContext = func(
+		cleanupContext context.Context,
+		_ *leasesapi.DeleteRequest,
+	) (*emptypb.Empty, error) {
+		leaseDeletes++
+		assertActiveCleanupContext(cleanupContext, t)
+
+		return &emptypb.Empty{}, nil
+	}
+
+	if _, err := fixture.backend.Create(ctx, fixture.request); err == nil || leaseDeletes != 1 {
+		t.Fatalf("Create() error = %v, lease deletes = %d", err, leaseDeletes)
+	}
+}
+
+func TestNativeCreateRollbackSurvivesCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := testNativeCreateFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	containerDeletes := 0
+	snapshotDeletes := 0
+	leaseDeletes := 0
+	fixture.containers.deleteContext = func(
+		cleanupContext context.Context,
+		_ *containersapi.DeleteContainerRequest,
+	) (*emptypb.Empty, error) {
+		containerDeletes++
+		assertActiveCleanupContext(cleanupContext, t)
+
+		return &emptypb.Empty{}, nil
+	}
+	fixture.snapshots.removeContext = func(
+		cleanupContext context.Context,
+		_ *snapshotsapi.RemoveSnapshotRequest,
+	) (*emptypb.Empty, error) {
+		snapshotDeletes++
+		assertActiveCleanupContext(cleanupContext, t)
+
+		return &emptypb.Empty{}, nil
+	}
+	fixture.leases.deleteContext = func(
+		cleanupContext context.Context,
+		_ *leasesapi.DeleteRequest,
+	) (*emptypb.Empty, error) {
+		leaseDeletes++
+		if leaseDeletes == 1 {
+			cancel()
+
+			return nil, context.Canceled
+		}
+		assertActiveCleanupContext(cleanupContext, t)
+
+		return &emptypb.Empty{}, nil
+	}
+
+	identifier, err := fixture.backend.Create(ctx, fixture.request)
+	if err == nil || identifier != "" || containerDeletes != 1 || snapshotDeletes != 1 ||
+		leaseDeletes != 2 || fixture.host.deleteCalls != 1 || fixture.host.removeCalls != 1 {
+		t.Fatalf(
+			"Create() = %q, %v; cleanup container/snapshot/lease/host = %d/%d/%d/%d/%d",
+			identifier, err, containerDeletes, snapshotDeletes, leaseDeletes,
+			fixture.host.deleteCalls, fixture.host.removeCalls,
+		)
+	}
+}
+
+func assertActiveCleanupContext(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("cleanup context = %v", err)
+	}
+}
+
 func TestNativeCreateRejectsNilBackendAndRollsBackWithoutHost(t *testing.T) {
 	t.Parallel()
 
