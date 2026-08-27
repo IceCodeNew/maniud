@@ -146,6 +146,19 @@ func (operations *applyOperationsFixture) Apply(
 	return operations.applyPlan, operations.applyErr
 }
 
+func (*applyOperationsFixture) Snapshot(
+	context.Context,
+	application.Request,
+) (application.OperationSnapshot, error) {
+	return application.OperationSnapshot{}, nil
+}
+
+func (*applyOperationsFixture) Evidence(
+	application.OperationSnapshot,
+) (application.EvidenceBundle, error) {
+	return application.EvidenceBundle{}, nil
+}
+
 type applyBoundaryTest struct {
 	name       string
 	mutate     func(*applyDependencies, *applyOperationsFixture)
