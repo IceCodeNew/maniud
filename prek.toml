@@ -65,6 +65,17 @@ hooks = [
 [[repos]]
 repo = "local"
 
+# Keep the final-user environment template synchronized with production Go
+# lookups before running the slower static analyzers.
+[[repos.hooks]]
+id = "env-example"
+name = "environment example"
+language = "system"
+entry = "scripts/check-env-example"
+pass_filenames = false
+always_run = true
+stages = ["pre-push", "manual"]
+
 # Detect go.mod/go.sum drift in every workspace module without rewriting files.
 [[repos.hooks]]
 id = "go-mod-tidy"
