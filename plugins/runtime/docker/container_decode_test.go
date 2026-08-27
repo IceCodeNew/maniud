@@ -540,7 +540,7 @@ func TestContainerProbeMatchesDockerGeneratedHostname(t *testing.T) {
 
 	probe := observedContainerProbe(t)
 	expectation := matchingContainerExpectation(t)
-	probe.Container.WorkloadSpec.Hostname = probe.Container.ID[:12]
+	probe.Container.WorkloadSpec.Hostname = probe.Container.ID[:containerHostnameIDBytes]
 	if !probe.Matches(expectation) {
 		t.Fatal("ContainerProbe.Matches(Docker-generated hostname) = false")
 	}
@@ -553,6 +553,11 @@ func TestContainerProbeMatchesDockerGeneratedHostname(t *testing.T) {
 	expectation.WorkloadSpec.Hostname = testOtherValue
 	if !probe.Matches(expectation) {
 		t.Fatal("ContainerProbe.Matches(explicit hostname) = false")
+	}
+
+	probe.Container.ID = "short"
+	if probe.Matches(expectation) {
+		t.Fatal("ContainerProbe.Matches(short ID) = true")
 	}
 }
 

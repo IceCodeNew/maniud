@@ -26,6 +26,7 @@ const (
 	maximumNetworkModeBytes    = 256
 	maximumJSONErrorBytes      = 4096
 	containerIDHexBytes        = 64
+	containerHostnameIDBytes   = 12
 	dockerManifestMediaType    = "application/vnd.docker.distribution.manifest.v2+json"
 	ociManifestMediaType       = "application/vnd.oci.image.manifest.v1+json"
 	containerNameQueryKey      = "name"
@@ -109,7 +110,11 @@ func (container Container) matchesConfiguration(expectation ContainerExpectation
 	}
 
 	observed := container.WorkloadSpec.Clone()
-	if expectation.WorkloadSpec.Hostname == "" && observed.Hostname == container.ID[:12] {
+	if len(container.ID) < containerHostnameIDBytes {
+		return false
+	}
+	if expectation.WorkloadSpec.Hostname == "" &&
+		observed.Hostname == container.ID[:containerHostnameIDBytes] {
 		observed.Hostname = ""
 	}
 
