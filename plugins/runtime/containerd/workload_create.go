@@ -184,12 +184,20 @@ func validCreateWorkloadRequest(request createWorkloadRequest) bool {
 }
 
 func validUserContainerLabels(labels []string) bool {
-	return !slices.ContainsFunc(labels, func(label string) bool {
+	seen := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
 		name, _, found := strings.Cut(label, "=")
+		if !found || name == "" || strings.HasPrefix(name, maniudLabelPrefix) ||
+			strings.HasPrefix(name, "containerd.io/restart.") {
+			return false
+		}
+		if _, found = seen[name]; found {
+			return false
+		}
+		seen[name] = struct{}{}
+	}
 
-		return !found || strings.HasPrefix(name, maniudLabelPrefix) ||
-			strings.HasPrefix(name, "containerd.io/restart.")
-	})
+	return true
 }
 
 func (backend *nativeWorkloadBackendV1) requireCommittedSnapshot(

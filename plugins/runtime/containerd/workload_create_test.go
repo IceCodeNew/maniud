@@ -146,6 +146,8 @@ func TestUserContainerLabelValidation(t *testing.T) {
 
 	if !validUserContainerLabels([]string{"example=value"}) ||
 		validUserContainerLabels([]string{testMissingValue}) ||
+		validUserContainerLabels([]string{"=value"}) ||
+		validUserContainerLabels([]string{"example=one", "example=two"}) ||
 		validUserContainerLabels([]string{containerNameLabel + "=bad"}) ||
 		validUserContainerLabels([]string{containerdRestartPolicyLabel + "=always"}) {
 		t.Fatal("validUserContainerLabels() policy drift")
