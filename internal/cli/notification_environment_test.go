@@ -239,8 +239,4 @@ func assertNotificationDispatcherStarted(
 	if err := dispatcher.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if test.configuration.barkDeviceKey != "" &&
-		dispatcher.Stats(notification.TargetBark) != (notification.TargetStats{}) {
-		t.Fatalf("Bark startup stats = %#v", dispatcher.Stats(notification.TargetBark))
-	}
 }

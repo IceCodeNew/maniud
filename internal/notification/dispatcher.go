@@ -57,19 +57,6 @@ type DiagnosticSink interface {
 	TryReport(diagnostic Diagnostic) bool
 }
 
-// TargetStats is one process-local snapshot of target delivery counters.
-type TargetStats struct {
-	Published         uint64
-	Delivered         uint64
-	SemanticFailed    uint64
-	TransportFailed   uint64
-	DroppedInvalid    uint64
-	DroppedQueueFull  uint64
-	DroppedShutdown   uint64
-	DiagnosticDropped uint64
-	SinkPanics        uint64
-}
-
 // Dispatcher fans application events out to isolated bounded target workers.
 type Dispatcher struct {
 	mutex       sync.RWMutex
@@ -104,15 +91,9 @@ type targetDispatcher struct {
 }
 
 type targetCounters struct {
-	published         atomic.Uint64
-	delivered         atomic.Uint64
-	semanticFailed    atomic.Uint64
-	transportFailed   atomic.Uint64
-	droppedInvalid    atomic.Uint64
-	droppedQueueFull  atomic.Uint64
-	droppedShutdown   atomic.Uint64
-	diagnosticDropped atomic.Uint64
-	sinkPanics        atomic.Uint64
+	droppedInvalid   atomic.Uint64
+	droppedQueueFull atomic.Uint64
+	droppedShutdown  atomic.Uint64
 }
 
 // NewDispatcher starts one worker for each configured official target. It
@@ -150,12 +131,10 @@ func newDispatcherWith(specifications []targetSpec, diagnostics DiagnosticSink) 
 		cancel: cancel, done: make(chan struct{}),
 	}
 	var workers sync.WaitGroup
-	workers.Add(len(targets))
 	for _, target := range targets {
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			target.run(deliveryContext, dispatcher)
-		}()
+		})
 	}
 	go func() {
 		workers.Wait()
@@ -196,11 +175,10 @@ func (dispatcher *Dispatcher) TryPublish(event application.Event) bool {
 	for _, target := range dispatcher.targets {
 		select {
 		case target.queue <- queued:
-			target.counters.published.Add(1)
 		default:
 			accepted = false
 			target.counters.droppedQueueFull.Add(1)
-			dispatcher.report(target, Diagnostic{Target: target.target, Event: event.Kind, Code: DiagnosticQueueFull})
+			dispatcher.report(Diagnostic{Target: target.target, Event: event.Kind, Code: DiagnosticQueueFull})
 		}
 	}
 
@@ -233,25 +211,12 @@ func (dispatcher *Dispatcher) DroppedEvents() uint64 {
 
 	var dropped uint64
 	for _, target := range dispatcher.targets {
-		stats := target.counters.snapshot()
-		dropped += stats.DroppedInvalid + stats.DroppedQueueFull + stats.DroppedShutdown
+		dropped += target.counters.droppedInvalid.Load() +
+			target.counters.droppedQueueFull.Load() +
+			target.counters.droppedShutdown.Load()
 	}
 
 	return dropped
-}
-
-// Stats returns the current counters for one target.
-func (dispatcher *Dispatcher) Stats(target Target) TargetStats {
-	if dispatcher == nil {
-		return TargetStats{}
-	}
-	for _, candidate := range dispatcher.targets {
-		if candidate.target == target {
-			return candidate.counters.snapshot()
-		}
-	}
-
-	return TargetStats{}
 }
 
 func (dispatcher *Dispatcher) stop() {
@@ -278,23 +243,19 @@ func (dispatcher *Dispatcher) dropAll(
 ) {
 	for _, target := range dispatcher.targets {
 		increment(target)
-		dispatcher.report(target, Diagnostic{Target: target.target, Event: event, Code: code})
+		dispatcher.report(Diagnostic{Target: target.target, Event: event, Code: code})
 	}
 }
 
-func (dispatcher *Dispatcher) report(target *targetDispatcher, diagnostic Diagnostic) {
+func (dispatcher *Dispatcher) report(diagnostic Diagnostic) {
 	if dispatcher.diagnostics == nil {
 		return
 	}
 
 	defer func() {
-		if recover() != nil {
-			target.counters.sinkPanics.Add(1)
-		}
+		_ = recover()
 	}()
-	if !dispatcher.diagnostics.TryReport(diagnostic) {
-		target.counters.diagnosticDropped.Add(1)
-	}
+	_ = dispatcher.diagnostics.TryReport(diagnostic)
 }
 
 func (target *targetDispatcher) run(ctx context.Context, dispatcher *Dispatcher) {
@@ -348,32 +309,20 @@ func (target *targetDispatcher) recordResult(
 ) {
 	switch {
 	case err == nil:
-		target.counters.delivered.Add(1)
+		return
 	case ctx.Err() != nil:
 		target.dropShutdown(dispatcher, event)
 	case errors.Is(err, ErrRejected):
-		target.counters.semanticFailed.Add(1)
-		dispatcher.report(target, Diagnostic{Target: target.target, Event: event, Code: DiagnosticSemanticFailed})
+		dispatcher.report(Diagnostic{Target: target.target, Event: event, Code: DiagnosticSemanticFailed})
 	case errors.Is(err, ErrInvalidMessage):
 		target.counters.droppedInvalid.Add(1)
-		dispatcher.report(target, Diagnostic{Target: target.target, Event: event, Code: DiagnosticInvalidEvent})
+		dispatcher.report(Diagnostic{Target: target.target, Event: event, Code: DiagnosticInvalidEvent})
 	default:
-		target.counters.transportFailed.Add(1)
-		dispatcher.report(target, Diagnostic{Target: target.target, Event: event, Code: DiagnosticTransportFailed})
+		dispatcher.report(Diagnostic{Target: target.target, Event: event, Code: DiagnosticTransportFailed})
 	}
 }
 
 func (target *targetDispatcher) dropShutdown(dispatcher *Dispatcher, event application.EventKind) {
 	target.counters.droppedShutdown.Add(1)
-	dispatcher.report(target, Diagnostic{Target: target.target, Event: event, Code: DiagnosticShutdown})
-}
-
-func (counters *targetCounters) snapshot() TargetStats {
-	return TargetStats{
-		Published: counters.published.Load(), Delivered: counters.delivered.Load(),
-		SemanticFailed: counters.semanticFailed.Load(), TransportFailed: counters.transportFailed.Load(),
-		DroppedInvalid: counters.droppedInvalid.Load(), DroppedQueueFull: counters.droppedQueueFull.Load(),
-		DroppedShutdown: counters.droppedShutdown.Load(), DiagnosticDropped: counters.diagnosticDropped.Load(),
-		SinkPanics: counters.sinkPanics.Load(),
-	}
+	dispatcher.report(Diagnostic{Target: target.target, Event: event, Code: DiagnosticShutdown})
 }

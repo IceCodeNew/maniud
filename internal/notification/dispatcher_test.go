@@ -39,8 +39,7 @@ func TestDispatcherDoesNotStartWithoutTargets(t *testing.T) {
 
 	dispatcher := NewDispatcher(nil, nil, nil)
 	if dispatcher != nil || dispatcher.TryPublish(application.Event{Kind: application.EventPlanPrepared}) ||
-		dispatcher.Shutdown(t.Context()) != nil || dispatcher.DroppedEvents() != 0 ||
-		dispatcher.Stats(TargetBark) != (TargetStats{}) {
+		dispatcher.Shutdown(t.Context()) != nil || dispatcher.DroppedEvents() != 0 {
 		t.Fatalf("disabled dispatcher = %#v", dispatcher)
 	}
 	if got := newDispatcherWith([]targetSpec{{target: TargetBark}}, nil); got != nil {
@@ -69,12 +68,6 @@ func TestDispatcherDropsContendedAdmissionForPublicTargets(t *testing.T) {
 		t.Fatalf("Shutdown(cancelled) error = %v", err)
 	}
 	waitDispatcherSignal(t, dispatcher.done, "public target dispatcher did not stop")
-	for _, target := range []Target{TargetBark, TargetTelegram} {
-		stats := dispatcher.Stats(target)
-		if stats.DroppedShutdown != 1 || stats.DroppedInvalid != 1 {
-			t.Fatalf("%s contended admission stats = %#v", target, stats)
-		}
-	}
 	if dispatcher.DroppedEvents() != 4 {
 		t.Fatalf("DroppedEvents() = %d, want 4", dispatcher.DroppedEvents())
 	}
@@ -111,16 +104,12 @@ func TestDispatcherDeliversToBothTargetsAndDrains(t *testing.T) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	for _, target := range []Target{TargetBark, TargetTelegram} {
-		if len(deliveries[target]) != 1 || deliveries[target][0].title != planPreparedNotificationTitle ||
-			dispatcher.Stats(target) != (TargetStats{Published: 1, Delivered: 1}) {
-			t.Fatalf("%s deliveries/stats = %#v / %#v", target, deliveries[target], dispatcher.Stats(target))
+		if len(deliveries[target]) != 1 || deliveries[target][0].title != planPreparedNotificationTitle {
+			t.Fatalf("%s deliveries = %#v", target, deliveries[target])
 		}
 	}
-	if !bark.closed.Load() || !telegram.closed.Load() || dispatcher.Stats("unknown") != (TargetStats{}) {
-		t.Fatalf(
-			"sender close/unknown stats = %t, %t, %#v",
-			bark.closed.Load(), telegram.closed.Load(), dispatcher.Stats("unknown"),
-		)
+	if !bark.closed.Load() || !telegram.closed.Load() {
+		t.Fatalf("sender close state = %t, %t", bark.closed.Load(), telegram.closed.Load())
 	}
 }
 
@@ -171,26 +160,14 @@ func TestDispatcherIsolatesFullTargetQueue(t *testing.T) {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
 
-	barkStats := dispatcher.Stats(TargetBark)
-	telegramStats := dispatcher.Stats(TargetTelegram)
-	assertQueueIsolationStats(t, barkStats, telegramStats, telegramDeliveries.Load())
+	if dispatcher.DroppedEvents() != 1 || telegramDeliveries.Load() != notificationQueueDepth+2 {
+		t.Fatalf(
+			"isolated queue drops/deliveries = %d / %d",
+			dispatcher.DroppedEvents(),
+			telegramDeliveries.Load(),
+		)
+	}
 	assertQueueIsolationDiagnostic(t, &diagnosticsMutex, diagnostics, event.Kind)
-}
-
-func assertQueueIsolationStats(
-	t *testing.T,
-	barkStats, telegramStats TargetStats,
-	telegramDeliveries uint64,
-) {
-	t.Helper()
-	if barkStats.Published != notificationQueueDepth+1 || barkStats.Delivered != notificationQueueDepth+1 ||
-		barkStats.DroppedQueueFull != 1 {
-		t.Fatalf("Bark queue stats = %#v", barkStats)
-	}
-	if telegramStats.Published != notificationQueueDepth+2 || telegramStats.Delivered != notificationQueueDepth+2 ||
-		telegramDeliveries != notificationQueueDepth+2 {
-		t.Fatalf("Telegram queue stats = %#v, delivered %d", telegramStats, telegramDeliveries)
-	}
 }
 
 func assertQueueIsolationDiagnostic(
@@ -213,23 +190,14 @@ func TestDispatcherClassifiesDeliveryResults(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		err       error
-		code      DiagnosticCode
-		wantStats TargetStats
+		name        string
+		err         error
+		code        DiagnosticCode
+		wantDropped uint64
 	}{
-		{
-			name: "semantic", err: ErrRejected, code: DiagnosticSemanticFailed,
-			wantStats: TargetStats{Published: 1, SemanticFailed: 1},
-		},
-		{
-			name: "transport", err: ErrDelivery, code: DiagnosticTransportFailed,
-			wantStats: TargetStats{Published: 1, TransportFailed: 1},
-		},
-		{
-			name: "invalid", err: ErrInvalidMessage, code: DiagnosticInvalidEvent,
-			wantStats: TargetStats{Published: 1, DroppedInvalid: 1},
-		},
+		{name: "semantic", err: ErrRejected, code: DiagnosticSemanticFailed},
+		{name: "transport", err: ErrDelivery, code: DiagnosticTransportFailed},
+		{name: "invalid", err: ErrInvalidMessage, code: DiagnosticInvalidEvent, wantDropped: 1},
 	}
 
 	for _, test := range tests {
@@ -254,10 +222,10 @@ func TestDispatcherClassifiesDeliveryResults(t *testing.T) {
 			if err := dispatcher.Shutdown(t.Context()); err != nil {
 				t.Fatalf("Shutdown() error = %v", err)
 			}
-			if got := dispatcher.Stats(TargetBark); got != test.wantStats || diagnostic != (Diagnostic{
+			if dispatcher.DroppedEvents() != test.wantDropped || diagnostic != (Diagnostic{
 				Target: TargetBark, Event: event.Kind, Code: test.code,
 			}) {
-				t.Fatalf("delivery result = %#v, %#v", got, diagnostic)
+				t.Fatalf("delivery result = %d drops, %#v", dispatcher.DroppedEvents(), diagnostic)
 			}
 		})
 	}
@@ -293,11 +261,10 @@ func TestDispatcherBoundsShutdownAndCancelsDelivery(t *testing.T) {
 		t.Fatalf("Shutdown(cancelled) error = %v", err)
 	}
 	waitDispatcherSignal(t, dispatcher.done, "cancelled dispatcher did not quiesce")
-	if stats := dispatcher.Stats(TargetBark); stats.Published != 3 || stats.DroppedShutdown != 3 ||
-		diagnostics.Load() != 3 || !sender.closed.Load() {
+	if dispatcher.DroppedEvents() != 3 || diagnostics.Load() != 3 || !sender.closed.Load() {
 		t.Fatalf(
-			"cancelled dispatcher stats = %#v, diagnostics %d, closed %t",
-			stats, diagnostics.Load(), sender.closed.Load(),
+			"cancelled dispatcher drops = %d, diagnostics %d, closed %t",
+			dispatcher.DroppedEvents(), diagnostics.Load(), sender.closed.Load(),
 		)
 	}
 }
@@ -328,10 +295,10 @@ func TestDispatcherDropsInvalidAndPostShutdownEvents(t *testing.T) {
 	if dispatcher.TryPublish(application.Event{Kind: application.EventPlanPrepared}) {
 		t.Fatal("post-shutdown event was accepted")
 	}
-	if stats := dispatcher.Stats(TargetBark); stats.DroppedInvalid != 1 || stats.DroppedShutdown != 1 ||
-		diagnosticCount != len(diagnostics) || diagnostics[0].Code != DiagnosticInvalidEvent ||
+	if dispatcher.DroppedEvents() != 2 || diagnosticCount != len(diagnostics) ||
+		diagnostics[0].Code != DiagnosticInvalidEvent ||
 		diagnostics[1].Code != DiagnosticShutdown {
-		t.Fatalf("dropped event stats/diagnostics = %#v / %#v", stats, diagnostics)
+		t.Fatalf("dropped event count/diagnostics = %d / %#v", dispatcher.DroppedEvents(), diagnostics)
 	}
 }
 
@@ -349,9 +316,12 @@ func TestDispatcherContainsDiagnosticSinkFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
+			var sends atomic.Uint64
 			dispatcher := newDispatcherWith([]targetSpec{{
 				target: TargetBark,
 				sender: &dispatcherSender{send: func(context.Context, string, string) error {
+					sends.Add(1)
+
 					return ErrDelivery
 				}},
 			}}, test.sink)
@@ -361,11 +331,8 @@ func TestDispatcherContainsDiagnosticSinkFailures(t *testing.T) {
 			if err := dispatcher.Shutdown(t.Context()); err != nil {
 				t.Fatalf("Shutdown() error = %v", err)
 			}
-			stats := dispatcher.Stats(TargetBark)
-			if stats.TransportFailed != 1 ||
-				test.name == "drop" && stats.DiagnosticDropped != 1 ||
-				test.name == "panic" && stats.SinkPanics != 1 {
-				t.Fatalf("diagnostic failure stats = %#v", stats)
+			if sends.Load() != 1 {
+				t.Fatalf("diagnostic failure sends = %d", sends.Load())
 			}
 		})
 	}
@@ -393,11 +360,10 @@ func TestDispatcherContainsSenderPanics(t *testing.T) {
 	if err := dispatcher.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	wantStats := TargetStats{Published: 1, TransportFailed: 1}
-	if stats := dispatcher.Stats(TargetBark); stats != wantStats || !sender.closed.Load() || diagnostic != (Diagnostic{
+	if !sender.closed.Load() || diagnostic != (Diagnostic{
 		Target: TargetBark, Event: event.Kind, Code: DiagnosticTransportFailed,
 	}) {
-		t.Fatalf("sender panic result = %#v, closed %t, diagnostic %#v", stats, sender.closed.Load(), diagnostic)
+		t.Fatalf("sender panic result = closed %t, diagnostic %#v", sender.closed.Load(), diagnostic)
 	}
 }
 
