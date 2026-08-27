@@ -52,6 +52,7 @@ linters:
             - "!**/internal/imagerootfs/*.go"
             - "!**/internal/notification/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/internal/tui/*.go"
             - "!**/internal/cli/parse.go"
             - "!**/internal/custombuild/*.go"
             - "!**/containerconfig/compose/*.go"
@@ -179,6 +180,14 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/nikoksr/notify
+        tui-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/tui/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - charm.land/bubbletea/v2
         public-docker-adapter:
           list-mode: strict
           files:
