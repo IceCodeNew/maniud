@@ -17,6 +17,7 @@ import (
 const (
 	plainTextContentType     = "text/plain"
 	testContainerID          = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testShortContainerID     = "short"
 	testImageConfig          = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testPlatformManifest     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	testDesiredState         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"

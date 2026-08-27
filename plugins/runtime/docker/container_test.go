@@ -380,7 +380,7 @@ func TestProbeContainerReturnsUnknownForProtocolFailures(t *testing.T) {
 			name:        "invalid inspect semantics",
 			status:      http.StatusOK,
 			contentType: jsonContentType,
-			body:        strings.Replace(validDocument, testContainerID, "short", 1),
+			body:        strings.Replace(validDocument, testContainerID, testShortContainerID, 1),
 		},
 		{
 			name:        "duplicate inspect field",

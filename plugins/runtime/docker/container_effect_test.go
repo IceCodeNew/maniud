@@ -278,7 +278,7 @@ func TestCreateWorkloadStrictlyDecodesResponse(t *testing.T) {
 		},
 		{
 			name: "invalid ID", status: http.StatusCreated, contentType: jsonContentType,
-			body: `{"Id":"short","Warnings":[]}`, wantID: "",
+			body: `{"Id":"` + testShortContainerID + `","Warnings":[]}`, wantID: "",
 		},
 		{
 			name: "warnings", status: http.StatusCreated, contentType: jsonContentType,
@@ -731,7 +731,10 @@ func TestProbeCreatedWorkloadRejectsInvalidAndInconsistentEvidence(t *testing.T)
 		{name: testNilClientName, client: nil, workload: workload, transaction: testTransaction, responseID: ""},
 		{name: "workload", client: client, workload: invalid, transaction: testTransaction, responseID: ""},
 		{name: "transaction", client: client, workload: workload, transaction: testInvalidTransactionValue, responseID: ""},
-		{name: "response ID", client: client, workload: workload, transaction: testTransaction, responseID: "short"},
+		{
+			name: "response ID", client: client, workload: workload,
+			transaction: testTransaction, responseID: testShortContainerID,
+		},
 	} {
 		probe, err := test.client.ProbeCreatedWorkload(
 			context.Background(),
@@ -827,7 +830,10 @@ func TestProbeOwnedContainerRejectsInvalidListEvidence(t *testing.T) {
 			name: "duplicate", status: http.StatusOK, contentType: jsonContentType,
 			body: containerSummaryDocument(t, testContainerID, strings.Repeat("b", containerIDHexBytes)),
 		},
-		{name: "invalid ID", status: http.StatusOK, contentType: jsonContentType, body: containerSummaryDocument(t, "short")},
+		{
+			name: "invalid ID", status: http.StatusOK, contentType: jsonContentType,
+			body: containerSummaryDocument(t, testShortContainerID),
+		},
 	}
 
 	for _, test := range tests {

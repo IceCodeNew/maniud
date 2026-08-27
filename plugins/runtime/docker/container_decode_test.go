@@ -76,7 +76,7 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 		{name: "state", mutate: func(value *containertypes.InspectResponse) { value.State = nil }},
 		{name: "config", mutate: func(value *containertypes.InspectResponse) { value.Config = nil }},
 		{name: "host config", mutate: func(value *containertypes.InspectResponse) { value.HostConfig = nil }},
-		{name: "ID", mutate: func(value *containertypes.InspectResponse) { value.ID = "short" }},
+		{name: "ID", mutate: func(value *containertypes.InspectResponse) { value.ID = testShortContainerID }},
 		{name: containerNameQueryKey, mutate: func(value *containertypes.InspectResponse) { value.Name = "example-api" }},
 		{name: "name grammar", mutate: func(value *containertypes.InspectResponse) { value.Name = "/example_api" }},
 		{name: "image reference", mutate: func(value *containertypes.InspectResponse) { value.Config.Image = "bad image" }},
@@ -555,7 +555,7 @@ func TestContainerProbeMatchesDockerGeneratedHostname(t *testing.T) {
 		t.Fatal("ContainerProbe.Matches(explicit hostname) = false")
 	}
 
-	probe.Container.ID = "short"
+	probe.Container.ID = testShortContainerID
 	if probe.Matches(expectation) {
 		t.Fatal("ContainerProbe.Matches(short ID) = true")
 	}

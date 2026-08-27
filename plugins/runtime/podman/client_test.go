@@ -29,6 +29,7 @@ const (
 	testPodmanPingPath         = "/_ping"
 	testPodmanFallbackPingPath = "/libpod/_ping"
 	testPodmanVersionPath      = "/version"
+	testPodmanMaximumInfoPath  = "/v" + maximumLibpodAPIVersion + "/libpod/info"
 )
 
 type podmanRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -80,19 +81,19 @@ func TestConnectNegotiatesAndPinsNativeLibpodScope(t *testing.T) {
 		{
 			name: "maximum", minimum: testLibpodServerMinimum, maximum: maximumLibpodAPIVersion,
 			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanPingPath,
-			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info"},
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, testPodmanMaximumInfoPath},
 		},
 		{
 			name: "future maximum", minimum: testLibpodServerMinimum, maximum: "7.0.0",
 			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanFallbackPingPath,
 			wantPaths: []string{
-				testPodmanPingPath, testPodmanFallbackPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info",
+				testPodmanPingPath, testPodmanFallbackPingPath, testPodmanVersionPath, testPodmanMaximumInfoPath,
 			},
 		},
 		{
 			name: "future prerelease maximum", minimum: testLibpodServerMinimum, maximum: "7.0.0-dev",
 			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanPingPath,
-			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info"},
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, testPodmanMaximumInfoPath},
 		},
 	}
 	for _, test := range tests {
