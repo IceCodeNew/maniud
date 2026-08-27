@@ -94,9 +94,9 @@ func (facade *ApplyFacade) Snapshot(ctx context.Context, request Request) (Opera
 	if err != nil {
 		return empty, fmt.Errorf("select snapshot service: %w", err)
 	}
-	openRuntime, err := facade.selectRuntime(runtimeKind)
+	openRuntime, err := facade.runtimeFactory(runtimeKind)
 	if err != nil {
-		return empty, fmt.Errorf("select compiled runtime: %w", err)
+		return empty, err
 	}
 
 	for range maximumSnapshotAttempts {

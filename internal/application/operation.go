@@ -63,19 +63,25 @@ func (facade *ApplyFacade) DryRun(ctx context.Context, request Request) (Plan, e
 	if err != nil {
 		return empty, fmt.Errorf("select apply runtime: %w", err)
 	}
-	openRuntime, err := facade.selectRuntime(runtimeKind)
+	openRuntime, err := facade.runtimeFactory(runtimeKind)
 	if err != nil {
-		return empty, fmt.Errorf("select compiled runtime: %w", err)
+		return empty, err
 	}
 
 	reader, err := facade.openReader(ctx)
 	if err != nil {
 		return empty, fmt.Errorf("open apply state: %w", err)
 	}
+	if reader == nil {
+		return empty, ErrInvalidRequest
+	}
 
 	runtime, err := openRuntime(ctx)
 	if err != nil {
 		return empty, errors.Join(fmt.Errorf("open apply runtime: %w", err), reader.Close())
+	}
+	if runtime == nil {
+		return empty, errors.Join(ErrInvalidRequest, reader.Close())
 	}
 
 	plan, runErr := newService(facade.images, runtime, reader, facade.events).DryRun(ctx, request)
@@ -101,14 +107,17 @@ func (facade *ApplyFacade) Apply(ctx context.Context, request Request) (Plan, er
 	if err != nil {
 		return empty, fmt.Errorf("select apply runtime: %w", err)
 	}
-	openRuntime, err := facade.selectRuntime(runtimeKind)
+	openRuntime, err := facade.runtimeFactory(runtimeKind)
 	if err != nil {
-		return empty, fmt.Errorf("select compiled runtime: %w", err)
+		return empty, err
 	}
 
 	runtime, err := openRuntime(ctx)
 	if err != nil {
 		return empty, fmt.Errorf("open apply runtime: %w", err)
+	}
+	if runtime == nil {
+		return empty, ErrInvalidRequest
 	}
 
 	state, err := facade.openState(ctx)
@@ -116,6 +125,11 @@ func (facade *ApplyFacade) Apply(ctx context.Context, request Request) (Plan, er
 		runtime.CloseIdleConnections()
 
 		return empty, fmt.Errorf("open apply state: %w", err)
+	}
+	if state == nil {
+		runtime.CloseIdleConnections()
+
+		return empty, ErrInvalidRequest
 	}
 
 	plan, runErr := facade.apply(ctx, request, state, runtime)
@@ -133,6 +147,18 @@ func (facade *ApplyFacade) valid() bool {
 	return facade != nil && facade.images != nil && facade.authenticator != nil &&
 		facade.selectRuntime != nil && facade.openReader != nil && facade.openState != nil &&
 		facade.apply != nil
+}
+
+func (facade *ApplyFacade) runtimeFactory(kind domain.RuntimeKind) (OperationRuntimeFactory, error) {
+	openRuntime, err := facade.selectRuntime(kind)
+	if err != nil {
+		return nil, fmt.Errorf("select compiled runtime: %w", err)
+	}
+	if openRuntime == nil {
+		return nil, ErrInvalidRequest
+	}
+
+	return openRuntime, nil
 }
 
 func (facade *ApplyFacade) applyService(

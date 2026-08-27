@@ -286,6 +286,64 @@ func TestApplyFacadeContainsRuntimeFactoryFailure(t *testing.T) {
 	}
 }
 
+func TestApplyFacadeRejectsNilOpenedResources(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	readerEvents := make([]string, 0, 1)
+	runtimeEvents := make([]string, 0, 1)
+	runtime := &operationRuntimeFixture{testRuntime: operation.runtime, events: &runtimeEvents}
+	reader := &operationReaderFixture{testTransactions: operation.transactions, events: &readerEvents}
+	facade := newOperationTestFacade(operation, runtime, reader)
+
+	facade.selectRuntime = func(domain.RuntimeKind) (OperationRuntimeFactory, error) {
+		//nolint:nilnil // This fixture verifies that the façade rejects a broken selector contract.
+		return nil, nil
+	}
+	if _, err := facade.DryRun(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("DryRun(nil runtime factory) error = %v", err)
+	}
+	if _, err := facade.Apply(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Apply(nil runtime factory) error = %v", err)
+	}
+	if _, err := facade.Snapshot(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Snapshot(nil runtime factory) error = %v", err)
+	}
+
+	facade.selectRuntime = func(domain.RuntimeKind) (OperationRuntimeFactory, error) {
+		return func(context.Context) (OperationRuntime, error) {
+			//nolint:nilnil // This fixture verifies that the façade rejects a broken opener contract.
+			return nil, nil
+		}, nil
+	}
+	if _, err := facade.DryRun(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) ||
+		!slices.Equal(readerEvents, []string{operationCloseReader}) {
+		t.Fatalf("DryRun(nil runtime) error = %v, reader events = %q", err, readerEvents)
+	}
+	if _, err := facade.Apply(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Apply(nil runtime) error = %v", err)
+	}
+
+	facade.selectRuntime = func(domain.RuntimeKind) (OperationRuntimeFactory, error) {
+		return func(context.Context) (OperationRuntime, error) { return runtime, nil }, nil
+	}
+	facade.openReader = func(context.Context) (OperationReader, error) {
+		//nolint:nilnil // This fixture verifies that the façade rejects a broken opener contract.
+		return nil, nil
+	}
+	if _, err := facade.DryRun(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("DryRun(nil reader) error = %v", err)
+	}
+	facade.openState = func(context.Context) (*store.Store, error) {
+		//nolint:nilnil // This fixture verifies that the façade rejects a broken opener contract.
+		return nil, nil
+	}
+	if _, err := facade.Apply(t.Context(), operation.request); !errors.Is(err, ErrInvalidRequest) ||
+		!slices.Equal(runtimeEvents, []string{operationCloseRuntime}) {
+		t.Fatalf("Apply(nil state) error = %v, runtime events = %q", err, runtimeEvents)
+	}
+}
+
 func TestApplyFacadeClosesRuntimeAfterStateAndMutationFailures(t *testing.T) {
 	t.Parallel()
 
