@@ -305,7 +305,7 @@ func (backend *nativeWorkloadBackendV1) decodeContainer(
 		return nil, err
 	}
 	if !validRuntimeMountEvidence(backend.options, container.GetID(), metadata.extension.RuntimeMounts) ||
-		backend.host == nil ||
+		backend.host == nil || backend.network == nil ||
 		!backend.host.NetworkNamespaceMounted(workloadNetworkNamespace(backend.options, container.GetID())) {
 		return nil, ErrProtocol
 	}

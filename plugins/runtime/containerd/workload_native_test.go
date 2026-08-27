@@ -515,6 +515,9 @@ func TestNativeManagedContainerFailureMatrix(t *testing.T) {
 		{name: testHostUnavailableCase, mutate: func(_ *testing.T, fixture nativeManagedFixture) {
 			fixture.backend.host = nil
 		}},
+		{name: "CNI unavailable", mutate: func(_ *testing.T, fixture nativeManagedFixture) {
+			fixture.backend.network = nil
+		}},
 		{name: "CNI digest", mutate: func(_ *testing.T, fixture nativeManagedFixture) {
 			fixture.network.digest = domain.Hash([]byte(testOtherValue))
 		}},
