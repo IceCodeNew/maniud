@@ -48,13 +48,18 @@ func (client *Client) CreateWorkload(
 	transaction string,
 	options application.WorkloadCreateOptions,
 ) (string, error) {
-	if client == nil || client.CheckWorkload(workload) != nil || !validTransaction(transaction) {
+	if client == nil || !validTransaction(transaction) {
 		return "", ErrUnsupportedWorkload
 	}
 
-	// CheckWorkload and validTransaction prove the same pure mapping contract.
-	body, _ := dockerCreateConfiguration(workload, transaction, options)
-	encoded, _ := encodeDockerCreateRequest(body, client.protocol)
+	body, valid := dockerCreateConfiguration(workload, transaction, options)
+	if !valid {
+		return "", ErrUnsupportedWorkload
+	}
+	encoded, valid := encodeDockerCreateRequest(body, client.protocol)
+	if !valid || client.CheckWorkload(workload) != nil {
+		return "", ErrUnsupportedWorkload
+	}
 	// CheckWorkload proved the immutable client version above.
 	path, _ := client.apiPath("/containers/create")
 
@@ -72,16 +77,18 @@ func encodeDockerCreateRequest(request containertypes.CreateRequest, protocol ap
 
 		return encoded, true
 	}
-	if request.HostConfig == nil || request.HostConfig.CgroupnsMode != "" {
+	if request.HostConfig != nil && request.HostConfig.CgroupnsMode != "" {
 		return nil, false
 	}
 
 	wireRequest := createRequestWithoutCgroupNamespace{
 		CreateRequest: request,
-		HostConfig: &hostConfigWithoutCgroupNamespace{
+	}
+	if request.HostConfig != nil {
+		wireRequest.HostConfig = &hostConfigWithoutCgroupNamespace{
 			HostConfig:   request.HostConfig,
 			CgroupnsMode: "",
-		},
+		}
 	}
 	encoded, _ := json.Marshal(wireRequest) //nolint:errchkjson // The Docker wire type has only JSON-supported values.
 

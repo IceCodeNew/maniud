@@ -120,8 +120,16 @@ func TestEncodeDockerCreateRequestRejectsInvalidLegacyHostConfig(t *testing.T) {
 		t.Fatal("encodeDockerCreateRequest(1.40, explicit cgroup namespace) = valid")
 	}
 	request.HostConfig = nil
-	if _, valid := encodeDockerCreateRequest(request, testAPIVersion(t, minimumAPIVersion)); valid {
-		t.Fatal("encodeDockerCreateRequest(1.40, nil host config) = valid")
+	encoded, valid := encodeDockerCreateRequest(request, testAPIVersion(t, minimumAPIVersion))
+	if !valid {
+		t.Fatal("encodeDockerCreateRequest(1.40, nil host config) = false")
+	}
+	var document map[string]json.RawMessage
+	if json.Unmarshal(encoded, &document) != nil {
+		t.Fatal("decode create request without host config")
+	}
+	if _, present := document["HostConfig"]; present {
+		t.Fatal("create request contains nil HostConfig")
 	}
 }
 
