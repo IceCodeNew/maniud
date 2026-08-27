@@ -46,29 +46,25 @@ func TestResolveImageUserReadsImmutablePodmanExport(t *testing.T) {
 	var requests atomic.Int32
 	handlers := []func(http.ResponseWriter, *http.Request){
 		func(writer http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodGet ||
-				request.URL.Path != libpodPrefix+"/images/"+expected.Reference+"/json" {
-				t.Fatalf("probe request = %s %s", request.Method, request.URL.String())
-			}
-			writePodmanJSON(writer, podmanUserImageDocument(expected))
+			writePodmanUserImageResponse(t, writer, request, expected)
 		},
 		func(writer http.ResponseWriter, request *http.Request) {
-			assertPodmanUserArchiveRequest(t, request, expected)
+			if !validPodmanUserArchiveRequest(t, request, expected) {
+				return
+			}
 			writer.Header().Set(podmanContentType, podmanArchiveContentType)
 			_, _ = writer.Write(raw)
 		},
 		func(writer http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodGet ||
-				request.URL.Path != libpodPrefix+"/images/"+expected.Reference+"/json" {
-				t.Fatalf("probe request = %s %s", request.Method, request.URL.String())
-			}
-			writePodmanJSON(writer, podmanUserImageDocument(expected))
+			writePodmanUserImageResponse(t, writer, request, expected)
 		},
 	}
 	client := connectedPodmanImageClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		requestIndex := int(requests.Add(1)) - 1
 		if requestIndex >= len(handlers) {
-			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.String())
+
+			return
 		}
 		handlers[requestIndex](writer, request)
 	})
@@ -85,7 +81,23 @@ func TestResolveImageUserReadsImmutablePodmanExport(t *testing.T) {
 	}
 }
 
-func assertPodmanUserArchiveRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) {
+func writePodmanUserImageResponse(
+	t *testing.T,
+	writer http.ResponseWriter,
+	request *http.Request,
+	expected domain.ImageIdentity,
+) {
+	t.Helper()
+	if request.Method != http.MethodGet ||
+		request.URL.Path != libpodPrefix+"/images/"+expected.Reference+"/json" {
+		t.Errorf("probe request = %s %s", request.Method, request.URL.String())
+
+		return
+	}
+	writePodmanJSON(writer, podmanUserImageDocument(expected))
+}
+
+func validPodmanUserArchiveRequest(t *testing.T, request *http.Request, expected domain.ImageIdentity) bool {
 	t.Helper()
 
 	wantID := strings.TrimPrefix(expected.ImageConfig.String(), "sha256:")
@@ -93,13 +105,17 @@ func assertPodmanUserArchiveRequest(t *testing.T, request *http.Request, expecte
 		request.URL.Path != libpodPrefix+"/images/"+wantID+"/get" ||
 		request.URL.Query().Get("format") != podmanDockerArchiveFormat ||
 		request.Header.Get("Accept") != podmanArchiveContentType {
-		t.Fatalf(
+		t.Errorf(
 			"archive request = %s %s, Accept %q",
 			request.Method,
 			request.URL.String(),
 			request.Header.Get("Accept"),
 		)
+
+		return false
 	}
+
+	return true
 }
 
 func TestResolveImageUserRejectsExportAndPostProbeFailures(t *testing.T) {
