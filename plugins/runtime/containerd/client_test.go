@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +236,9 @@ func TestContainerdCloseAndLocalResult(t *testing.T) {
 	if err := client.Close(); !errors.Is(err, errContainerdTest) {
 		t.Fatalf("Close(failure) = %v", err)
 	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close(repeated) = %v", err)
+	}
 	image := domain.ImageIdentity{Reference: testContainerdImage}
 	if got, err := localImageResult(image, nil, nil); err != nil || got.Reference != image.Reference {
 		t.Fatalf("localImageResult(success) = %#v, %v", got, err)
@@ -244,6 +248,37 @@ func TestContainerdCloseAndLocalResult(t *testing.T) {
 	}
 	if _, err := localImageResult(image, nil, errContainerdTest); !errors.Is(err, registry.ErrUnavailable) {
 		t.Fatalf("localImageResult(close failure) = %v", err)
+	}
+}
+
+func TestContainerdConcurrentClose(t *testing.T) {
+	t.Parallel()
+
+	const closeCalls = 32
+
+	client := &Client{connection: fakeCloser{err: errContainerdTest}}
+	results := make(chan error, closeCalls)
+	var wait sync.WaitGroup
+	for range closeCalls {
+		wait.Go(func() {
+			results <- client.Close()
+		})
+	}
+	wait.Wait()
+	close(results)
+
+	closeErrors := 0
+	for err := range results {
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, errContainerdTest) {
+			t.Fatalf("Close() error = %v", err)
+		}
+		closeErrors++
+	}
+	if closeErrors != 1 {
+		t.Fatalf("Close() errors = %d, want 1", closeErrors)
 	}
 }
 

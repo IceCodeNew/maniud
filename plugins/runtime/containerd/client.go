@@ -118,16 +118,17 @@ type runtimeScope struct {
 
 // Client is one namespace-pinned connection to a local containerd service.
 type Client struct {
-	connection    io.Closer
-	images        imagesClient
-	content       contentClient
-	introspection introspectionClient
-	version       versionClient
-	workloads     workloadBackend
-	socketPath    string
-	namespace     string
-	socket        socketIdentity
-	scope         runtimeScope
+	connectionLock sync.Mutex
+	connection     io.Closer
+	images         imagesClient
+	content        contentClient
+	introspection  introspectionClient
+	version        versionClient
+	workloads      workloadBackend
+	socketPath     string
+	namespace      string
+	socket         socketIdentity
+	scope          runtimeScope
 
 	peerLock sync.Mutex
 	peer     peerIdentity
@@ -168,8 +169,8 @@ func connect(
 	}
 
 	client := &Client{
-		connection: nil,
-		images:     nil, content: nil, introspection: nil, version: nil,
+		connectionLock: sync.Mutex{}, connection: nil,
+		images: nil, content: nil, introspection: nil, version: nil,
 		workloads:  nil,
 		socketPath: path, namespace: namespace, socket: socket, scope: runtimeScope{},
 		peerLock: sync.Mutex{}, peer: peerIdentity{},
@@ -206,19 +207,27 @@ func connect(
 
 // Close releases the gRPC connection.
 func (client *Client) Close() error {
-	if client == nil || client.connection == nil {
+	if client == nil {
 		return nil
 	}
 
-	if err := client.connection.Close(); err != nil {
+	client.connectionLock.Lock()
+	connection := client.connection
+	client.connection = nil
+	client.connectionLock.Unlock()
+	if connection == nil {
+		return nil
+	}
+
+	if err := connection.Close(); err != nil {
 		return fmt.Errorf("close containerd connection: %w", err)
 	}
 
 	return nil
 }
 
-// CloseIdleConnections releases the gRPC connection through the common
-// runtime cleanup contract.
+// CloseIdleConnections closes the full pinned gRPC connection and discards
+// its close error to satisfy the common runtime cleanup contract.
 func (client *Client) CloseIdleConnections() {
 	_ = client.Close()
 }
