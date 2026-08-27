@@ -350,11 +350,16 @@ func (backend *nativeWorkloadBackendV1) updateLabels(
 	if container == nil || container.GetID() != identifier || update == nil {
 		return ErrProtocol
 	}
-	labels := cloneStringLabels(container.GetLabels())
+	current := container.GetLabels()
+	labels := cloneStringLabels(current)
 	update(labels)
+	changed, paths := changedContainerLabels(current, labels)
+	if len(paths) == 0 {
+		return nil
+	}
 	updated, err := backend.containers.Update(ctx, &containersapi.UpdateContainerRequest{
-		Container:  &containersapi.Container{ID: identifier, Labels: labels},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+		Container:  &containersapi.Container{ID: identifier, Labels: changed},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
 	})
 	if err != nil {
 		return classifyRPCError(err)
@@ -364,4 +369,24 @@ func (backend *nativeWorkloadBackendV1) updateLabels(
 	}
 
 	return nil
+}
+
+func changedContainerLabels(current, labels map[string]string) (map[string]string, []string) {
+	changed := make(map[string]string)
+	paths := make([]string, 0, len(labels))
+	for key, value := range labels {
+		if currentValue, found := current[key]; found && currentValue == value {
+			continue
+		}
+		changed[key] = value
+		paths = append(paths, "labels."+key)
+	}
+	for key := range current {
+		if _, found := labels[key]; !found {
+			paths = append(paths, "labels."+key)
+		}
+	}
+	slices.Sort(paths)
+
+	return changed, paths
 }

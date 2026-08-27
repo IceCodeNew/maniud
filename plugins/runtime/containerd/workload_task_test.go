@@ -3,6 +3,7 @@ package containerd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,18 @@ func configureContainerUpdate(fixture nativeManagedFixture) {
 	fixture.containers.update = func(
 		request *containersapi.UpdateContainerRequest,
 	) (*containersapi.UpdateContainerResponse, error) {
-		fixture.container.Labels = request.GetContainer().GetLabels()
+		for _, path := range request.GetUpdateMask().GetPaths() {
+			key, found := strings.CutPrefix(path, "labels.")
+			if !found {
+				continue
+			}
+			value, present := request.GetContainer().GetLabels()[key]
+			if present {
+				fixture.container.Labels[key] = value
+			} else {
+				delete(fixture.container.Labels, key)
+			}
+		}
 
 		return &containersapi.UpdateContainerResponse{Container: fixture.container}, nil
 	}
@@ -506,6 +518,7 @@ func TestNativeTaskStopFailureMatrix(t *testing.T) {
 		mutate func(nativeManagedFixture)
 	}{
 		{name: "restart labels", mutate: func(fixture nativeManagedFixture) {
+			fixture.container.Labels[containerdRestartPolicyLabel] = testRestartPolicy
 			fixture.containers.update = func(
 				*containersapi.UpdateContainerRequest,
 			) (*containersapi.UpdateContainerResponse, error) {
@@ -703,7 +716,9 @@ func TestNativeContainerLabelUpdateFailures(t *testing.T) {
 		return nil, errContainerdTest
 	}
 	if err := fixture.backend.updateLabels(
-		context.Background(), fixture.container.GetID(), func(map[string]string) {},
+		context.Background(), fixture.container.GetID(), func(labels map[string]string) {
+			labels[containerNameLabel] = testRenamedWorkloadName
+		},
 	); err == nil {
 		t.Fatal("updateLabels(write failure) succeeded")
 	}
@@ -713,9 +728,80 @@ func TestNativeContainerLabelUpdateFailures(t *testing.T) {
 		return &containersapi.UpdateContainerResponse{}, nil
 	}
 	if err := fixture.backend.updateLabels(
-		context.Background(), fixture.container.GetID(), func(map[string]string) {},
+		context.Background(), fixture.container.GetID(), func(labels map[string]string) {
+			labels[containerNameLabel] = testRenamedWorkloadName
+		},
 	); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("updateLabels(response protocol) = %v", err)
+	}
+}
+
+func TestNativeContainerLabelUpdatePreservesIndependentWriters(t *testing.T) {
+	t.Parallel()
+
+	fixture := testNativeManagedBackend(t)
+	identifier := fixture.container.GetID()
+	requests := make([]*containersapi.UpdateContainerRequest, 0, 2)
+	fixture.containers.update = func(
+		request *containersapi.UpdateContainerRequest,
+	) (*containersapi.UpdateContainerResponse, error) {
+		requests = append(requests, request)
+		if value, found := request.GetContainer().GetLabels()[containerNameLabel]; found {
+			fixture.container.Labels[containerNameLabel] = value
+		} else {
+			delete(fixture.container.Labels, containerNameLabel)
+		}
+
+		return &containersapi.UpdateContainerResponse{Container: fixture.container}, nil
+	}
+
+	if err := fixture.backend.updateLabels(context.Background(), identifier, func(labels map[string]string) {
+		labels[containerNameLabel] = testRenamedWorkloadName
+	}); err != nil {
+		t.Fatalf("updateLabels(rename) error = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("rename update request = %#v", requests)
+	}
+	assertContainerNameLabelUpdate(t, requests[0], testRenamedWorkloadName, true)
+
+	if err := fixture.backend.updateLabels(context.Background(), identifier, func(labels map[string]string) {
+		labels[containerNameLabel] = testRenamedWorkloadName
+	}); err != nil {
+		t.Fatalf("updateLabels(no-op) error = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("updateLabels(no-op) requests = %d", len(requests))
+	}
+	if err := fixture.backend.updateLabels(context.Background(), identifier, func(labels map[string]string) {
+		delete(labels, containerNameLabel)
+	}); err != nil {
+		t.Fatalf("updateLabels(delete) error = %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("updateLabels(delete) requests = %#v", requests)
+	}
+	assertContainerNameLabelUpdate(t, requests[1], "", false)
+	if _, found := fixture.container.Labels[containerNameLabel]; found {
+		t.Fatalf("updateLabels(delete) labels = %#v", fixture.container.Labels)
+	}
+}
+
+func assertContainerNameLabelUpdate(
+	t *testing.T,
+	request *containersapi.UpdateContainerRequest,
+	want string,
+	present bool,
+) {
+	t.Helper()
+
+	value, found := request.GetContainer().GetLabels()[containerNameLabel]
+	if found != present || value != want {
+		t.Fatalf("container name label = %q, %t; want %q, %t", value, found, want, present)
+	}
+	paths := request.GetUpdateMask().GetPaths()
+	if len(paths) != 1 || paths[0] != "labels."+containerNameLabel {
+		t.Fatalf("container name label mask = %q", paths)
 	}
 }
 
