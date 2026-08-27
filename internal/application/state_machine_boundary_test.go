@@ -405,26 +405,28 @@ func TestServiceApplyBootstrapContract(t *testing.T) {
 		upgradeRuntimeFixture: newUpgradeRuntime(workload, upgradeJourney{}),
 	}
 	runtime.image = ImageProbe{State: ImageProbeMissing, Image: emptyImageEvidence()}
-	service := NewService(operation.service.images, runtime, state)
+	applicationService := newService(operation.service.images, runtime, state, nil)
 
-	plan, err := service.Apply(context.Background(), operation.request, state, bootstrapCredentials{})
+	plan, err := applicationService.Apply(context.Background(), operation.request, state, bootstrapCredentials{})
 	if err != nil || plan.Kind != PlanBootstrap {
 		t.Fatalf("Apply() = %#v, %v", plan, err)
 	}
-	if _, err = service.Apply(context.Background(), operation.request, state, nil); !errors.Is(err, ErrInvalidRequest) {
+	if _, err = applicationService.Apply(
+		context.Background(), operation.request, state, nil,
+	); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Apply(nil auth) = %v", err)
 	}
-	var missing *Service
+	var missing *service
 	if _, err = missing.Apply(
 		context.Background(), operation.request, state, bootstrapCredentials{},
 	); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Apply(nil service) = %v", err)
 	}
-	_, err = service.Apply(context.Background(), operation.request, nil, bootstrapCredentials{})
+	_, err = applicationService.Apply(context.Background(), operation.request, nil, bootstrapCredentials{})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Apply(nil state) = %v", err)
 	}
-	plain := NewService(operation.service.images, operation.runtime, state)
+	plain := newService(operation.service.images, operation.runtime, state, nil)
 	_, err = plain.Apply(context.Background(), operation.request, state, bootstrapCredentials{})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Apply(read-only runtime) = %v", err)
@@ -443,7 +445,7 @@ func TestServiceApplyRejectsUnpublishableRepositoryRuntime(t *testing.T) {
 		upgradeRuntimeFixture: newUpgradeRuntime(workload, upgradeJourney{}),
 	}
 	runtime.image = ImageProbe{State: ImageProbeMissing, Image: emptyImageEvidence()}
-	service := NewService(operation.service.images, runtime, state)
+	service := newService(operation.service.images, runtime, state, nil)
 
 	runtimeBase := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(runtimeBase, []byte("occupied"), 0o600); err != nil {
@@ -582,7 +584,7 @@ func TestServiceApplyReturnsMutationFailure(t *testing.T) {
 	}
 	runtime.image = ImageProbe{State: ImageProbeMissing, Image: emptyImageEvidence()}
 	runtime.pullUnchanged = true
-	service := NewService(operation.service.images, runtime, state)
+	service := newService(operation.service.images, runtime, state, nil)
 
 	plan, err := service.Apply(context.Background(), operation.request, state, bootstrapCredentials{})
 	if !errors.Is(err, ErrConflictingState) || plan.Kind != "" {

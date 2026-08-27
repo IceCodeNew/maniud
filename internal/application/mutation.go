@@ -24,7 +24,7 @@ type boundMutation struct {
 
 // Apply binds one service-scoped transaction and executes or recovers its
 // runtime effects while retaining the service lock and writer fence.
-func (service *Service) Apply(
+func (service *service) Apply(
 	ctx context.Context,
 	request Request,
 	state *store.Store,
@@ -110,7 +110,7 @@ func runBoundMutation(
 	}
 }
 
-func (service *Service) bindMutation(
+func (service *service) bindMutation(
 	ctx context.Context,
 	request Request,
 	state *store.Store,
@@ -119,7 +119,7 @@ func (service *Service) bindMutation(
 		return nil, ErrInvalidRequest
 	}
 
-	lockedService := NewObservedService(service.images, service.runtime, state, service.events)
+	lockedService := newService(service.images, service.runtime, state, service.events)
 
 	initial, err := lockedService.Prepare(ctx, request)
 	if err != nil {
@@ -183,7 +183,7 @@ func newBoundMutation(
 	return mutation, nil
 }
 
-func validMutationService(service *Service) bool {
+func validMutationService(service *service) bool {
 	return service != nil && service.images != nil && service.runtime != nil
 }
 

@@ -19,7 +19,7 @@ type OperationReader interface {
 }
 
 // ApplyFacade owns per-call runtime and journal resources while delegating
-// planning and mutation to Service.
+// planning and mutation to the package-local service.
 type ApplyFacade struct {
 	images        ImageResolver
 	authenticator credential.Provider
@@ -78,7 +78,7 @@ func (facade *ApplyFacade) DryRun(ctx context.Context, request Request) (Plan, e
 		return empty, errors.Join(fmt.Errorf("open apply runtime: %w", err), reader.Close())
 	}
 
-	plan, runErr := NewObservedService(facade.images, runtime, reader, facade.events).DryRun(ctx, request)
+	plan, runErr := newService(facade.images, runtime, reader, facade.events).DryRun(ctx, request)
 	runtime.CloseIdleConnections()
 
 	closeErr := reader.Close()
@@ -141,7 +141,7 @@ func (facade *ApplyFacade) applyService(
 	state *store.Store,
 	runtime OperationRuntime,
 ) (Plan, error) {
-	return NewObservedService(facade.images, runtime, state, facade.events).Apply(
+	return newService(facade.images, runtime, state, facade.events).Apply(
 		ctx,
 		request,
 		state,

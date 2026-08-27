@@ -18,7 +18,7 @@ func TestObservedServicePublishesPreparedPlan(t *testing.T) {
 
 	operation := newTestOperation(t)
 	var events []Event
-	operation.service = NewObservedService(
+	operation.service = newService(
 		operation.service.images,
 		operation.runtime,
 		operation.transactions,

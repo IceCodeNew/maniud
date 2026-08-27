@@ -45,7 +45,7 @@ func testArchiveImageProofs(t *testing.T, input compose.ImageInput, identity dom
 			t.Parallel()
 
 			runtime := &archiveApplyRuntime{probe: test.probe, probeErr: test.probeErr}
-			service := NewService(nil, runtime, nil)
+			service := newService(nil, runtime, nil, nil)
 			resolved, err := service.resolveDesiredImage(context.Background(), input, identity.Platform)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("resolveDesiredImage() error = %v, want %v", err, test.want)
@@ -116,7 +116,7 @@ func TestResolveDesiredArchiveImageRejectsInvalidBoundaries(t *testing.T) {
 
 	input, identity := archiveApplyInput(t)
 	runtime := &archiveApplyRuntime{probe: observedImageProbe(identity)}
-	service := NewService(nil, runtime, nil)
+	service := newService(nil, runtime, nil, nil)
 
 	wrongPlatform := identity.Platform
 	wrongPlatform.Architecture = "arm64"
@@ -133,7 +133,7 @@ func TestResolveDesiredArchiveImageRejectsInvalidBoundaries(t *testing.T) {
 		t.Fatalf("resolveDesiredImage(zero input) error = %v", err)
 	}
 
-	plain := NewService(nil, &testRuntime{}, nil)
+	plain := newService(nil, &testRuntime{}, nil, nil)
 	if _, err := plain.proveArchiveImage(context.Background(), identity); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("proveArchiveImage(runtime without image probe) error = %v", err)
 	}

@@ -144,7 +144,7 @@ func (facade *ApplyFacade) captureSnapshot(
 	}
 	defer runtime.CloseIdleConnections()
 
-	service := &Service{images: facade.images, runtime: runtime}
+	service := &service{images: facade.images, runtime: runtime}
 	desired, err := service.prepareDesired(ctx, request)
 	if err != nil {
 		return empty, false, err
