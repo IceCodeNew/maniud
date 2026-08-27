@@ -167,6 +167,9 @@ func TestEnsureNetworkNamespaceInjectedLifecycle(t *testing.T) {
 	); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("ensureNetworkNamespaceWith(unmounted) = %v", err)
 	}
+	if _, err := os.Stat(unmounted); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unverified namespace path remains: %v", err)
+	}
 	root := t.TempDir()
 	loop := filepath.Join(root, "loop")
 	if err := os.Symlink("loop", loop); err != nil {

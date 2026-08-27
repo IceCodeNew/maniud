@@ -116,6 +116,9 @@ func ensureNetworkNamespaceWith(
 		return err
 	}
 	if !mounted(path) {
+		_ = unmountNetworkNamespace(path)
+		_ = os.Remove(path)
+
 		return ErrProtocol
 	}
 
