@@ -97,7 +97,7 @@ func (transactions testTransactions) Actions(
 }
 
 type testOperation struct {
-	service      *Service
+	service      *service
 	request      Request
 	runtime      *testRuntime
 	transactions *testTransactions
@@ -117,7 +117,7 @@ func newTestOperation(t *testing.T) testOperation {
 	request := newTestRequest(t)
 
 	return testOperation{
-		service:      NewService(resolver, runtime, transactions),
+		service:      newService(resolver, runtime, transactions, nil),
 		request:      request,
 		runtime:      runtime,
 		transactions: transactions,

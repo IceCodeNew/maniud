@@ -167,6 +167,7 @@ func completeAppliedMutation(
 	mutation.preparation.Transaction = completed
 	mutation.preparation.Applied = applied
 	mutation.preparation.HasApplied = true
+	mutation.publishTransaction(EventTransactionSucceeded)
 
 	return nil
 }
@@ -286,7 +287,7 @@ func settleImagePull(
 
 	postcondition, err := runImagePull(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		preparation.Transaction.ID,
 		sequence,
 		preparation.Workload.Image,
@@ -334,7 +335,7 @@ func settleWorkloadCreateResult(
 
 	return runWorkloadCreate(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		preparation.Transaction.ID,
 		sequence,
 		preparation.Workload,
@@ -400,7 +401,7 @@ func settleWorkloadStartResult(
 
 	return runWorkloadStart(
 		ctx,
-		mutation.lock,
+		mutation.effectJournal(),
 		preparation.Transaction.ID,
 		sequence,
 		preparation.Workload,

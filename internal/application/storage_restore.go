@@ -72,7 +72,7 @@ func settleStorageRestore(
 		return completedStorageRestore(ctx, action, effect)
 	}
 
-	return runRuntimeEffect(ctx, mutation.lock, mutation.preparation.Transaction.ID, intent, effect)
+	return runRuntimeEffect(ctx, mutation.effectJournal(), mutation.preparation.Transaction.ID, intent, effect)
 }
 
 func completedStorageRestore(

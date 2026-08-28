@@ -176,12 +176,12 @@ func TestPrepareRejectsInvalidServiceAndContext(t *testing.T) {
 
 	operation := newTestOperation(t)
 
-	invalidServices := []*Service{
+	invalidServices := []*service{
 		nil,
 		{},
-		NewService(nil, operation.service.runtime, operation.service.transactions),
-		NewService(operation.service.images, nil, operation.service.transactions),
-		NewService(operation.service.images, operation.service.runtime, nil),
+		newService(nil, operation.service.runtime, operation.service.transactions, nil),
+		newService(operation.service.images, nil, operation.service.transactions, nil),
+		newService(operation.service.images, operation.service.runtime, nil, nil),
 	}
 	for index, service := range invalidServices {
 		_, err := service.Prepare(context.Background(), operation.request)

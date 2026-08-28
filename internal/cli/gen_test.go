@@ -458,8 +458,10 @@ func TestProbeGeneratedRuntimeImageClosesRuntime(t *testing.T) {
 	events := []string{}
 	probe, err := probeGeneratedRuntimeImage(
 		t.Context(), domain.RuntimeDocker, image,
-		func(context.Context, domain.RuntimeKind) (applyRuntime, error) {
-			return &applyRuntimeFixture{events: &events}, nil
+		func(domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+			return func(context.Context) (application.OperationRuntime, error) {
+				return &applyRuntimeFixture{events: &events}, nil
+			}, nil
 		},
 	)
 	if err != nil || !probe.Matches(image) || !slices.Equal(events, []string{closeRuntimeEvent}) {
@@ -468,12 +470,25 @@ func TestProbeGeneratedRuntimeImageClosesRuntime(t *testing.T) {
 	events = nil
 	_, err = probeGeneratedRuntimeImage(
 		t.Context(), domain.RuntimeDocker, image,
-		func(context.Context, domain.RuntimeKind) (applyRuntime, error) {
-			return &applyRuntimeFixture{events: &events, probeErr: errGeneratedComposeTest}, nil
+		func(domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+			return func(context.Context) (application.OperationRuntime, error) {
+				return &applyRuntimeFixture{events: &events, probeErr: errGeneratedComposeTest}, nil
+			}, nil
 		},
 	)
 	if !errors.Is(err, errGeneratedComposeTest) || !slices.Equal(events, []string{closeRuntimeEvent}) {
 		t.Fatalf("probeGeneratedRuntimeImage(probe error) = %v, events %v", err, events)
+	}
+	_, err = probeGeneratedRuntimeImage(
+		t.Context(), domain.RuntimeDocker, image,
+		func(domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+			return func(context.Context) (application.OperationRuntime, error) {
+				return nil, errGeneratedComposeTest
+			}, nil
+		},
+	)
+	if !errors.Is(err, errGeneratedComposeTest) {
+		t.Fatalf("probeGeneratedRuntimeImage(open error) = %v", err)
 	}
 }
 
@@ -498,26 +513,26 @@ func TestResolveGeneratedImageUserClosesRuntime(t *testing.T) {
 	image := generatedImage(t, defaultGeneratedPlatform())
 	tests := []struct {
 		name      string
-		open      func(*[]string) (applyRuntime, error)
+		open      func(*[]string) (application.OperationRuntime, error)
 		want      string
 		wantErr   error
 		wantClose bool
 	}{
 		{
 			name:    "open failure",
-			open:    func(*[]string) (applyRuntime, error) { return nil, errGeneratedComposeTest },
+			open:    func(*[]string) (application.OperationRuntime, error) { return nil, errGeneratedComposeTest },
 			wantErr: errGeneratedComposeTest,
 		},
 		{
 			name: "unsupported runtime",
-			open: func(events *[]string) (applyRuntime, error) {
+			open: func(events *[]string) (application.OperationRuntime, error) {
 				return &applyRuntimeFixture{events: events}, nil
 			},
 			wantErr: registry.ErrUnavailable, wantClose: true,
 		},
 		{
 			name: "resolver failure",
-			open: func(events *[]string) (applyRuntime, error) {
+			open: func(events *[]string) (application.OperationRuntime, error) {
 				return &imageUserRuntimeFixture{
 					applyRuntimeFixture: &applyRuntimeFixture{events: events}, err: errGeneratedComposeTest,
 				}, nil
@@ -526,7 +541,7 @@ func TestResolveGeneratedImageUserClosesRuntime(t *testing.T) {
 		},
 		{
 			name: "resolved",
-			open: func(events *[]string) (applyRuntime, error) {
+			open: func(events *[]string) (application.OperationRuntime, error) {
 				return &imageUserRuntimeFixture{
 					applyRuntimeFixture: &applyRuntimeFixture{events: events}, resolved: testNumericUser,
 				}, nil
@@ -541,7 +556,11 @@ func TestResolveGeneratedImageUserClosesRuntime(t *testing.T) {
 			events := []string{}
 			got, err := resolveGeneratedImageUser(
 				t.Context(), domain.RuntimeDocker, image, testServiceName,
-				func(context.Context, domain.RuntimeKind) (applyRuntime, error) { return test.open(&events) },
+				func(domain.RuntimeKind) (application.OperationRuntimeFactory, error) {
+					return func(context.Context) (application.OperationRuntime, error) {
+						return test.open(&events)
+					}, nil
+				},
 			)
 			if got != test.want || !errors.Is(err, test.wantErr) ||
 				test.wantClose != slices.Equal(events, []string{closeRuntimeEvent}) {
@@ -826,9 +845,12 @@ func genFailureCases(t *testing.T, platform domain.Platform, valid genInvocation
 func TestDefaultGenDependencies(t *testing.T) {
 	t.Parallel()
 
-	dependencies, err := defaultGenDependencies(map[string]string{}, io.Discard, func() (string, error) {
-		return testWorkingDirectory, nil
-	}, testRuntimePlugins(t))
+	dependencies, err := defaultGenDependencies(
+		map[string]string{},
+		io.Discard,
+		func() (string, error) { return testWorkingDirectory, nil },
+		testRuntimePlugins(t),
+	)
 	assertDefaultGenDependencies(t, dependencies, err)
 	source, err := imageref.Normalize(testRegistrySource)
 	if err != nil {

@@ -45,6 +45,7 @@ func runAdopt(ctx context.Context, mutation *boundMutation, runtime Runtime) err
 	mutation.preparation.Plan.Observation = observation
 	mutation.preparation.Applied = applied
 	mutation.preparation.HasApplied = true
+	mutation.publishTransaction(EventTransactionSucceeded)
 
 	return nil
 }

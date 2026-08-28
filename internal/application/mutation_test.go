@@ -287,11 +287,11 @@ func TestBindMutationRejectsInvalidInputs(t *testing.T) {
 	state := openMutationTestStore(t)
 	defer closeMutationTestStore(t, state)
 
-	invalidServices := []*Service{
+	invalidServices := []*service{
 		nil,
 		{},
-		NewService(nil, operation.runtime, operation.transactions),
-		NewService(operation.service.images, nil, operation.transactions),
+		newService(nil, operation.runtime, operation.transactions, nil),
+		newService(operation.service.images, nil, operation.transactions, nil),
 	}
 	for index, service := range invalidServices {
 		mutation, err := service.bindMutation(context.Background(), operation.request, state)

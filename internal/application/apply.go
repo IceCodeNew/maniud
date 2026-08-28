@@ -56,17 +56,22 @@ type TransactionReader interface {
 	Actions(ctx context.Context, identifier store.TransactionID) ([]store.Action, error)
 }
 
-// Service prepares apply operations from desired, runtime, image, and journal
-// evidence. Preparation is read-only and is shared by dry-run and mutation.
-type Service struct {
+// service prepares apply operations from desired, runtime, image, and journal
+// evidence behind ApplyFacade.
+type service struct {
 	images       ImageResolver
 	runtime      Runtime
 	transactions TransactionReader
+	events       EventSink
 }
 
-// NewService creates an apply service over explicit read-only dependencies.
-func NewService(images ImageResolver, runtime Runtime, transactions TransactionReader) *Service {
-	return &Service{images: images, runtime: runtime, transactions: transactions}
+func newService(
+	images ImageResolver,
+	runtime Runtime,
+	transactions TransactionReader,
+	events EventSink,
+) *service {
+	return &service{images: images, runtime: runtime, transactions: transactions, events: events}
 }
 
 // Request selects one service from an already bounded in-memory Compose source.
@@ -77,7 +82,7 @@ type Request struct {
 
 // Prepare validates and classifies one apply without a runtime effect or
 // durable write.
-func (service *Service) Prepare(ctx context.Context, request Request) (Preparation, error) {
+func (service *service) Prepare(ctx context.Context, request Request) (Preparation, error) {
 	var empty Preparation
 
 	if service == nil || service.images == nil || service.runtime == nil || service.transactions == nil {
@@ -99,13 +104,24 @@ func (service *Service) Prepare(ctx context.Context, request Request) (Preparati
 
 // DryRun returns the operator-facing classification while discarding private
 // execution details retained by Prepare for a later mutation.
-func (service *Service) DryRun(ctx context.Context, request Request) (Plan, error) {
+func (service *service) DryRun(ctx context.Context, request Request) (Plan, error) {
 	preparation, err := service.Prepare(ctx, request)
 	if err != nil {
 		return Plan{}, err
 	}
+	service.publishPlan(preparation)
 
 	return preparation.Plan, nil
+}
+
+func (service *service) publishPlan(preparation Preparation) {
+	tryPublish(service.events, Event{
+		Kind:    EventPlanPrepared,
+		Plan:    preparation.Plan.Kind,
+		Project: preparation.Plan.Project,
+		Service: preparation.Plan.Service,
+		Runtime: preparation.Plan.Runtime,
+	})
 }
 
 type desiredApply struct {
@@ -115,7 +131,7 @@ type desiredApply struct {
 	execution RuntimeEvidence
 }
 
-func (service *Service) prepareDesired(ctx context.Context, request Request) (desiredApply, error) {
+func (service *service) prepareDesired(ctx context.Context, request Request) (desiredApply, error) {
 	var empty desiredApply
 
 	project, err := compose.Load(ctx, request.Source)
@@ -167,7 +183,7 @@ func runtimeMatchesProject(project compose.Project, service string, execution Ru
 		execution.Kind == runtimeKind
 }
 
-func (service *Service) resolveDesiredImage(
+func (service *service) resolveDesiredImage(
 	ctx context.Context,
 	input compose.ImageInput,
 	platform domain.Platform,
@@ -194,7 +210,7 @@ func (service *Service) resolveDesiredImage(
 	}
 }
 
-func (service *Service) proveArchiveImage(
+func (service *service) proveArchiveImage(
 	ctx context.Context,
 	identity domain.ImageIdentity,
 ) (domain.ImageIdentity, error) {
@@ -229,7 +245,7 @@ func (service *Service) proveArchiveImage(
 	}
 }
 
-func (service *Service) prepareObserved(ctx context.Context, desired desiredApply) (Preparation, error) {
+func (service *service) prepareObserved(ctx context.Context, desired desiredApply) (Preparation, error) {
 	var empty Preparation
 
 	transaction, found, err := service.transactions.UnresolvedTransaction(
@@ -266,22 +282,12 @@ func (service *Service) prepareObserved(ctx context.Context, desired desiredAppl
 		if err != nil {
 			return empty, err
 		}
-		preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
-
-		return preparation, nil
 	}
 
-	preparation.Plan.Kind, err = classifyNewApply(
-		observation,
-		desired.workload,
-		desired.execution,
-		applied,
-		hasApplied,
-	)
+	preparation, err = classifyPreparedApply(preparation)
 	if err != nil {
 		return empty, err
 	}
-	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
 }
@@ -316,28 +322,44 @@ func prepareApplyEvidence(
 	}
 }
 
-func (service *Service) prepareRecovery(
+func (service *service) prepareRecovery(
 	ctx context.Context,
 	preparation Preparation,
 ) (Preparation, error) {
-	transaction := preparation.Transaction
-	if !transactionMatches(transaction, preparation.Workload, preparation.Execution) ||
-		!transactionMatchesApplied(transaction, preparation.Applied, preparation.HasApplied) {
-		return Preparation{}, ErrConflictingState
-	}
-
-	actions, err := service.transactions.Actions(ctx, transaction.ID)
+	actions, err := service.transactions.Actions(ctx, preparation.Transaction.ID)
 	if err != nil {
 		return Preparation{}, fmt.Errorf("prepare apply actions: %w", err)
 	}
+	preparation.Actions = actions
 
-	kind, err := classifyRecovery(transaction, actions)
+	return preparation, nil
+}
+
+func classifyPreparedApply(preparation Preparation) (Preparation, error) {
+	var err error
+
+	if preparation.HasTransaction {
+		transaction := preparation.Transaction
+		if !transactionMatches(transaction, preparation.Workload, preparation.Execution) ||
+			!transactionMatchesApplied(transaction, preparation.Applied, preparation.HasApplied) {
+			return Preparation{}, ErrConflictingState
+		}
+
+		preparation.Plan.Kind, err = classifyRecovery(transaction, preparation.Actions)
+	} else {
+		preparation.Plan.Kind, err = classifyNewApply(
+			preparation.Plan.Observation,
+			preparation.Workload,
+			preparation.Execution,
+			preparation.Applied,
+			preparation.HasApplied,
+		)
+	}
 	if err != nil {
 		return Preparation{}, err
 	}
 
-	preparation.Plan.Kind = kind
-	preparation.Actions = actions
+	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
 }

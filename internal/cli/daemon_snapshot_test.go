@@ -13,7 +13,6 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
-	"github.com/IceCodeNew/maniud/internal/store"
 )
 
 func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T) {
@@ -21,30 +20,23 @@ func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T
 
 	root := initGitOpsSnapshotTestRepository(t)
 	events := make([]string, 0, 16)
-	reader := &applyReaderFixture{events: &events, closeErr: nil}
-	runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-	dependencies := validApplyDependencies(t, &events, reader, runtime)
+	operations := &applyOperationsFixture{
+		events: &events, dryRunPlan: application.Plan{Kind: application.PlanBootstrap},
+	}
+	operations.dryRun = func(request application.Request) (application.Plan, error) {
+		if string(request.Source.Content) == testInvalidValue {
+			return application.Plan{}, compose.ErrInvalidSource
+		}
+
+		return operations.dryRunPlan, nil
+	}
+	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(_ context.Context, path string) (compose.Source, error) {
 		if filepath.Base(path) == "broken.yaml" {
-			return compose.Source{Content: []byte("invalid"), WorkingDir: root}, nil
+			return compose.Source{Content: []byte(testInvalidValue), WorkingDir: root}, nil
 		}
 
 		return testComposeSource(t), nil
-	}
-	statePath := privateStatePath(t)
-	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
-		return store.Open(ctx, statePath)
-	}
-	mutations := 0
-	dependencies.mutate = func(
-		context.Context,
-		application.Request,
-		*store.Store,
-		applyRuntime,
-	) (application.Plan, error) {
-		mutations++
-
-		return application.Plan{}, nil
 	}
 
 	state, err := cleanGitTree(t.Context(), root)
@@ -52,7 +44,7 @@ func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
-	if err == nil || mutations != 0 {
+	if mutations := countEvent(events, string(commandApply)); err == nil || mutations != 0 {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
 	}
 }
@@ -63,31 +55,16 @@ func TestReconcileGitOpsSnapshotEmitsValidatedServiceResults(t *testing.T) {
 	root := initGitOpsSnapshotTestRepository(t)
 	output := new(bytes.Buffer)
 	events := make([]string, 0, 24)
-	reader := &applyReaderFixture{events: &events, closeErr: nil}
-	runtime := &applyRuntimeFixture{events: &events, inspectErr: nil}
-	dependencies := validApplyDependencies(t, &events, reader, runtime)
+	plan := application.Plan{
+		Kind: application.PlanBootstrap,
+		Warnings: []application.Warning{{
+			Code: application.WarningDaemonMountProbeUnavailable,
+		}},
+	}
+	operations := &applyOperationsFixture{events: &events, dryRunPlan: plan, applyPlan: plan}
+	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return testComposeSource(t), nil
-	}
-	statePath := privateStatePath(t)
-	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
-		return store.Open(ctx, statePath)
-	}
-	mutations := 0
-	dependencies.mutate = func(
-		context.Context,
-		application.Request,
-		*store.Store,
-		applyRuntime,
-	) (application.Plan, error) {
-		mutations++
-
-		return application.Plan{
-			Kind: application.PlanBootstrap,
-			Warnings: []application.Warning{{
-				Code: application.WarningDaemonMountProbeUnavailable,
-			}},
-		}, nil
 	}
 
 	state, err := cleanGitTree(t.Context(), root)
@@ -95,6 +72,7 @@ func TestReconcileGitOpsSnapshotEmitsValidatedServiceResults(t *testing.T) {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, output, dependencies)
+	mutations := countEvent(events, string(commandApply))
 	if err != nil || mutations != 2 {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
 	}
@@ -113,25 +91,12 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 
 	root := initGitOpsSnapshotTestRepository(t)
 	events := make([]string, 0, 16)
-	dependencies := validApplyDependencies(
-		t, &events,
-		&applyReaderFixture{events: &events},
-		&applyRuntimeFixture{events: &events},
-	)
+	operations := &applyOperationsFixture{
+		events: &events, dryRunPlan: application.Plan{Kind: application.PlanBootstrap}, applyErr: errApplyTest,
+	}
+	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return testComposeSource(t), nil
-	}
-	statePath := privateStatePath(t)
-	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
-		return store.Open(ctx, statePath)
-	}
-	dependencies.mutate = func(
-		context.Context,
-		application.Request,
-		*store.Store,
-		applyRuntime,
-	) (application.Plan, error) {
-		return application.Plan{}, errApplyTest
 	}
 
 	state, err := cleanGitTree(t.Context(), root)
@@ -150,15 +115,10 @@ func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
 
 	root := initGitOpsSnapshotTestRepository(t)
 	events := make([]string, 0, 16)
-	dependencies := validApplyDependencies(
-		t, &events,
-		&applyReaderFixture{events: &events},
-		&applyRuntimeFixture{events: &events},
-	)
-	statePath := privateStatePath(t)
-	dependencies.openState = func(ctx context.Context) (*store.Store, error) {
-		return store.Open(ctx, statePath)
+	operations := &applyOperationsFixture{
+		events: &events, dryRunPlan: application.Plan{Kind: application.PlanBootstrap},
 	}
+	dependencies := operationApplyDependencies(t, &events, operations)
 	state, err := cleanGitTree(t.Context(), root)
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
