@@ -86,5 +86,5 @@ replace (
 	github.com/IceCodeNew/maniud/containerconfig/podman => ./containerconfig/podman
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ./containerconfig/runtimeargv
 	github.com/IceCodeNew/maniud/imageref => ./imageref
-	github.com/nikoksr/notify => github.com/IceCodeNew/notify v0.0.0-20260825033926-0a827094afac
+	github.com/nikoksr/notify => github.com/IceCodeNew/notify v1.1.1
 )
