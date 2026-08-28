@@ -192,7 +192,10 @@ func TestLocalModuleDefinitionsValidatesRootReplacements(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			root := t.TempDir()
+			root, err := resolveSourceRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, directory := range []string{"argv", "imageref", "other"} {
 				if err := os.Mkdir(filepath.Join(root, directory), outputDirectoryMode); err != nil {
 					t.Fatal(err)
