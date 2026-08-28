@@ -112,6 +112,7 @@ for command_name in \
   depaware \
   go \
   gobco \
+  go-modern-guidelines \
   golangci-lint \
   greptile \
   mise \
@@ -150,6 +151,8 @@ require_equal 'Capslock Go tools' \
   "$CAPSLOCK_X_TOOLS_VERSION"
 require_equal 'Gobco' \
   "$(mise current go:github.com/rillig/gobco)" "$GOBCO_VERSION"
+require_equal 'Modern Go Guidelines' \
+  "$(go-modern-guidelines --version)" "$GO_MODERN_GUIDELINES_VERSION"
 require_equal 'NilAway' \
   "$(mise current go:go.uber.org/nilaway/cmd/nilaway)" "${NILAWAY_VERSION#v}"
 require_equal 'depaware' \

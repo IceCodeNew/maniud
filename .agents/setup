@@ -364,6 +364,7 @@ install_mise_tools() {
     "golangci-lint@$GOLANGCI_LINT_VERSION" \
     "go:github.com/google/capslock/cmd/capslock@$CAPSLOCK_VERSION" \
     "go:github.com/rillig/gobco@$GOBCO_VERSION" \
+    "go:github.com/JetBrains/go-modern-guidelines@$GO_MODERN_GUIDELINES_VERSION" \
     "go:go.uber.org/nilaway/cmd/nilaway@$NILAWAY_VERSION" \
     "go:github.com/tailscale/depaware@$DEPAWARE_VERSION" \
     "go:github.com/uber-go/gopatch" \
@@ -383,6 +384,7 @@ install_mise_tools() {
   done <<'GO_TOOLS'
 capslock go:github.com/google/capslock/cmd/capslock
 gobco go:github.com/rillig/gobco
+go-modern-guidelines go:github.com/JetBrains/go-modern-guidelines
 nilaway go:go.uber.org/nilaway/cmd/nilaway
 depaware go:github.com/tailscale/depaware
 gopatch go:github.com/uber-go/gopatch

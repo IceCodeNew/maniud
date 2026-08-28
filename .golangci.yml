@@ -62,6 +62,7 @@ linters:
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+            - github.com/google/go-cmp
         cli-syntax-adapter:
           list-mode: strict
           files:
@@ -86,6 +87,7 @@ linters:
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+            - github.com/google/go-cmp
             - golang.org/x/sys
             - modernc.org/sqlite
         compose-adapter:
@@ -193,6 +195,7 @@ linters:
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
+            - github.com/google/go-cmp
             - github.com/moby/moby/api
             - golang.org/x/crypto
         podman-adapter:

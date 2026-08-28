@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 type diagnosticCycleError struct{}
@@ -71,14 +73,42 @@ func TestDebugFailureIncludesRedactedCauseAndCallSites(t *testing.T) {
 	}
 
 	failure := decodePublicFailure(t, output.Bytes())
-	if failure.Code != domain.ErrorApplyFailed || failure.Debug == nil ||
-		len(failure.Debug.Causes) < 4 || len(failure.Debug.CallSites) == 0 {
-		t.Fatalf("debug failure = %#v", failure)
-	}
+	assertDebugFailureShape(t, failure)
 
 	assertDebugRedaction(t, output.String(), privatePath, []string{
 		environmentValue, "registry-token", "hunter2", "user:password", "key-material",
 	})
+}
+
+func assertDebugFailureShape(t *testing.T, failure publicFailure) {
+	t.Helper()
+
+	wantFailure := publicFailure{
+		Code:      domain.ErrorApplyFailed,
+		Message:   "apply validation failed",
+		Retryable: false,
+		Debug:     nil,
+	}
+	if diff := cmp.Diff(wantFailure, failure, cmpopts.IgnoreFields(publicFailure{}, "Debug")); diff != "" {
+		t.Fatalf("debug failure mismatch (-want +got):\n%s", diff)
+	}
+	if failure.Debug == nil {
+		t.Fatal("debug failure omits diagnostic")
+	}
+	wantShape := struct {
+		HasEnoughCauses bool
+		HasCallSites    bool
+	}{HasEnoughCauses: true, HasCallSites: true}
+	gotShape := struct {
+		HasEnoughCauses bool
+		HasCallSites    bool
+	}{
+		HasEnoughCauses: len(failure.Debug.Causes) >= 4,
+		HasCallSites:    len(failure.Debug.CallSites) > 0,
+	}
+	if diff := cmp.Diff(wantShape, gotShape); diff != "" {
+		t.Fatalf("debug diagnostic shape mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func decodePublicFailure(t *testing.T, encoded []byte) publicFailure {

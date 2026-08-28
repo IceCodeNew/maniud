@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	containertypes "github.com/moby/moby/api/types/container"
 
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -24,6 +25,17 @@ const (
 	testInvalidTransactionName  = "invalid transaction"
 	testInvalidTransactionValue = "_bad"
 )
+
+type containerCreateContract struct {
+	Image                    string
+	Entrypoint               []string
+	Command                  []string
+	Labels                   map[string]string
+	NetworkingConfigPresent  bool
+	NetworkMode              string
+	RestartPolicyName        string
+	RestartMaximumRetryCount int
+}
 
 func TestCreateWorkloadSendsStoppedOwnedContainerRequest(t *testing.T) {
 	t.Parallel()
@@ -47,7 +59,6 @@ func TestCreateWorkloadSendsStoppedOwnedContainerRequest(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // This assertion checks the complete create request contract in one place.
 func assertContainerCreateRequest(
 	t *testing.T,
 	request *http.Request,
@@ -67,15 +78,39 @@ func assertContainerCreateRequest(
 	var body containertypes.CreateRequest
 
 	decoder := json.NewDecoder(request.Body)
-	if decoder.Decode(&body) != nil || body.Config == nil || body.HostConfig == nil ||
-		body.NetworkingConfig != nil || body.Image != workload.Image.Reference ||
-		!reflect.DeepEqual(body.Entrypoint, workload.Entrypoint) ||
-		!reflect.DeepEqual(body.Cmd, workload.Command) ||
-		!reflect.DeepEqual(body.Labels, workloadOwnershipLabels(workload, transaction)) ||
-		body.HostConfig.NetworkMode != dockerNetworkMode ||
-		body.HostConfig.RestartPolicy.Name != containertypes.RestartPolicyDisabled ||
-		body.HostConfig.RestartPolicy.MaximumRetryCount != 0 {
-		t.Errorf("create body = %#v", body)
+	if err := decoder.Decode(&body); err != nil {
+		t.Errorf("decode create body: %v", err)
+
+		return false
+	}
+	if body.Config == nil || body.HostConfig == nil {
+		t.Errorf("create body omits config: %#v", body)
+
+		return false
+	}
+
+	want := containerCreateContract{
+		Image:                    workload.Image.Reference,
+		Entrypoint:               workload.Entrypoint,
+		Command:                  workload.Command,
+		Labels:                   workloadOwnershipLabels(workload, transaction),
+		NetworkingConfigPresent:  false,
+		NetworkMode:              string(dockerNetworkMode),
+		RestartPolicyName:        string(containertypes.RestartPolicyDisabled),
+		RestartMaximumRetryCount: 0,
+	}
+	got := containerCreateContract{
+		Image:                    body.Image,
+		Entrypoint:               body.Entrypoint,
+		Command:                  body.Cmd,
+		Labels:                   body.Labels,
+		NetworkingConfigPresent:  body.NetworkingConfig != nil,
+		NetworkMode:              string(body.HostConfig.NetworkMode),
+		RestartPolicyName:        string(body.HostConfig.RestartPolicy.Name),
+		RestartMaximumRetryCount: body.HostConfig.RestartPolicy.MaximumRetryCount,
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("create body mismatch (-want +got):\n%s", diff)
 
 		return false
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
 )
 
@@ -287,8 +288,8 @@ func TestOpenReaderRejectsInvalidStateWithoutRepair(t *testing.T) {
 			}
 
 			after := directorySnapshot(t, directory)
-			if !reflect.DeepEqual(after, before) {
-				t.Fatalf("rejected state changed: before=%#v after=%#v", before, after)
+			if diff := cmp.Diff(before, after, cmp.AllowUnexported(fileSnapshot{})); diff != "" {
+				t.Fatalf("rejected state changed (-before +after):\n%s", diff)
 			}
 		})
 	}

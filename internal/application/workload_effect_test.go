@@ -644,14 +644,12 @@ func testWorkloadEffect(t *testing.T) domain.DesiredWorkload {
 	t.Helper()
 
 	return domain.DesiredWorkload{
-		WorkloadSpec: domain.WorkloadSpec{
-			ServiceName:   testServiceName,
-			ContainerName: "example-api",
-			Platform:      domain.Platform{OS: "linux", Architecture: "amd64"},
-			Entrypoint:    []string{testProcessEntrypoint},
-			Command:       []string{testProcessCommand},
-			NetworkMode:   "bridge",
-		},
+		ServiceName:     testServiceName,
+		ContainerName:   "example-api",
+		Platform:        domain.Platform{OS: "linux", Architecture: "amd64"},
+		Entrypoint:      []string{testProcessEntrypoint},
+		Command:         []string{testProcessCommand},
+		NetworkMode:     "bridge",
 		Image:           testImageEffectIdentity(t),
 		SourceDigest:    domain.Hash([]byte("workload source")),
 		EffectiveDigest: domain.Hash([]byte("workload desired state")),

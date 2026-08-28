@@ -43,13 +43,11 @@ func testContainerdDesiredWorkload(t *testing.T) domain.DesiredWorkload {
 	reference := domain.Hash([]byte("reference"))
 	platform := domain.Platform{OS: containerdPlatformOS, Architecture: containerdArchitectureAMD64}
 	workload := domain.DesiredWorkload{
-		WorkloadSpec: domain.WorkloadSpec{
-			ServiceName:   testWorkloadService,
-			ContainerName: testWorkloadName,
-			Platform:      platform,
-			Entrypoint:    []string{"/bin/true"},
-			NetworkMode:   defaultCNINetworkName,
-		},
+		ServiceName:   testWorkloadService,
+		ContainerName: testWorkloadName,
+		Platform:      platform,
+		Entrypoint:    []string{"/bin/true"},
+		NetworkMode:   defaultCNINetworkName,
 		Image: domain.ImageIdentity{
 			Origin:           domain.ImageOriginRegistry,
 			Reference:        "example.com/team/api@" + reference.String(),
