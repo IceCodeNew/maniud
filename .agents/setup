@@ -437,6 +437,87 @@ install_ninehills_skills() (
   amp skill add --global --overwrite "$source_dir"
 )
 
+install_searching_with_fff() (
+  local actual_origin
+  local architecture
+  local archive_name
+  local binary="$HOME/.local/bin/fff-mcp"
+  local expected_checksum
+  local installed_version
+  local source_dir="$HOME/.cache/maniud/searching-with-fff"
+  local source_url='https://github.com/IceCodeNew/searching-with-fff.git'
+  local temporary_dir
+
+  case "$(uname -m)" in
+    x86_64)
+      architecture='x86_64'
+      expected_checksum="$FFF_MCP_X86_64_LINUX_SHA256"
+      ;;
+    aarch64 | arm64)
+      architecture='aarch64'
+      expected_checksum="$FFF_MCP_AARCH64_LINUX_SHA256"
+      ;;
+    *)
+      printf 'fff-mcp does not support this orb architecture: %s\n' "$(uname -m)" >&2
+      return 1
+      ;;
+  esac
+
+  archive_name="fff-mcp-$architecture-unknown-linux-musl"
+  if [[ ! -x "$binary" ]] \
+    || ! printf '%s  %s\n' "$expected_checksum" "$binary" | sha256sum --check --strict --status; then
+    temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-fff-mcp.XXXXXX")"
+    trap 'rm -rf "$temporary_dir"' EXIT
+    curl \
+      --proto '=https' \
+      --tlsv1.2 \
+      --fail \
+      --silent \
+      --show-error \
+      --location \
+      --output "$temporary_dir/$archive_name" \
+      "https://github.com/dmtrKovalenko/fff/releases/download/$FFF_MCP_VERSION/$archive_name"
+    printf '%s  %s\n' "$expected_checksum" "$temporary_dir/$archive_name" \
+      | sha256sum --check --strict
+    install -m 0755 "$temporary_dir/$archive_name" "$binary"
+  fi
+  installed_version="$($binary --version | awk '{print $2}')"
+  if [[ "$installed_version" != "${FFF_MCP_VERSION#v}" ]]; then
+    printf 'fff-mcp version mismatch after installation: expected %s, found %s.\n' \
+      "$FFF_MCP_VERSION" "$installed_version" >&2
+    return 1
+  fi
+
+  if [[ -e "$source_dir" && ! -d "$source_dir/.git" ]]; then
+    printf 'Refusing to replace unmanaged searching-with-fff source directory: %s\n' "$source_dir" >&2
+    return 1
+  fi
+  if [[ ! -d "$source_dir/.git" ]]; then
+    git clone --quiet "$source_url" "$source_dir"
+  fi
+  actual_origin="$(git -C "$source_dir" remote get-url origin 2>/dev/null || true)"
+  if [[ "$actual_origin" != "$source_url" ]]; then
+    printf 'Refusing to update searching-with-fff with an unexpected origin: %s\n' "$source_dir" >&2
+    return 1
+  fi
+  if [[ -n "$(git -C "$source_dir" status --porcelain)" ]]; then
+    printf 'Refusing to update a modified searching-with-fff checkout: %s\n' "$source_dir" >&2
+    return 1
+  fi
+  git -C "$source_dir" fetch --quiet --depth 1 origin "$SEARCHING_WITH_FFF_REVISION"
+  git -C "$source_dir" checkout --detach --force --quiet FETCH_HEAD
+  if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$SEARCHING_WITH_FFF_REVISION" ]]; then
+    printf '%s\n' 'searching-with-fff did not resolve to the reviewed revision.' >&2
+    return 1
+  fi
+  if [[ ! -f "$source_dir/searching-with-fff/SKILL.md" \
+    || ! -f "$source_dir/searching-with-fff/mcp.json" ]]; then
+    printf '%s\n' 'searching-with-fff is missing its reviewed skill files.' >&2
+    return 1
+  fi
+  amp skill add --global --overwrite "$source_dir"
+)
+
 install_gstack() (
   eval "$(mise hook-env -s bash)"
   local destination="$HOME/.agents/skills/gstack"
@@ -524,6 +605,7 @@ run_step "Install nerdctl $NERDCTL_VERSION full bundle" install_nerdctl_tools
 run_step 'Grant the orb user access to container runtime sockets' configure_runtime_access
 run_step 'Configure the supervised containerd daemon' configure_containerd
 run_step 'Install latest ninehills skills' install_ninehills_skills
+run_step "Install searching-with-fff at $SEARCHING_WITH_FFF_REVISION" install_searching_with_fff
 run_step 'Install and load gstack' install_gstack
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
 run_step 'Configure and verify Nowledge Mem' configure_nmem
