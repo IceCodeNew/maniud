@@ -57,16 +57,18 @@ type archiveFixture struct {
 }
 
 type fixtureOptions struct {
-	architecture       string
-	variant            string
-	withOCI            bool
-	withNestedOCI      bool
-	untagged           bool
-	indexPlatform      string
-	indexMediaType     string
-	nestedTopCount     int
-	nestedDigestTamper bool
-	docker29           bool
+	architecture         string
+	variant              string
+	withOCI              bool
+	withNestedOCI        bool
+	untagged             bool
+	indexPlatform        string
+	indexMediaType       string
+	nestedTopCount       int
+	nestedDigestTamper   bool
+	docker29             bool
+	indexWithoutPlatform bool
+	externalLayerSource  bool
 }
 
 func writeArchive(t *testing.T, directory string, members []tarMember, trailing []byte) (string, []byte) {
@@ -142,9 +144,15 @@ func newFixture(t *testing.T, options fixtureOptions) archiveFixture {
 		configName = blobName(config)
 		layerName = blobName(layer)
 	}
-	manifest := mustJSON(t, []map[string]any{{
+	manifestEntry := map[string]any{
 		"Config": configName, "RepoTags": tags, "Layers": []string{layerName},
-	}})
+	}
+	if options.docker29 || options.externalLayerSource {
+		manifestEntry["LayerSources"] = map[string]any{
+			digest(layer): fixtureLayerDescriptor(options, layer),
+		}
+	}
+	manifest := mustJSON(t, []map[string]any{manifestEntry})
 	members := []tarMember{
 		{name: manifestMember, body: manifest},
 		{name: configName, body: config},
@@ -167,7 +175,7 @@ func newFixture(t *testing.T, options fixtureOptions) archiveFixture {
 func ociMembers(t *testing.T, options fixtureOptions, config, layer []byte) []tarMember {
 	t.Helper()
 
-	manifest := ociManifestFixture(t, config, layer)
+	manifest := ociManifestFixture(t, options, config, layer)
 	index := ociPlatformIndexFixture(t, options, manifest)
 	indexMembers := ociIndexMembers(t, options, index)
 	contentMembers := []tarMember{{name: blobName(manifest), body: manifest}}
@@ -181,7 +189,7 @@ func ociMembers(t *testing.T, options fixtureOptions, config, layer []byte) []ta
 	return append(indexMembers, contentMembers...)
 }
 
-func ociManifestFixture(t *testing.T, config, layer []byte) []byte {
+func ociManifestFixture(t *testing.T, options fixtureOptions, config, layer []byte) []byte {
 	t.Helper()
 
 	return mustJSON(t, map[string]any{
@@ -192,12 +200,27 @@ func ociManifestFixture(t *testing.T, config, layer []byte) []byte {
 			digestKey:    digest(config),
 			sizeKey:      len(config),
 		},
-		"layers": []map[string]any{{
-			mediaTypeKey: "application/vnd.oci.image.layer.v1.tar",
-			digestKey:    digest(layer),
-			sizeKey:      len(layer),
-		}},
+		"layers": []map[string]any{fixtureLayerDescriptor(options, layer)},
 	})
+}
+
+func fixtureLayerDescriptor(options fixtureOptions, layer []byte) map[string]any {
+	if options.externalLayerSource {
+		source := []byte("registry-compressed-layer")
+
+		return map[string]any{
+			mediaTypeKey: "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+			digestKey:    digest(source),
+			sizeKey:      len(source),
+			"urls":       []string{"https://registry.example.invalid/layer"},
+		}
+	}
+
+	return map[string]any{
+		mediaTypeKey: "application/vnd.oci.image.layer.v1.tar",
+		digestKey:    digest(layer),
+		sizeKey:      len(layer),
+	}
 }
 
 func ociPlatformIndexFixture(t *testing.T, options fixtureOptions, manifest []byte) []byte {
@@ -219,7 +242,10 @@ func ociPlatformIndexFixture(t *testing.T, options fixtureOptions, manifest []by
 			osKey: testOSLinux, architectureKey: platformArchitecture, "variant": options.variant,
 		},
 	}}
-	if options.docker29 {
+	if options.indexWithoutPlatform {
+		delete(manifests[0], "platform")
+	}
+	if options.docker29 && !options.indexWithoutPlatform {
 		manifests = append(manifests, map[string]any{
 			mediaTypeKey: ociManifestTestType,
 			digestKey:    digest([]byte("missing arm64 manifest")),
@@ -311,17 +337,25 @@ func TestAnalyzeTaggedAndIndexed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		architecture  string
-		variant       string
-		selector      string
-		withOCI       bool
-		withNestedOCI bool
-		docker29      bool
+		name                 string
+		architecture         string
+		variant              string
+		selector             string
+		withOCI              bool
+		withNestedOCI        bool
+		docker29             bool
+		indexWithoutPlatform bool
+		externalLayerSource  bool
 	}{
 		{name: "tagged OCI amd64", architecture: testArchitectureAMD64, selector: testArchiveTag, withOCI: true},
+		{name: "legacy foreign layer metadata", architecture: testArchitectureAMD64, selector: testArchiveTag,
+			externalLayerSource: true},
 		{name: "Docker 29 nested OCI amd64", architecture: testArchitectureAMD64, selector: testArchiveTag,
 			withOCI: true, withNestedOCI: true, docker29: true},
+		{name: "Docker 29 external layer descriptor", architecture: testArchitectureAMD64, selector: testArchiveTag,
+			withOCI: true, docker29: true, externalLayerSource: true},
+		{name: "Docker 29 platform-less OCI amd64", architecture: testArchitectureAMD64, selector: testArchiveTag,
+			withOCI: true, docker29: true, indexWithoutPlatform: true},
 		{name: "indexed arm64", architecture: testArchitectureARM64, variant: "v8", selector: "@0"},
 	}
 	for _, test := range tests {
@@ -331,6 +365,8 @@ func TestAnalyzeTaggedAndIndexed(t *testing.T) {
 			fixture := newFixture(t, fixtureOptions{
 				architecture: test.architecture, variant: test.variant, withOCI: test.withOCI,
 				withNestedOCI: test.withNestedOCI, docker29: test.docker29,
+				indexWithoutPlatform: test.indexWithoutPlatform,
+				externalLayerSource:  test.externalLayerSource,
 			})
 			analysis := analyzeFixture(t, fixture, test.selector)
 			assertAnalysis(t, analysis, fixture, test.architecture, test.selector, test.withOCI)

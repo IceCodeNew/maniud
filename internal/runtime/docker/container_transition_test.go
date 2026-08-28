@@ -27,6 +27,18 @@ type transitionEngineState struct {
 	mutex      sync.Mutex
 }
 
+type transitionResponseBody struct {
+	io.Reader
+
+	onClose func()
+}
+
+func (body transitionResponseBody) Close() error {
+	body.onClose()
+
+	return nil
+}
+
 func (state *transitionEngineState) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	state.testing.Helper()
 	state.mutex.Lock()
@@ -44,7 +56,7 @@ func (state *transitionEngineState) ServeHTTP(response http.ResponseWriter, requ
 }
 
 func (state *transitionEngineState) serveProbe(response http.ResponseWriter, request *http.Request) {
-	reference := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/v1.54/containers/"), "/json")
+	reference := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/v1.55/containers/"), "/json")
 	if !state.present || reference != testContainerID && reference != state.name {
 		response.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(response, `{"message":"No such container"}`)
@@ -62,6 +74,7 @@ func (state *transitionEngineState) serveProbe(response http.ResponseWriter, req
 
 func (state *transitionEngineState) serveMutation(response http.ResponseWriter, request *http.Request) {
 	wantMethod, wantPath, wantQuery := workloadTransitionRequest(state.transition)
+	wantPath = "/v" + maximumAPIVersion + wantPath
 	if request.Method != wantMethod || request.URL.Path != wantPath ||
 		request.URL.Query().Encode() != wantQuery.Encode() || request.ContentLength != 0 {
 		state.testing.Errorf(
@@ -301,6 +314,35 @@ func TestDockerTransitionReturnsTypedMissingWorkload(t *testing.T) {
 	)
 	if err != nil || probe.State != application.WorkloadEffectProbeMissing {
 		t.Fatalf("ProbeWorkloadTransition(missing) = %#v, %v", probe, err)
+	}
+}
+
+func TestDockerTransitionRejectsNegotiatedVersionDrift(t *testing.T) {
+	t.Parallel()
+
+	transition := dockerWorkloadTransitions(t)[0]
+	document := namedContainerDocument(
+		t,
+		transition.Before.Name,
+		managedContainerLabels(),
+		runningContainerState(),
+	)
+	drifted := testClient(nil)
+	drifted.version = testVersion()
+	drifted.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		response := dockerHTTPResponse(http.StatusOK, document)
+		response.Body = transitionResponseBody{
+			Reader: strings.NewReader(document),
+			onClose: func() {
+				drifted.protocol = testAPIVersion(t, testUnsupportedAPIVersion)
+			},
+		}
+
+		return response, nil
+	})
+
+	if err := drifted.ApplyWorkloadTransition(context.Background(), transition); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("ApplyWorkloadTransition(version drift) = %v", err)
 	}
 }
 

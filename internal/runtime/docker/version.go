@@ -10,6 +10,13 @@ type apiVersion struct {
 	minor uint64
 }
 
+const (
+	dockerAPIMajor                  uint64 = 1
+	cgroupNamespaceAPIMinimumMinor  uint64 = 41
+	imageDescriptorsAPIMinimumMinor uint64 = 48
+	imagePlatformAPIMinimumMinor    uint64 = 49
+)
+
 func parseAPIVersion(value string) (apiVersion, bool) {
 	emptyVersion := apiVersion{major: 0, minor: 0}
 
@@ -52,4 +59,20 @@ func (version apiVersion) Less(other apiVersion) bool {
 
 func (version apiVersion) String() string {
 	return strconv.FormatUint(version.major, 10) + "." + strconv.FormatUint(version.minor, 10)
+}
+
+func (version apiVersion) atLeast(minimum apiVersion) bool {
+	return !version.Less(minimum)
+}
+
+func supportsCgroupNamespace(version apiVersion) bool {
+	return version.atLeast(apiVersion{major: dockerAPIMajor, minor: cgroupNamespaceAPIMinimumMinor})
+}
+
+func supportsImageDescriptors(version apiVersion) bool {
+	return version.atLeast(apiVersion{major: dockerAPIMajor, minor: imageDescriptorsAPIMinimumMinor})
+}
+
+func supportsImageInspectPlatform(version apiVersion) bool {
+	return version.atLeast(apiVersion{major: dockerAPIMajor, minor: imagePlatformAPIMinimumMinor})
 }

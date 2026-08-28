@@ -10,6 +10,61 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+func TestDecodeContainerInspectRejectsMalformedCompatibilityFields(t *testing.T) {
+	t.Parallel()
+
+	for _, document := range []string{
+		`[]`,
+		`null`,
+		`{"HostConfig":[]}`,
+		`{"HostConfig":{"Unknown":true}}`,
+		`{"Config":[]}`,
+		`{"State":[]}`,
+		`{"NetworkSettings":[]}`,
+		`{"Mounts":{}}`,
+		`{"Mounts":[[]]}`,
+	} {
+		var target containertypes.InspectResponse
+		if decodeContainerInspect(strings.NewReader(document), &target) {
+			t.Fatalf("decodeContainerInspect(%s) = true", document)
+		}
+	}
+}
+
+func TestDecodeContainerInspectRejectsUnknownNestedFields(t *testing.T) {
+	t.Parallel()
+
+	for _, document := range []string{
+		`{"Config":{"Unknown":true}}`,
+		`{"State":{"Unknown":true}}`,
+		`{"NetworkSettings":{"Unknown":true}}`,
+		`{"Mounts":[{"Unknown":true}]}`,
+	} {
+		var target containertypes.InspectResponse
+		if decodeContainerInspect(strings.NewReader(document), &target) {
+			t.Fatalf("decodeContainerInspect(%s) = true", document)
+		}
+	}
+}
+
+func TestDecodeContainerInspectAcceptsAPI140NestedCompatibilityFields(t *testing.T) {
+	t.Parallel()
+
+	document := `{
+		"Config":{"MacAddress":""},
+		"NetworkSettings":{
+			"Bridge":"","HairpinMode":false,"LinkLocalIPv6Address":"","LinkLocalIPv6PrefixLen":0,
+			"SecondaryIPAddresses":null,"SecondaryIPv6Addresses":null,"EndpointID":"","Gateway":"",
+			"GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"IPAddress":"","IPPrefixLen":0,
+			"IPv6Gateway":"","MacAddress":""
+		}
+	}`
+	var target containertypes.InspectResponse
+	if !decodeContainerInspect(strings.NewReader(document), &target) {
+		t.Fatal("decodeContainerInspect(API 1.40 nested compatibility fields) = false")
+	}
+}
+
 func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -21,9 +76,6 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 		{name: "state", mutate: func(value *containertypes.InspectResponse) { value.State = nil }},
 		{name: "config", mutate: func(value *containertypes.InspectResponse) { value.Config = nil }},
 		{name: "host config", mutate: func(value *containertypes.InspectResponse) { value.HostConfig = nil }},
-		{name: "descriptor absent", mutate: func(value *containertypes.InspectResponse) {
-			value.ImageManifestDescriptor = nil
-		}},
 		{name: "ID", mutate: func(value *containertypes.InspectResponse) { value.ID = "short" }},
 		{name: containerNameQueryKey, mutate: func(value *containertypes.InspectResponse) { value.Name = "example-api" }},
 		{name: "name grammar", mutate: func(value *containertypes.InspectResponse) { value.Name = "/example_api" }},
@@ -62,11 +114,92 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 			payload.ImageManifestDescriptor = &descriptor
 			test.mutate(&payload)
 
-			observed, valid := decodeContainer(testContainerName, payload)
+			observed, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 			if valid || observed.ID != "" {
 				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed, valid)
 			}
 		})
+	}
+}
+
+func TestDecodeContainerAPISchemas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		protocol string
+		document string
+		manifest string
+	}{
+		{
+			protocol: minimumAPIVersion,
+			document: legacyContainerDocument(t, testContainerImage),
+			manifest: testReferenceDigest,
+		},
+		{
+			protocol: testAPIVersion154,
+			document: validContainerDocument(t, managedContainerLabels(), runningContainerState()),
+			manifest: testPlatformManifest,
+		},
+		{
+			protocol: maximumAPIVersion,
+			document: validContainerDocument(t, managedContainerLabels(), runningContainerState()),
+			manifest: testPlatformManifest,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.protocol, func(t *testing.T) {
+			t.Parallel()
+
+			payload := inspectPayload(t, test.document)
+			container, valid := decodeContainer(testAPIVersion(t, test.protocol), testContainerName, payload)
+			if !valid || container.Ownership.Status != domain.OwnershipManaged ||
+				container.PlatformManifest != mustTestDigest(t, test.manifest) {
+				t.Fatalf("decodeContainer(API %s) = %#v, %t", test.protocol, container, valid)
+			}
+		})
+	}
+}
+
+func TestDecodeContainerAPIMinimumAcceptsOnlyDefaultCgroupNamespace(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		mode  containertypes.CgroupnsMode
+		valid bool
+	}{
+		{mode: "", valid: true},
+		{mode: containertypes.CgroupnsMode(testCgroupPrivate), valid: true},
+		{mode: containertypes.CgroupnsMode("host"), valid: false},
+	} {
+		payload := inspectPayload(t, legacyContainerDocument(t, testContainerImage))
+		payload.HostConfig.CgroupnsMode = test.mode
+
+		container, valid := decodeContainer(
+			testAPIVersion(t, minimumAPIVersion),
+			testContainerName,
+			payload,
+		)
+		if valid != test.valid || valid && container.ID != testContainerID {
+			t.Fatalf("decodeContainer(API 1.40 cgroup namespace %q) = %#v, %t", test.mode, container, valid)
+		}
+	}
+}
+
+func TestContainerPlatformManifestFollowsStoreCapabilities(t *testing.T) {
+	t.Parallel()
+
+	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
+	descriptor := payload.ImageManifestDescriptor
+	payload.ImageManifestDescriptor = nil
+	payload.Config.Labels = nil
+	manifest, valid := containerPlatformManifest(testAPIVersion(t, maximumAPIVersion), payload)
+	if !valid || manifest != (domain.Digest{}) {
+		t.Fatalf("containerPlatformManifest(classic unmanaged) = %s, %t", manifest, valid)
+	}
+
+	payload.ImageManifestDescriptor = descriptor
+	if _, valid := containerPlatformManifest(testAPIVersion(t, minimumAPIVersion), payload); valid {
+		t.Fatal("containerPlatformManifest(API 1.40 descriptor) = valid")
 	}
 }
 
@@ -77,7 +210,7 @@ func TestDecodeContainerRejectsInvalidNetworkMode(t *testing.T) {
 		payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
 		payload.HostConfig.NetworkMode = containertypes.NetworkMode(networkMode)
 
-		observed, valid := decodeContainer(testContainerName, payload)
+		observed, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 		if valid || observed.ID != "" {
 			t.Fatalf("decodeContainer(network mode %q) = %#v, %t", networkMode, observed, valid)
 		}
@@ -95,7 +228,7 @@ func TestDecodeContainerRejectsInvalidRestartPolicy(t *testing.T) {
 		payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
 		payload.HostConfig.RestartPolicy = policy
 
-		observed, valid := decodeContainer(testContainerName, payload)
+		observed, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 		if valid || observed.ID != "" {
 			t.Fatalf("decodeContainer(restart policy %#v) = %#v, %t", policy, observed, valid)
 		}
@@ -145,7 +278,7 @@ func TestDecodeContainerNormalizesSupportedRestartPolicies(t *testing.T) {
 			payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
 			payload.HostConfig.RestartPolicy = test.policy
 
-			observed, valid := decodeContainer(testContainerName, payload)
+			observed, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 			want := restartPolicyString(test.want)
 			if !valid || observed.WorkloadSpec.Restart != want {
 				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed.WorkloadSpec.Restart, valid)
@@ -172,7 +305,7 @@ func TestDecodeContainerRejectsConflictingReference(t *testing.T) {
 
 	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
 
-	observed, valid := decodeContainer("other-name", payload)
+	observed, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), "other-name", payload)
 	if valid || observed.ID != "" {
 		t.Fatalf("decodeContainer(conflicting request) = %#v, %t", observed, valid)
 	}
@@ -184,7 +317,7 @@ func TestDecodeContainerAcceptsDockerManifest(t *testing.T) {
 	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), runningContainerState()))
 	payload.ImageManifestDescriptor.MediaType = dockerManifestMediaType
 
-	container, valid := decodeContainer(testContainerName, payload)
+	container, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 	if !valid || container.ID != testContainerID {
 		t.Fatalf("decodeContainer(Docker manifest) = %#v, %t", container, valid)
 	}
@@ -197,7 +330,7 @@ func TestDecodeContainerPreservesNilAndEmptyProcessValues(t *testing.T) {
 	payload.Config.Entrypoint = nil
 	payload.Config.Cmd = []string{}
 
-	container, valid := decodeContainer(testContainerName, payload)
+	container, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
 	if !valid || container.WorkloadSpec.Entrypoint != nil ||
 		container.WorkloadSpec.Command == nil || len(container.WorkloadSpec.Command) != 0 {
 		t.Fatalf("decodeContainer(process values) = %#v, %t", container, valid)

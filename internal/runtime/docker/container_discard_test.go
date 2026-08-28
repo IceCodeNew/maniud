@@ -29,7 +29,7 @@ func (state *discardEngineState) ServeHTTP(response http.ResponseWriter, request
 
 	response.Header().Set(contentTypeHeader, jsonContentType)
 	switch request.URL.Path {
-	case "/v1.54/containers/" + testContainerName + "/json":
+	case "/v1.55/containers/" + testContainerName + "/json":
 		state.serveInspect(response)
 	case testContainerListPath:
 		if state.present {
@@ -37,9 +37,9 @@ func (state *discardEngineState) ServeHTTP(response http.ResponseWriter, request
 		} else {
 			_, _ = io.WriteString(response, `[]`)
 		}
-	case "/v1.54/containers/" + testContainerID + "/json":
+	case "/v1.55/containers/" + testContainerID + "/json":
 		state.serveInspect(response)
-	case "/v1.54/containers/" + testContainerID:
+	case "/v1.55/containers/" + testContainerID:
 		if request.Method != http.MethodDelete || request.URL.Query().Get("force") != dockerQueryTrue ||
 			request.URL.Query().Get("v") != dockerQueryFalse {
 			state.testing.Errorf("discard request = %s %s", request.Method, request.URL.String())
@@ -163,11 +163,11 @@ func TestDockerDiscardRejectsInconsistentWorkloadIdentity(t *testing.T) {
 	inconsistent := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set(contentTypeHeader, jsonContentType)
 		switch request.URL.Path {
-		case "/v1.54/containers/" + testContainerName + "/json":
+		case "/v1.55/containers/" + testContainerName + "/json":
 			_, _ = io.WriteString(response, document)
 		case testContainerListPath:
 			_, _ = io.WriteString(response, containerSummaryDocument(t, testOtherContainerID))
-		case "/v1.54/containers/" + testOtherContainerID + "/json":
+		case "/v1.55/containers/" + testOtherContainerID + "/json":
 			_, _ = io.WriteString(response, other)
 		default:
 			t.Errorf("unexpected inconsistent probe path %q", request.URL.Path)

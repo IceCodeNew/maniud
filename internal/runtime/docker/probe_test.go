@@ -6,11 +6,25 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+type EmbeddedProtocolText string
+
+type embeddedProtocolDocument struct {
+	Value int `json:"value"`
+}
+
+type compatibleProtocolDocument struct {
+	*embeddedProtocolDocument
+	EmbeddedProtocolText
+
+	Ignored bool `json:"-"`
+}
 
 //nolint:funlen // The table is the strict negotiation rejection corpus.
 func TestConnectRejectsProtocolViolations(t *testing.T) {
@@ -144,29 +158,33 @@ func TestConnectRejectsProtocolViolations(t *testing.T) {
 func TestConnectFallsBackToGetPing(t *testing.T) {
 	t.Parallel()
 
-	fixture := validEngineFixture(minimumAPIVersion)
-	fixture.pingStatus = http.StatusMethodNotAllowed
-	fixture.pingBody = " OK\n"
-	fixture.version = versionDocument(minimumAPIVersion, "1.40", "29.4.0", "linux", "amd64")
-	server := httptest.NewServer(engineHandler(t, fixture))
-	t.Cleanup(server.Close)
+	for _, status := range []int{
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusNotImplemented,
+	} {
+		fixture := validEngineFixture(minimumAPIVersion)
+		fixture.pingStatus = status
+		fixture.pingBody = " OK\n"
+		fixture.version = versionDocument(minimumAPIVersion, "1.40", "29.4.0", "linux", "amd64")
+		server := httptest.NewServer(engineHandler(t, fixture))
+		endpoint := testVPNEndpoint(t, server.URL, func(Warning) error { return nil })
 
-	endpoint := testVPNEndpoint(t, server.URL, func(Warning) error { return nil })
-
-	client, _, err := Connect(context.Background(), endpoint)
-	if err != nil {
-		t.Fatalf("Connect() error = %v", err)
+		client, _, err := Connect(context.Background(), endpoint)
+		server.Close()
+		if err != nil {
+			t.Fatalf("Connect(HEAD status %d) error = %v", status, err)
+		}
+		client.CloseIdleConnections()
 	}
-
-	client.CloseIdleConnections()
 
 	for _, invalidBody := range []string{"not ok", strings.Repeat("x", maximumPingBytes+1)} {
 		invalidFixture := validEngineFixture(minimumAPIVersion)
 		invalidFixture.pingStatus = http.StatusMethodNotAllowed
 		invalidFixture.pingBody = invalidBody
 		invalidServer := httptest.NewServer(engineHandler(t, invalidFixture))
-		endpoint = testVPNEndpoint(t, invalidServer.URL, func(Warning) error { return nil })
-		_, _, err = Connect(context.Background(), endpoint)
+		endpoint := testVPNEndpoint(t, invalidServer.URL, func(Warning) error { return nil })
+		_, _, err := Connect(context.Background(), endpoint)
 
 		invalidServer.Close()
 
@@ -257,5 +275,33 @@ func TestStrictJSONRejectsNestedDuplicateKeys(t *testing.T) {
 	if !decodeStrictJSON(strings.NewReader(`{"nested":[{"value":1}]}`), &target) ||
 		len(target.Nested) != 1 || target.Nested[0].Value != 1 {
 		t.Fatalf("decodeStrictJSON(valid nested value) = %#v", target)
+	}
+}
+
+func TestCompatibleJSONSchemaBoundaries(t *testing.T) {
+	t.Parallel()
+
+	schema := reflect.TypeFor[compatibleProtocolDocument]()
+	if decodeCompatibleJSON(strings.NewReader(`[]`), &compatibleProtocolDocument{}, schema) {
+		t.Fatal("decodeCompatibleJSON(array) = true")
+	}
+	if decodeCompatibleJSON(strings.NewReader(`{}`), new(string), reflect.TypeFor[string]()) {
+		t.Fatal("decodeCompatibleJSON(non-struct schema) = true")
+	}
+
+	if !supportedSchemaField(schema, "value", make(map[reflect.Type]bool)) {
+		t.Fatal("supportedSchemaField(embedded pointer field) = false")
+	}
+	if !supportedSchemaField(schema, "EmbeddedProtocolText", make(map[reflect.Type]bool)) {
+		t.Fatal("supportedSchemaField(embedded scalar) = false")
+	}
+	if supportedSchemaField(schema, "Ignored", make(map[reflect.Type]bool)) {
+		t.Fatal("supportedSchemaField(ignored field) = true")
+	}
+	if supportedSchemaField(schema, "missing", map[reflect.Type]bool{schema: true}) {
+		t.Fatal("supportedSchemaField(visited schema) = true")
+	}
+	if supportedSchemaField(reflect.TypeFor[string](), "missing", make(map[reflect.Type]bool)) {
+		t.Fatal("supportedSchemaField(non-struct schema) = true")
 	}
 }

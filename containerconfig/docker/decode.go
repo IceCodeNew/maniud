@@ -253,8 +253,9 @@ func dockerObservedMounts(
 	volumes map[string]struct{},
 	mounts []mount.Mount,
 ) ([]containerconfig.Mount, bool) {
-	result := make([]containerconfig.Mount, 0, len(volumes)+len(mounts))
-	targets := make(map[string]struct{}, len(volumes)+len(mounts))
+	initialCapacity := max(len(volumes), len(mounts))
+	result := make([]containerconfig.Mount, 0, initialCapacity)
+	targets := make(map[string]struct{}, initialCapacity)
 	for target := range volumes {
 		if target == "" || !validDockerText(target) {
 			return nil, false

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"slices"
 	"unicode"
 	"unicode/utf8"
@@ -28,6 +29,15 @@ type Daemon struct {
 	Rootless     bool
 }
 
+type daemonInfo struct {
+	ID              string
+	Driver          string
+	OSType          string
+	Architecture    string
+	ServerVersion   string
+	SecurityOptions []string
+}
+
 // InspectDaemon reads identity and platform evidence from the negotiated Engine.
 func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 	var emptyDaemon Daemon
@@ -36,7 +46,7 @@ func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 		return emptyDaemon, ErrProtocol
 	}
 
-	path, valid := client.versionedPath("/info")
+	path, valid := client.apiPath("/info")
 	if !valid {
 		return emptyDaemon, ErrProtocol
 	}
@@ -51,8 +61,18 @@ func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 		return emptyDaemon, ErrProtocol
 	}
 
-	var payload system.Info
-	if !decodeStrictJSON(response.Body, &payload) {
+	var payload daemonInfo
+	if !decodeCompatibleJSON(
+		response.Body,
+		&payload,
+		reflect.TypeFor[system.Info](),
+		"BridgeNfIp6tables",
+		"BridgeNfIptables",
+		"ClusterAdvertise",
+		"ClusterStore",
+		"KernelMemory",
+		"KernelMemoryTCP",
+	) {
 		return emptyDaemon, ErrProtocol
 	}
 
@@ -70,16 +90,19 @@ func (client *Client) InspectDaemon(ctx context.Context) (Daemon, error) {
 	}, nil
 }
 
-func (client *Client) versionedPath(path string) (string, bool) {
-	protocol, valid := parseAPIVersion(client.version.Protocol)
-	if !valid || protocol.String() != client.version.Protocol || path == "" || path[0] != '/' {
+func (client *Client) apiPath(path string) (string, bool) {
+	if client == nil || client.version.Protocol != client.protocol.String() || path == "" || path[0] != '/' {
+		return "", false
+	}
+	negotiated, compatible := compatibleAPIVersion(client.protocol)
+	if !compatible || negotiated != client.protocol {
 		return "", false
 	}
 
-	return "/v" + protocol.String() + path, true
+	return "/v" + client.protocol.String() + path, true
 }
 
-func validDaemonInfo(info system.Info, version Version) bool {
+func validDaemonInfo(info daemonInfo, version Version) bool {
 	return validOpaqueValue(info.ID, maximumDaemonIDBytes) && validOpaqueValue(info.Driver, maximumDriverBytes) &&
 		info.OSType == version.OS && info.ServerVersion == version.Product
 }

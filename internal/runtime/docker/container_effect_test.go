@@ -59,6 +59,72 @@ func TestCreateWorkloadSendsStoppedOwnedContainerRequest(t *testing.T) {
 	}
 }
 
+func TestCreateWorkloadScrubsUnsupportedCgroupNamespace(t *testing.T) {
+	t.Parallel()
+
+	workload := validApplicationWorkload(t)
+	request, valid := dockerCreateConfiguration(workload, testTransaction, testCreateOptions())
+	if !valid {
+		t.Fatal("dockerCreateConfiguration() = false")
+	}
+
+	for _, test := range []struct {
+		protocol string
+		present  bool
+	}{
+		{protocol: minimumAPIVersion, present: false},
+		{protocol: testAPIVersion141, present: true},
+	} {
+		encoded, valid := encodeDockerCreateRequest(request, testAPIVersion(t, test.protocol))
+		if !valid {
+			t.Fatalf("encodeDockerCreateRequest(%s) = false", test.protocol)
+		}
+		var document map[string]json.RawMessage
+		var host map[string]json.RawMessage
+		if json.Unmarshal(encoded, &document) != nil || json.Unmarshal(document["HostConfig"], &host) != nil {
+			t.Fatalf("decode create request for API %s", test.protocol)
+		}
+		_, present := host["CgroupnsMode"]
+		if present != test.present {
+			t.Fatalf("CgroupnsMode presence for API %s = %t", test.protocol, present)
+		}
+	}
+
+	workload.Image.PlatformManifest = workload.Image.ReferenceDigest
+	workload.Cgroup = testCgroupPrivate
+	workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
+	var requests atomic.Int32
+	client := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+
+		return nil, io.ErrUnexpectedEOF
+	}))
+	setTestClientVersion(t, client, minimumAPIVersion)
+	_, err := client.CreateWorkload(context.Background(), workload, testTransaction, testCreateOptions())
+	if !errors.Is(err, ErrUnsupportedWorkload) || requests.Load() != 0 {
+		t.Fatalf("CreateWorkload(1.40 cgroup) = %v, requests %d", err, requests.Load())
+	}
+}
+
+func TestEncodeDockerCreateRequestRejectsInvalidLegacyHostConfig(t *testing.T) {
+	t.Parallel()
+
+	workload := validApplicationWorkload(t)
+	request, valid := dockerCreateConfiguration(workload, testTransaction, testCreateOptions())
+	if !valid {
+		t.Fatal("dockerCreateConfiguration() = false")
+	}
+
+	request.HostConfig.CgroupnsMode = testCgroupPrivate
+	if _, valid := encodeDockerCreateRequest(request, testAPIVersion(t, minimumAPIVersion)); valid {
+		t.Fatal("encodeDockerCreateRequest(1.40, explicit cgroup namespace) = valid")
+	}
+	request.HostConfig = nil
+	if _, valid := encodeDockerCreateRequest(request, testAPIVersion(t, minimumAPIVersion)); valid {
+		t.Fatal("encodeDockerCreateRequest(1.40, nil host config) = valid")
+	}
+}
+
 func assertContainerCreateRequest(
 	t *testing.T,
 	request *http.Request,
@@ -67,7 +133,7 @@ func assertContainerCreateRequest(
 ) bool {
 	t.Helper()
 
-	if request.Method != http.MethodPost || request.URL.Path != "/v1.54/containers/create" ||
+	if request.Method != http.MethodPost || request.URL.Path != "/v1.55/containers/create" ||
 		request.URL.Query().Get(containerNameQueryKey) != workload.ContainerName ||
 		request.Header.Get("Accept") != jsonContentType || request.Header.Get(contentTypeHeader) != jsonContentType {
 		t.Errorf("create request = %s %s %#v", request.Method, request.URL.String(), request.Header)
@@ -324,8 +390,8 @@ func startWorkloadHandler(
 		response.Header().Set(contentTypeHeader, jsonContentType)
 
 		switch request.URL.Path {
-		case "/v1.54/containers/" + testContainerName + "/json",
-			"/v1.54/containers/" + testContainerID + "/json":
+		case "/v1.55/containers/" + testContainerName + "/json",
+			"/v1.55/containers/" + testContainerID + "/json":
 			if started.Load() {
 				_, _ = io.WriteString(response, running)
 			} else {
@@ -338,7 +404,7 @@ func startWorkloadHandler(
 				return
 			}
 			_, _ = io.WriteString(response, summary)
-		case "/v1.54/containers/" + testContainerID + "/start":
+		case "/v1.55/containers/" + testContainerID + "/start":
 			if request.Method != http.MethodPost || request.ContentLength != 0 || started.Swap(true) {
 				t.Errorf("start request = %s %s, length %d", request.Method, request.URL.Path, request.ContentLength)
 			}
@@ -389,7 +455,7 @@ func TestStartWorkloadRejectsInvalidStateAndTransportFailure(t *testing.T) {
 
 	created := validContainerDocument(t, workloadOwnershipLabels(workload, testTransaction), createdContainerState())
 	transport := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/v1.54/containers/"+testContainerID+"/start" {
+		if request.URL.Path == "/v1.55/containers/"+testContainerID+"/start" {
 			panic(http.ErrAbortHandler)
 		}
 
@@ -499,7 +565,7 @@ func createdWorkloadProbeHandler(t *testing.T, namedDocument, ownedDocument stri
 		response.Header().Set(contentTypeHeader, jsonContentType)
 
 		switch request.URL.Path {
-		case "/v1.54/containers/" + testContainerName + "/json":
+		case "/v1.55/containers/" + testContainerName + "/json":
 			_, _ = io.WriteString(response, namedDocument)
 		case testContainerListPath:
 			if !assertOwnedContainerQuery(t, request.URL.Query()) {
@@ -508,7 +574,7 @@ func createdWorkloadProbeHandler(t *testing.T, namedDocument, ownedDocument stri
 				return
 			}
 			_, _ = io.WriteString(response, summary)
-		case "/v1.54/containers/" + testContainerID + "/json":
+		case "/v1.55/containers/" + testContainerID + "/json":
 			_, _ = io.WriteString(response, ownedDocument)
 		default:
 			t.Errorf("unexpected probe request path %q", request.URL.Path)
@@ -598,12 +664,12 @@ func TestProbeCreatedWorkloadProvesAbsenceAndDetectsRenamedOwnership(t *testing.
 			response.Header().Set(contentTypeHeader, jsonContentType)
 
 			switch request.URL.Path {
-			case "/v1.54/containers/" + testContainerName + "/json":
+			case "/v1.55/containers/" + testContainerName + "/json":
 				response.WriteHeader(http.StatusNotFound)
 				_, _ = io.WriteString(response, `{"message":"No such container"}`)
 			case testContainerListPath:
 				_, _ = io.WriteString(response, containerSummaryDocument(t, testContainerID))
-			case "/v1.54/containers/" + testContainerID + "/json":
+			case "/v1.55/containers/" + testContainerID + "/json":
 				_, _ = io.WriteString(response, document)
 			}
 		}))
@@ -693,11 +759,11 @@ func TestProbeCreatedWorkloadRejectsInvalidAndInconsistentEvidence(t *testing.T)
 		response.Header().Set(contentTypeHeader, jsonContentType)
 
 		switch request.URL.Path {
-		case "/v1.54/containers/" + testContainerName + "/json":
+		case "/v1.55/containers/" + testContainerName + "/json":
 			_, _ = io.WriteString(response, document)
 		case testContainerListPath:
 			_, _ = io.WriteString(response, containerSummaryDocument(t, strings.Repeat("b", containerIDHexBytes)))
-		case "/v1.54/containers/" + strings.Repeat("b", containerIDHexBytes) + "/json":
+		case "/v1.55/containers/" + strings.Repeat("b", containerIDHexBytes) + "/json":
 			other := strings.Replace(document, testContainerID, strings.Repeat("b", containerIDHexBytes), 1)
 			_, _ = io.WriteString(response, other)
 		}
@@ -726,7 +792,7 @@ func TestProbeCreatedWorkloadRejectsInvalidAndInconsistentEvidence(t *testing.T)
 	}
 
 	ownedTransport := testClient(roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path == "/v1.54/containers/"+testContainerName+"/json" {
+		if request.URL.Path == "/v1.55/containers/"+testContainerName+"/json" {
 			return &http.Response{ //nolint:exhaustruct // Probe needs status, header, and body.
 				StatusCode: http.StatusOK,
 				Header:     http.Header{contentTypeHeader: {jsonContentType}},
