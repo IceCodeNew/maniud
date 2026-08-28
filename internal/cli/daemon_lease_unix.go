@@ -184,22 +184,20 @@ func daemonStopRequests(parent context.Context) (<-chan struct{}, func()) {
 	requested := make(chan struct{})
 	signals := make(chan os.Signal, 1)
 	finished := make(chan struct{})
+	wait, cancel := context.WithCancel(parent)
 	signal.Notify(signals, syscall.SIGUSR1)
 	go func() {
 		defer close(finished)
 		select {
 		case <-signals:
 			close(requested)
-		case <-parent.Done():
+		case <-wait.Done():
 		}
 	}()
 	closeSignals := func() {
 		signal.Stop(signals)
-		select {
-		case <-finished:
-		case signals <- syscall.SIGUSR1:
-			<-finished
-		}
+		cancel()
+		<-finished
 	}
 
 	return requested, closeSignals
