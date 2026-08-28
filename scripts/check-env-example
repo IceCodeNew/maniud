@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repository_root"
+export LC_ALL=C
+
+source_environment_names() {
+	local file
+
+	while IFS= read -r -d '' file; do
+		[[ "$file" == *_test.go ]] && continue
+		sed -nE \
+			-e 's/.*[[:alnum:]_]+Environment[[:space:]]*=[[:space:]]*"([A-Z][A-Z0-9_]*)".*/\1/p' \
+			-e 's/.*environment\["([A-Z][A-Z0-9_]*)"\].*/\1/p' \
+			-e 's/.*os\.(Getenv|LookupEnv)\("([A-Z][A-Z0-9_]*)"\).*/\2/p' \
+			"$file"
+	done < <(git ls-files -z --cached --others --exclude-standard -- ':(glob)**/*.go')
+}
+
+example_environment_names() {
+	sed -nE 's/^# ([A-Z][A-Z0-9_]*)=.*/\1/p' env.example
+}
+
+if ! awk '
+	/^# [A-Z][A-Z0-9_]*=/ {
+		value = $0
+		sub(/^# [A-Z][A-Z0-9_]*=/, "", value)
+		if (value ~ /[[:space:]"]/ || index(value, sprintf("%c", 39)) != 0) {
+			print FNR ": example values must be unquoted and contain no whitespace" > "/dev/stderr"
+			invalid = 1
+		}
+		next
+	}
+	/^[[:space:]]*#?[[:space:]]*[A-Z][A-Z0-9_]*=/ {
+		print FNR ": example assignments must use # NAME=value" > "/dev/stderr"
+		invalid = 1
+	}
+	END { exit invalid }
+' env.example; then
+	exit 1
+fi
+
+duplicate_names="$(example_environment_names | sort | uniq -d)"
+if [[ -n "$duplicate_names" ]]; then
+	printf 'env.example contains duplicate variables:\n%s\n' "$duplicate_names" >&2
+	exit 1
+fi
+
+source_names="$(source_environment_names | sort -u)"
+example_names="$(example_environment_names | sort -u)"
+extra_names="$(comm -13 <(printf '%s\n' "$source_names") <(printf '%s\n' "$example_names"))"
+
+if [[ -n "$extra_names" ]]; then
+	printf 'env.example contains variables not read by maniud:\n%s\n' "$extra_names" >&2
+	exit 1
+fi

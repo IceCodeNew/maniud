@@ -32,6 +32,11 @@ const (
 	EventTransactionRestored EventKind = "transaction_restored"
 	// EventTransactionFailed reports a terminal unsuccessful transaction.
 	EventTransactionFailed EventKind = "transaction_failed"
+	// EventGitOpsServiceApplyFailed reports one service that stopped the current
+	// GitOps snapshot reconciliation.
+	EventGitOpsServiceApplyFailed EventKind = "gitops_service_apply_failed"
+	// EventDaemonUnavailable reports a retryable daemon reconciliation failure.
+	EventDaemonUnavailable EventKind = "daemon_unavailable"
 )
 
 // Event is a bounded, value-free projection of one application seam. Digest

@@ -24,12 +24,14 @@ type applyOperations interface {
 type applyDependencies struct {
 	loadSource func(context.Context, string) (compose.Source, error)
 	operations applyOperations
+	events     application.EventSink
 }
 
 func defaultApplyDependencies(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	events application.EventSink,
 	runtimes runtimeplugin.Set,
 ) (applyDependencies, error) {
 	workingDirectory, err := getWorkingDirectory()
@@ -61,7 +63,7 @@ func defaultApplyDependencies(
 		func(ctx context.Context) (*store.Store, error) {
 			return store.Open(ctx, statePath)
 		},
-		nil,
+		events,
 	)
 
 	return applyDependencies{
@@ -69,6 +71,7 @@ func defaultApplyDependencies(
 			return loadComposeSource(ctx, path, workingDirectory, environment, filepath.Dir(statePath))
 		},
 		operations: operations,
+		events:     events,
 	}, nil
 }
 
@@ -95,6 +98,9 @@ func runtimeWarningSink(stderr io.Writer) runtimeplugin.WarningSink {
 }
 
 func classifyApplyFailure(err error) *domain.FailureError {
+	if _, ok := errors.AsType[notificationConfigurationError](err); ok {
+		return domain.InvalidInput()
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, registry.ErrCancelled) {
 		return domain.OperationCancelled()
 	}

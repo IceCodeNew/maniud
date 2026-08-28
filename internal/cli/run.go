@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
@@ -30,6 +31,7 @@ func Run(
 	)
 }
 
+//nolint:contextcheck // Notification delivery and drain use the process lifetime, not the operation context.
 func runProduction(
 	ctx context.Context,
 	args []string,
@@ -39,6 +41,9 @@ func runProduction(
 	getWorkingDirectory func() (string, error),
 	runtimes runtimeplugin.Set,
 ) int {
+	var notifications processNotifications
+	defer notifications.Close()
+
 	return runWithEnvironment(ctx, args, stdout, environment, func(arguments genInvocation) error {
 		dependencies, err := defaultGenDependencies(environment, stderr, getWorkingDirectory, runtimes)
 		if err != nil {
@@ -50,7 +55,11 @@ func runProduction(
 
 		return runtimes.Classify(err)
 	}, func(arguments applyInvocation) error {
-		dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, runtimes)
+		events, err := notifications.Open(environment, stderr)
+		if err != nil {
+			return err
+		}
+		dependencies, err := defaultApplyDependencies(environment, stderr, getWorkingDirectory, events, runtimes)
 		if err != nil {
 			return err
 		}
@@ -59,8 +68,17 @@ func runProduction(
 	}, func(arguments gitOpsInitInvocation) error {
 		return executeGitOpsInit(ctx, arguments, environment)
 	}, func(arguments daemonInvocation) error {
+		var events application.EventSink
+		var err error
+		if arguments.operation == commandDaemonStart {
+			events, err = notifications.Open(environment, stderr)
+			if err != nil {
+				return err
+			}
+		}
+
 		return runtimes.Classify(executeDaemon(
-			ctx, arguments, stdout, environment, stderr, getWorkingDirectory, runtimes,
+			ctx, arguments, stdout, environment, stderr, getWorkingDirectory, events, runtimes,
 		))
 	}, func(arguments doctorInvocation) error {
 		return executeDoctor(ctx, arguments, stdout, environment)

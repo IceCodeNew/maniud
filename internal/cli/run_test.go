@@ -29,6 +29,7 @@ const (
 		"\"command is unavailable in this build\",\"retryable\":false}\n"
 	cancelledJSON = "{\"code\":\"operation_cancelled\",\"message\":" +
 		"\"operation interrupted; rerun the same command to resume\",\"retryable\":false}\n"
+	retryableApplyFailureJSON = "{\"code\":\"apply_failed\",\"message\":\"apply validation failed\",\"retryable\":true}\n"
 )
 
 var errClosedOutput = errors.New("closed output")
@@ -270,6 +271,132 @@ func TestRunProductionWiresLongRunningCommands(t *testing.T) {
 		if status != 1 {
 			t.Fatalf("runProduction(%v) = %d, %q", arguments, status, output.String())
 		}
+	}
+}
+
+func TestRunProductionValidatesNotificationsBeforeApplyDependencies(t *testing.T) {
+	t.Parallel()
+
+	workingDirectoryRead := false
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{string(commandApply), composeFileValue},
+		&stdout,
+		&stderr,
+		map[string]string{telegramBotTokenEnvironment: testTelegramBotToken},
+		func() (string, error) {
+			workingDirectoryRead = true
+
+			return testWorkingDirectory, nil
+		},
+		testRuntimePlugins(t),
+	)
+	if status != 1 || stdout.String() != invalidInputJSON ||
+		stderr.String() != incompleteTelegramConfigurationMessage+"\n" || workingDirectoryRead {
+		t.Fatalf(
+			"runProduction(partial Telegram) = %d, %q, %q, dependency read %t",
+			status, stdout.String(), stderr.String(), workingDirectoryRead,
+		)
+	}
+}
+
+func TestRunProductionValidatesBarkEncryptionBeforeApplyDependencies(t *testing.T) {
+	t.Parallel()
+
+	workingDirectoryRead := false
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{string(commandApply), composeFileValue},
+		&stdout,
+		&stderr,
+		map[string]string{barkEncryptionKeyEnvironment: testBarkEncryptionKey},
+		func() (string, error) {
+			workingDirectoryRead = true
+
+			return testWorkingDirectory, nil
+		},
+		testRuntimePlugins(t),
+	)
+	if status != 1 || stdout.String() != invalidInputJSON ||
+		stderr.String() != incompleteBarkConfigurationMessage+"\n" || workingDirectoryRead {
+		t.Fatalf(
+			"runProduction(partial Bark) = %d, %q, %q, dependency read %t",
+			status, stdout.String(), stderr.String(), workingDirectoryRead,
+		)
+	}
+}
+
+func TestRunProductionValidatesNotificationsBeforeDaemonStart(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{daemonCommand, startCommand},
+		&stdout,
+		&stderr,
+		map[string]string{telegramChatIDEnvironment: testTelegramChatID},
+		os.Getwd,
+		testRuntimePlugins(t),
+	)
+	if status != 1 || stdout.String() != invalidInputJSON ||
+		stderr.String() != incompleteTelegramConfigurationMessage+"\n" {
+		t.Fatalf(
+			"runProduction(partial Telegram daemon) = %d, %q, %q",
+			status, stdout.String(), stderr.String(),
+		)
+	}
+}
+
+func TestRunProductionLimitsNotificationConfigurationToEventProducingCommands(t *testing.T) {
+	t.Parallel()
+
+	environment := map[string]string{
+		homeKey:                     t.TempDir(),
+		telegramBotTokenEnvironment: testTelegramBotToken,
+	}
+	tests := []struct {
+		name       string
+		arguments  []string
+		wantStatus int
+	}{
+		{name: "help", arguments: []string{helpOption}, wantStatus: 0},
+		{name: "daemon stop", arguments: []string{daemonCommand, stopCommand}, wantStatus: 0},
+	}
+	for _, test := range tests {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		status := runProduction(
+			t.Context(), test.arguments, &stdout, &stderr, environment, os.Getwd,
+			testRuntimePlugins(t),
+		)
+		if status != test.wantStatus || stderr.Len() != 0 {
+			t.Fatalf("runProduction(%s) = %d, stderr %q", test.name, status, stderr.String())
+		}
+	}
+}
+
+func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{string(commandApply), composeFileValue},
+		&stdout,
+		&stderr,
+		map[string]string{homeKey: t.TempDir(), barkDeviceKeyEnvironment: testBarkDeviceKey},
+		func() (string, error) { return t.TempDir(), nil },
+		testRuntimePlugins(t),
+	)
+	if status != 1 || !strings.Contains(stdout.String(), `"code":"apply_failed"`) || stderr.Len() != 0 {
+		t.Fatalf("runProduction(Bark lifecycle) = %d, %q, %q", status, stdout.String(), stderr.String())
 	}
 }
 

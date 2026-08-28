@@ -13,6 +13,7 @@ import (
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T) {
@@ -91,10 +92,19 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 
 	root := initGitOpsSnapshotTestRepository(t)
 	events := make([]string, 0, 16)
+	plan := application.Plan{
+		Kind: application.PlanBootstrap, Project: testProjectName, Service: "api", Runtime: domain.RuntimeDocker,
+	}
 	operations := &applyOperationsFixture{
-		events: &events, dryRunPlan: application.Plan{Kind: application.PlanBootstrap}, applyErr: errApplyTest,
+		events: &events, dryRunPlan: plan, applyErr: errApplyTest,
 	}
 	dependencies := operationApplyDependencies(t, &events, operations)
+	var observed []application.Event
+	dependencies.events = cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return false
+	})
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return testComposeSource(t), nil
 	}
@@ -107,6 +117,87 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 		t.Context(), root, state.head, io.Discard, dependencies,
 	); !errors.Is(err, errApplyTest) {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v", err)
+	}
+	want := application.Event{
+		Kind: application.EventGitOpsServiceApplyFailed,
+		Plan: plan.Kind, Project: plan.Project, Service: plan.Service, Runtime: plan.Runtime,
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("GitOps failure events = %#v, want %#v", observed, want)
+	}
+}
+
+func TestExecuteGitOpsMutationDoesNotPublishApplyFailureForSourceFailure(t *testing.T) {
+	t.Parallel()
+
+	var observed []application.Event
+	plan := application.Plan{
+		Kind: application.PlanBootstrap, Project: testProjectName, Service: applyServiceValue,
+		Runtime: domain.RuntimeDocker,
+	}
+	service := gitOpsServiceSnapshot{
+		arguments: applyInvocation{compose: "/repo/api.yaml"},
+		dependencies: applyDependencies{
+			loadSource: func(context.Context, string) (compose.Source, error) {
+				return compose.Source{}, compose.ErrInvalidSource
+			},
+			events: cliEventSinkFunc(func(event application.Event) bool {
+				observed = append(observed, event)
+
+				return false
+			}),
+		},
+		plan: plan,
+	}
+	if err := executeGitOpsMutation(
+		t.Context(), service, io.Discard,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("executeGitOpsMutation() error = %v", err)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("GitOps failure events = %#v", observed)
+	}
+}
+
+func TestReconcileGitOpsSnapshotDoesNotPublishApplyFailureForOutputFailure(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 16)
+	plan := application.Plan{
+		Kind:    application.PlanBootstrap,
+		Project: testProjectName,
+		Service: applyServiceValue,
+		Runtime: domain.RuntimeDocker,
+	}
+	operations := &applyOperationsFixture{events: &events, dryRunPlan: plan, applyPlan: plan}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	var observed []application.Event
+	dependencies.events = cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return false
+	})
+	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
+		return testComposeSource(t), nil
+	}
+
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+	err = reconcileGitOpsSnapshot(
+		t.Context(),
+		root,
+		state.head,
+		failingWriterWithError{err: errApplyOutputTest},
+		dependencies,
+	)
+	if !errors.Is(err, errApplyOutputTest) {
+		t.Fatalf("reconcileGitOpsSnapshot() error = %v", err)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("GitOps failure events = %#v", observed)
 	}
 }
 
