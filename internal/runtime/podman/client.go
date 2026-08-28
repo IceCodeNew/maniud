@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	libpodAPIVersion     = "6.1.0"
-	libpodPrefix         = "/v" + libpodAPIVersion + "/libpod"
-	podmanJSONType       = "application/json"
-	podmanDummyHost      = "podman.invalid"
-	maximumControlBytes  = int64(16 << 20)
-	podmanRequestTimeout = 30 * time.Second
-	podmanContentType    = "Content-Type"
+	minimumLibpodAPIVersion = "4.3.1"
+	maximumLibpodAPIVersion = "6.1.0"
+	podmanJSONType          = "application/json"
+	podmanDummyHost         = "podman.invalid"
+	maximumControlBytes     = int64(16 << 20)
+	podmanRequestTimeout    = 30 * time.Second
+	podmanContentType       = "Content-Type"
 )
 
 var (
@@ -69,13 +69,14 @@ type Client struct {
 	socket     socketIdentity
 	peer       peerIdentity
 	version    Version
+	protocol   semanticVersion
 	scope      domain.Digest
 
 	peerLock sync.Mutex
 }
 
-// Connect authenticates a local Unix socket, negotiates Libpod 6.1.0, and pins
-// the daemon storage scope used by every later request.
+// Connect authenticates a local Unix socket, negotiates Libpod 4.3.1 through
+// 6.1.0, and pins the daemon storage scope used by every later request.
 func Connect(ctx context.Context, socketPath string) (*Client, Version, error) {
 	var empty Version
 
@@ -94,6 +95,7 @@ func Connect(ctx context.Context, socketPath string) (*Client, Version, error) {
 		socket:     identity,
 		peer:       peerIdentity{},
 		version:    empty,
+		protocol:   semanticVersion{},
 		scope:      domain.Digest{},
 		peerLock:   sync.Mutex{},
 	}
@@ -195,6 +197,19 @@ func (client *Client) ready(path string) bool {
 		client.socketPath != "" && client.socket != (socketIdentity{})
 }
 
+func (client *Client) apiPath(path string) string {
+	if !client.negotiated() {
+		return ""
+	}
+
+	return "/v" + client.protocol.String() + "/libpod" + path
+}
+
+func (client *Client) negotiated() bool {
+	return client != nil && client.version.Protocol == client.protocol.String() &&
+		validNegotiatedLibpodVersion(client.version)
+}
+
 func (client *Client) newRequest(
 	ctx context.Context,
 	method string,
@@ -216,6 +231,7 @@ func (client *Client) newRequestWithReader(
 	endpoint := client.baseURL
 	endpoint.Path = path
 	endpoint.RawQuery = query.Encode()
+	//nolint:gosec // The URL host is fixed; the transport dials only the authenticated Unix socket.
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
 	if err != nil {
 		return nil, ErrProtocol
@@ -242,6 +258,7 @@ func (client *Client) doRequest(
 		clone.Timeout = 0
 		httpClient = &clone
 	}
+	//nolint:gosec // newRequestWithReader fixes the host; the transport dials only the Unix socket.
 	response, err := httpClient.Do(request)
 	if err == nil {
 		return response, nil

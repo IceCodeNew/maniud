@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"time"
@@ -29,6 +30,8 @@ const (
 	pullStatusPulling          = "pulling"
 	pullStatusSuccess          = "success"
 	pullStatusError            = "error"
+	podmanPullJSONVersion      = "5.8.0"
+	podmanPullStatusVersion    = "6.1.0"
 )
 
 // ErrImagePull reports a daemon-side pull failure without exposing credentials,
@@ -46,6 +49,7 @@ func (client *Client) PullImage(
 	if !valid || authenticator == nil {
 		return ErrUnsupportedWorkload
 	}
+	path := client.apiPath("/images/pull")
 	pullContext, cancel := context.WithTimeout(ctx, maximumImagePullDuration)
 	defer cancel()
 
@@ -56,7 +60,7 @@ func (client *Client) PullImage(
 	response, err := client.request(
 		pullContext,
 		http.MethodPost,
-		libpodPrefix+"/images/pull",
+		path,
 		url.Values{"reference": {reference.String()}},
 		header,
 		true,
@@ -65,7 +69,7 @@ func (client *Client) PullImage(
 		return imagePullRequestError(ctx, pullContext, err)
 	}
 
-	return consumePodmanPullResponse(ctx, pullContext, response)
+	return consumePodmanPullResponse(ctx, pullContext, response, client.protocol)
 }
 
 type podmanAuthConfig struct {
@@ -133,16 +137,18 @@ func consumePodmanPullResponse(
 	ctx context.Context,
 	pullContext context.Context,
 	response *http.Response,
+	protocol semanticVersion,
 ) error {
 	if response == nil || response.Body == nil {
 		return ErrProtocol
 	}
-	if response.StatusCode != http.StatusOK || !isPodmanJSON(response.Header.Get(podmanContentType)) {
+	if response.StatusCode != http.StatusOK ||
+		!validPodmanPullContentType(response.Header.Get(podmanContentType), protocol) {
 		_ = response.Body.Close()
 
 		return ErrProtocol
 	}
-	streamErr := decodePodmanPullStream(response.Body)
+	streamErr := decodePodmanPullStream(response.Body, podmanPullRequiresSuccessStatus(protocol))
 	closeErr := response.Body.Close()
 	if streamErr != nil {
 		if ctx.Err() != nil || pullContext.Err() != nil {
@@ -158,7 +164,27 @@ func consumePodmanPullResponse(
 	return nil
 }
 
-func decodePodmanPullStream(reader io.Reader) error {
+func validPodmanPullContentType(value string, protocol semanticVersion) bool {
+	jsonVersion, valid := parseSemanticVersion(podmanPullJSONVersion)
+	legacy := valid && protocol.less(jsonVersion)
+	if value == "" {
+		return legacy
+	}
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false
+	}
+
+	return mediaType == podmanJSONType || legacy && mediaType == "text/plain"
+}
+
+func podmanPullRequiresSuccessStatus(protocol semanticVersion) bool {
+	statusVersion, valid := parseSemanticVersion(podmanPullStatusVersion)
+
+	return valid && !protocol.less(statusVersion)
+}
+
+func decodePodmanPullStream(reader io.Reader, requireSuccessStatus bool) error {
 	limited := &io.LimitedReader{R: reader, N: maximumImagePullBytes + 1}
 	decoder := json.NewDecoder(limited)
 	state := podmanPullState{}
@@ -168,7 +194,7 @@ func decodePodmanPullStream(reader io.Reader) error {
 			return err
 		}
 		if done {
-			if !state.identity || !state.success {
+			if !state.identity || requireSuccessStatus && !state.success {
 				return ErrProtocol
 			}
 

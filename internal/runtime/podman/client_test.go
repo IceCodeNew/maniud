@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,28 +20,146 @@ import (
 
 var errPodmanClientTest = errors.New("podman client test failure")
 
+const (
+	libpodAPIVersion           = maximumLibpodAPIVersion
+	libpodPrefix               = "/v" + libpodAPIVersion + "/libpod"
+	testLibpodServerMinimum    = "4.0.0"
+	testLibpodMiddleVersion    = "5.4.2"
+	testLibpodLaterVersion     = "5.8.3"
+	testPodmanPingPath         = "/_ping"
+	testPodmanFallbackPingPath = "/libpod/_ping"
+	testPodmanVersionPath      = "/version"
+)
+
 type podmanRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip podmanRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return roundTrip(request)
 }
 
-func TestConnectPinsNativeLibpodScope(t *testing.T) {
+type podmanNegotiationTest struct {
+	name      string
+	minimum   string
+	maximum   string
+	protocol  string
+	pingRoute string
+	wantPaths []string
+}
+
+type podmanNegotiationEvidence struct {
+	Version       Version
+	ClientVersion Version
+	ScopePinned   bool
+	PeerPinned    bool
+	Protocol      string
+	APIPath       string
+	Requests      []string
+}
+
+func TestConnectNegotiatesAndPinsNativeLibpodScope(t *testing.T) {
 	t.Parallel()
 
-	path := startPodmanTestServer(t, podmanNegotiationHandler(libpodAPIVersion, "5.0.0", libpodAPIVersion))
+	tests := []podmanNegotiationTest{
+		{
+			name: "minimum", minimum: testLibpodServerMinimum, maximum: minimumLibpodAPIVersion,
+			protocol: minimumLibpodAPIVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v4.3.1/libpod/info"},
+		},
+		{
+			name: "middle", minimum: testLibpodServerMinimum,
+			maximum: testLibpodMiddleVersion, protocol: testLibpodMiddleVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v5.4.2/libpod/info"},
+		},
+		{
+			name: testLibpodLaterVersion, minimum: testLibpodServerMinimum,
+			maximum: testLibpodLaterVersion, protocol: testLibpodLaterVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{
+				testPodmanPingPath, testPodmanVersionPath, "/v" + testLibpodLaterVersion + "/libpod/info",
+			},
+		},
+		{
+			name: "maximum", minimum: testLibpodServerMinimum, maximum: maximumLibpodAPIVersion,
+			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanPingPath,
+			wantPaths: []string{testPodmanPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info"},
+		},
+		{
+			name: "future maximum", minimum: testLibpodServerMinimum, maximum: "7.0.0",
+			protocol: maximumLibpodAPIVersion, pingRoute: testPodmanFallbackPingPath,
+			wantPaths: []string{
+				testPodmanPingPath, testPodmanFallbackPingPath, testPodmanVersionPath, "/v6.1.0/libpod/info",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			testPodmanNegotiation(t, test)
+		})
+	}
+}
+
+func testPodmanNegotiation(t *testing.T, test podmanNegotiationTest) {
+	t.Helper()
+	requests := make([]string, 0, len(test.wantPaths))
+	negotiation := podmanNegotiationHandler(test.maximum, test.minimum, test.maximum)
+	path := startPodmanTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		if request.URL.Path == testPodmanPingPath && test.pingRoute != testPodmanPingPath {
+			http.NotFound(writer, request)
+
+			return
+		}
+		negotiation.ServeHTTP(writer, request)
+	}))
 	client, version, err := Connect(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	t.Cleanup(client.CloseIdleConnections)
 
-	if version != (Version{
-		Protocol: libpodAPIVersion, Minimum: "5.0.0", Maximum: libpodAPIVersion,
+	wantVersion := Version{
+		Protocol: test.protocol, Minimum: test.minimum, Maximum: test.maximum,
 		Product: libpodAPIVersion, OS: podmanOSLinux, Architecture: podmanArchAMD64,
-	}) || client.Version() != version || client.scope == (domain.Digest{}) ||
-		client.peer == (peerIdentity{}) {
-		t.Fatalf("Connect() = %#v, scope=%v, peer=%#v", version, client.scope, client.peer)
+	}
+	apiPath := client.apiPath("/containers/json")
+	got := podmanNegotiationEvidence{
+		Version: version, ClientVersion: client.Version(), ScopePinned: client.scope != (domain.Digest{}),
+		PeerPinned: client.peer != (peerIdentity{}), Protocol: client.protocol.String(),
+		APIPath: apiPath, Requests: requests,
+	}
+	want := podmanNegotiationEvidence{
+		Version: wantVersion, ClientVersion: wantVersion, ScopePinned: true, PeerPinned: true,
+		Protocol: test.protocol, APIPath: "/v" + test.protocol + "/libpod/containers/json",
+		Requests: test.wantPaths,
+	}
+	assertPodmanNegotiationEvidence(t, got, want)
+}
+
+func assertPodmanNegotiationEvidence(t *testing.T, got, want podmanNegotiationEvidence) {
+	t.Helper()
+	if got.Version != want.Version {
+		t.Fatalf("Connect() version = %#v, want %#v", got.Version, want.Version)
+	}
+	if got.ClientVersion != want.ClientVersion {
+		t.Fatalf("Client.Version() = %#v, want %#v", got.ClientVersion, want.ClientVersion)
+	}
+	if got.ScopePinned != want.ScopePinned || got.PeerPinned != want.PeerPinned {
+		t.Fatalf(
+			"Connect() pins = scope:%t peer:%t, want scope:%t peer:%t",
+			got.ScopePinned,
+			got.PeerPinned,
+			want.ScopePinned,
+			want.PeerPinned,
+		)
+	}
+	if got.Protocol != want.Protocol {
+		t.Fatalf("Connect() protocol = %q, want %q", got.Protocol, want.Protocol)
+	}
+	if got.APIPath != want.APIPath {
+		t.Fatalf("Client.apiPath() = %q, want %q", got.APIPath, want.APIPath)
+	}
+	if !slices.Equal(got.Requests, want.Requests) {
+		t.Fatalf("Connect() requests = %v, want %v", got.Requests, want.Requests)
 	}
 }
 
@@ -59,13 +178,20 @@ func TestConnectRejectsEndpointAndNegotiationFailures(t *testing.T) {
 		{name: "ping status", handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.WriteHeader(http.StatusServiceUnavailable)
 		})},
+		{name: "primary ping method", handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		})},
 		{name: "ping body", handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set(podmanAPIHeader, libpodAPIVersion)
 			_, _ = writer.Write([]byte("NO"))
 		})},
-		{name: "old api", handler: podmanNegotiationHandler("6.0.0", "4.0.0", "6.0.0")},
+		{name: "ping header", handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte("OK"))
+		})},
+		{name: "old api", handler: podmanNegotiationHandler("4.3.0", testLibpodServerMinimum, "4.3.0")},
 		{name: "future minimum", handler: podmanNegotiationHandler("7.0.0", "7.0.0", "7.0.0")},
 		{name: "disagreeing api", handler: podmanNegotiationHandler(libpodAPIVersion, "5.0.0", "6.2.0")},
+		{name: "reversed range", handler: podmanNegotiationHandler("5.0.0", "5.1.0", "5.0.0")},
 		{name: "invalid version", handler: podmanVersionTestHandler(`{}`)},
 		{
 			name: "missing engine",
@@ -91,6 +217,29 @@ func TestConnectRejectsEndpointAndNegotiationFailures(t *testing.T) {
 				t.Fatalf("Connect() = %#v, %#v, %v", client, version, err)
 			}
 		})
+	}
+}
+
+func TestPingFallbackPropagatesTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	client := connectedPodmanImageClient(t, func(http.ResponseWriter, *http.Request) {})
+	client.CloseIdleConnections()
+	var requests int
+	client.httpClient = &http.Client{Transport: podmanRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.URL.Path == testPodmanPingPath {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("missing")),
+			}, nil
+		}
+
+		return nil, errPodmanClientTest
+	})}
+	if _, err := client.ping(context.Background()); !errors.Is(err, ErrUnavailable) || requests != 2 {
+		t.Fatalf("ping(fallback transport) = %v, requests=%d", err, requests)
 	}
 }
 
@@ -186,7 +335,7 @@ func TestClientRequestRejectsChangedSocketIdentity(t *testing.T) {
 	}
 	t.Cleanup(client.CloseIdleConnections)
 	client.socket.inode++
-	response, err := client.request(context.Background(), http.MethodGet, "/_ping", nil, nil, false)
+	response, err := client.request(context.Background(), http.MethodGet, testPodmanPingPath, nil, nil, false)
 	closePodmanResponse(response)
 	if !errors.Is(err, ErrInvalidEndpoint) || response != nil {
 		t.Fatalf("request(changed socket) = %#v, %v", response, err)
@@ -249,7 +398,7 @@ func TestClientRequestRejectsSocketMutationAfterResponse(t *testing.T) {
 	}
 	t.Cleanup(client.CloseIdleConnections)
 	mutate.Store(true)
-	response, err := client.request(context.Background(), http.MethodGet, "/_ping", nil, nil, false)
+	response, err := client.request(context.Background(), http.MethodGet, testPodmanPingPath, nil, nil, false)
 	closePodmanResponse(response)
 	if !errors.Is(err, ErrInvalidEndpoint) || response != nil {
 		t.Fatalf("request(mutated socket) = %#v, %v", response, err)
@@ -276,7 +425,10 @@ func TestNegotiationHelpersRejectMalformedEvidence(t *testing.T) {
 	if _, err := client.ping(context.Background()); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("ping(unready) = %v", err)
 	}
-	if _, err := client.serverVersion(context.Background(), libpodAPIVersion); !errors.Is(err, ErrProtocol) {
+	selected, _ := parseSemanticVersion(libpodAPIVersion)
+	if _, err := client.serverVersion(
+		context.Background(), selected, selected,
+	); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("serverVersion(unready) = %v", err)
 	}
 	if _, err := client.inspectScope(context.Background(), Version{}); !errors.Is(err, ErrProtocol) {
@@ -331,6 +483,7 @@ func TestInspectSocketRejectsUnsafeFilesystemObjects(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // The assertions cover independent semantic-version branches.
 func TestSemanticVersionHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -340,15 +493,31 @@ func TestSemanticVersionHelpers(t *testing.T) {
 			t.Fatalf("validSemanticVersion(%q) = true", value)
 		}
 	}
-	if !compatibleLibpodRange("6.1.0", "6.1.0") ||
-		compatibleLibpodRange("6.1.1", "7.0.0") || compatibleLibpodRange("4.0.0", "6.0.9") {
-		t.Fatal("compatibleLibpodRange() returned an invalid result")
+	minimum, _ := parseSemanticVersion(minimumLibpodAPIVersion)
+	middle, _ := parseSemanticVersion(testLibpodMiddleVersion)
+	maximum, _ := parseSemanticVersion(maximumLibpodAPIVersion)
+	future, _ := parseSemanticVersion("7.0.0")
+	old, _ := parseSemanticVersion("4.3.0")
+	if selected, valid := compatibleLibpodVersion(minimum); !valid || selected != minimum {
+		t.Fatalf("compatibleLibpodVersion(minimum) = %#v, %t", selected, valid)
+	}
+	if selected, valid := compatibleLibpodVersion(middle); !valid || selected != middle {
+		t.Fatalf("compatibleLibpodVersion(middle) = %#v, %t", selected, valid)
+	}
+	if selected, valid := compatibleLibpodVersion(future); !valid || selected != maximum {
+		t.Fatalf("compatibleLibpodVersion(future) = %#v, %t", selected, valid)
+	}
+	if _, valid := compatibleLibpodVersion(old); valid {
+		t.Fatal("compatibleLibpodVersion(old) accepted")
 	}
 	if !(semanticVersion{major: 1}).less(semanticVersion{major: 2}) ||
 		!(semanticVersion{major: 1, minor: 1}).less(semanticVersion{major: 1, minor: 2}) ||
 		!(semanticVersion{major: 1, minor: 1, patch: 1}).less(semanticVersion{major: 1, minor: 1, patch: 2}) ||
 		(semanticVersion{major: 2}).less(semanticVersion{major: 1}) {
 		t.Fatal("semanticVersion.less() returned an invalid result")
+	}
+	if middle.String() != testLibpodMiddleVersion {
+		t.Fatalf("semanticVersion.String() = %q", middle.String())
 	}
 }
 
@@ -384,19 +553,23 @@ func TestPodmanPlatformHelpers(t *testing.T) {
 }
 
 func podmanNegotiationHandler(ping, minimum, maximum string) http.Handler {
+	serverMaximum, _ := parseSemanticVersion(maximum)
+	selected, _ := compatibleLibpodVersion(serverMaximum)
+	infoPath := "/v" + selected.String() + "/libpod/info"
+
 	return podmanTestHandler(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
-		case "/_ping":
+		case testPodmanPingPath, testPodmanFallbackPingPath:
 			writer.Header().Set(podmanAPIHeader, ping)
 			_, _ = writer.Write([]byte("OK"))
-		case "/version":
+		case testPodmanVersionPath:
 			writePodmanJSON(writer, fmt.Sprintf(
 				`{"Version":"6.1.0","Components":[{"Name":"Podman Engine",`+
 					`"Version":"6.1.0","Details":{"APIVersion":%q,"MinAPIVersion":%q}}]}`,
 				maximum,
 				minimum,
 			))
-		case libpodPrefix + "/info":
+		case infoPath:
 			writePodmanJSON(writer,
 				`{"host":{"os":"linux","arch":"amd64"},`+
 					`"store":{"graphRoot":"/var/lib/containers/storage"}}`,
@@ -411,7 +584,7 @@ func podmanVersionTestHandler(versionDocument string) http.Handler {
 	negotiation := podmanNegotiationHandler(libpodAPIVersion, "5.0.0", libpodAPIVersion)
 
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/version" {
+		if request.URL.Path == testPodmanVersionPath {
 			writePodmanJSON(writer, versionDocument)
 
 			return

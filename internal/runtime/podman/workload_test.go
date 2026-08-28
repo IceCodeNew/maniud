@@ -275,7 +275,7 @@ func (state *podmanWorkloadRuntimeState) mutateEmpty(
 }
 
 func (state *podmanWorkloadRuntimeState) rename(writer http.ResponseWriter, request *http.Request) {
-	wantPath := "/v" + libpodAPIVersion + "/containers/" + podmanTestContainerID + "/rename"
+	wantPath := libpodPrefix + "/containers/" + podmanTestContainerID + "/rename"
 	if !state.present || request.URL.Path != wantPath || request.URL.Query().Get("name") == "" {
 		writePodmanNotFound(writer)
 
@@ -404,6 +404,26 @@ func TestPodmanWorkloadLifecycleUsesIndependentProbes(t *testing.T) {
 	}
 }
 
+func TestPodmanWorkloadRejectsLossyPodman4Entrypoints(t *testing.T) {
+	t.Parallel()
+
+	state := &podmanWorkloadRuntimeState{t: t}
+	client := connectedPodmanWorkloadClient(t, state.handler)
+	client.version.Protocol = minimumLibpodAPIVersion
+	client.version.Minimum = testLibpodServerMinimum
+	client.version.Maximum = minimumLibpodAPIVersion
+	client.protocol, _ = parseSemanticVersion(minimumLibpodAPIVersion)
+
+	for _, entrypoint := range [][]string{{"/bin/sh", "-c"}, {"/path with space"}} {
+		workload := podmanTestWorkload(t)
+		workload.Entrypoint = entrypoint
+		workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
+		if err := client.CheckWorkload(workload); !errors.Is(err, ErrUnsupportedWorkload) {
+			t.Fatalf("CheckWorkload(Podman 4 entrypoint %q) = %v", entrypoint, err)
+		}
+	}
+}
+
 func assertPodmanTransition(
 	t *testing.T,
 	client *Client,
@@ -518,14 +538,18 @@ func TestPodmanWorkloadPureFailClosedBranches(t *testing.T) {
 		t.Fatalf("Inspect(nil) = %#v, %v", evidence, err)
 	}
 	invalidPlatform := &Client{
-		version: Version{Protocol: libpodAPIVersion, OS: "plan9", Architecture: "mips"},
-		scope:   domain.Hash([]byte("scope")),
+		version: Version{
+			Protocol: libpodAPIVersion, Minimum: testLibpodServerMinimum, Maximum: libpodAPIVersion,
+			OS: "plan9", Architecture: "mips",
+		},
+		protocol: semanticVersion{major: 6, minor: 1},
+		scope:    domain.Hash([]byte("scope")),
 	}
 	if _, err := invalidPlatform.Inspect(context.Background()); !errors.Is(err, ErrUnsupportedWorkload) {
 		t.Fatalf("Inspect(unsupported platform) = %v", err)
 	}
 	for _, state := range []ContainerProbeState{ContainerProbeUnknown, 99} {
-		observation, err := podmanWorkloadObservation(ContainerProbe{State: state}, workload)
+		observation, err := podmanWorkloadObservation(ContainerProbe{State: state}, workload, libpodAPIVersion)
 		if !errors.Is(err, ErrProtocol) || !reflect.DeepEqual(observation, application.WorkloadObservation{}) {
 			t.Fatalf("podmanWorkloadObservation(%d) = %#v, %v", state, observation, err)
 		}
@@ -579,11 +603,20 @@ func TestPodmanWorkloadPureFailClosedBranches(t *testing.T) {
 	if hasManiudLabel(map[string]string{"team": "platform"}) {
 		t.Fatal("hasManiudLabel accepted unrelated label")
 	}
-	method, requestPath, query := podmanWorkloadTransitionRequest(application.WorkloadTransition{Kind: 99})
+	protocol, _ := parseSemanticVersion(libpodAPIVersion)
+	client := &Client{
+		version: Version{
+			Protocol: libpodAPIVersion, Minimum: testLibpodServerMinimum, Maximum: libpodAPIVersion,
+		},
+		protocol: protocol,
+	}
+	method, requestPath, query := client.podmanWorkloadTransitionRequest(
+		application.WorkloadTransition{Kind: 99},
+	)
 	if method != "" || requestPath != "" || query != nil {
 		t.Fatalf("podmanWorkloadTransitionRequest(unknown) = %q, %q, %#v", method, requestPath, query)
 	}
-	if containerConfigurationMatches(Container{}, workload) {
+	if containerConfigurationMatches(Container{}, workload, libpodAPIVersion) {
 		t.Fatal("containerConfigurationMatches accepted empty container")
 	}
 	if validOwnershipName("bad/name") || validOwnershipName(strings.Repeat("a", maximumOwnershipValueBytes+1)) {
@@ -794,7 +827,7 @@ func TestPodmanObservedWorkloadAndInspectMappingBranches(t *testing.T) {
 		WorkloadSpec: workload.WorkloadSpec, State: ContainerRunning,
 	}
 	observation, err := podmanWorkloadObservation(
-		ContainerProbe{State: ContainerProbeObserved, Container: container}, workload,
+		ContainerProbe{State: ContainerProbeObserved, Container: container}, workload, libpodAPIVersion,
 	)
 	if err != nil || observation.State != application.WorkloadObservationPresent || !observation.Running ||
 		!observation.ConfigurationMatches {
@@ -803,7 +836,7 @@ func TestPodmanObservedWorkloadAndInspectMappingBranches(t *testing.T) {
 	invalidStorage := workload
 	invalidStorage.SourceDigest = domain.Digest{}
 	observation, err = podmanWorkloadObservation(
-		ContainerProbe{State: ContainerProbeObserved, Container: container}, invalidStorage,
+		ContainerProbe{State: ContainerProbeObserved, Container: container}, invalidStorage, libpodAPIVersion,
 	)
 	if !reflect.DeepEqual(observation, application.WorkloadObservation{}) || !errors.Is(err, ErrProtocol) {
 		t.Fatalf("podmanWorkloadObservation(invalid storage) = %#v, %v", observation, err)
@@ -1135,9 +1168,10 @@ func TestPodmanTransitionProbeErrorsPropagate(t *testing.T) {
 		t.Fatalf("ProbeWorkloadTransition(transport) = %#v, %v", probe, err)
 	}
 
-	method, path, query := podmanWorkloadTransitionRequest(application.WorkloadTransition{})
+	client.version.Protocol = "5.0.0"
+	method, path, query := client.podmanWorkloadTransitionRequest(application.WorkloadTransition{})
 	if method != "" || path != "" || query != nil {
-		t.Fatalf("podmanWorkloadTransitionRequest(unknown) = %q, %q, %#v", method, path, query)
+		t.Fatalf("podmanWorkloadTransitionRequest(drift) = %q, %q, %#v", method, path, query)
 	}
 }
 

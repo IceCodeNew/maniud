@@ -92,7 +92,7 @@ type ContainerProbe struct {
 func (client *Client) Inspect(context.Context) (application.RuntimeEvidence, error) {
 	var empty application.RuntimeEvidence
 
-	if client == nil || client.version.Protocol != libpodAPIVersion || client.scope == (domain.Digest{}) {
+	if !client.negotiated() || client.scope == (domain.Digest{}) {
 		return empty, ErrProtocol
 	}
 	platform, valid := podmanPlatform(client.version.OS, client.version.Architecture)
@@ -126,8 +126,11 @@ func (client *Client) CheckWorkload(workload domain.DesiredWorkload) error {
 }
 
 func validPodmanWorkload(client *Client, workload domain.DesiredWorkload) bool {
-	if client == nil || client.version.Protocol != libpodAPIVersion ||
-		!validPodmanImage(client, workload.Image) || !validDesiredWorkload(workload) {
+	if !client.negotiated() || !validPodmanImage(client, workload.Image) || !validDesiredWorkload(workload) {
+		return false
+	}
+	if client.protocol.major == 4 &&
+		(len(workload.Entrypoint) > 1 || len(workload.Entrypoint) == 1 && strings.Contains(workload.Entrypoint[0], " ")) {
 		return false
 	}
 
@@ -168,12 +171,13 @@ func (client *Client) ObserveWorkload(
 		return empty, err
 	}
 
-	return podmanWorkloadObservation(probe, workload)
+	return podmanWorkloadObservation(probe, workload, client.version.Protocol)
 }
 
 func podmanWorkloadObservation(
 	probe ContainerProbe,
 	workload domain.DesiredWorkload,
+	apiVersion string,
 ) (application.WorkloadObservation, error) {
 	var empty application.WorkloadObservation
 
@@ -192,7 +196,7 @@ func podmanWorkloadObservation(
 			ConfigurationDigest:  containerConfigurationDigest(probe.Container),
 			StorageDigest:        storageDigest,
 			RuntimeMounts:        slices.Clone(probe.Container.RuntimeMounts),
-			ConfigurationMatches: containerConfigurationMatches(probe.Container, workload),
+			ConfigurationMatches: containerConfigurationMatches(probe.Container, workload, apiVersion),
 			Running:              probe.Container.State == ContainerRunning,
 			Ownership:            probe.Container.Ownership,
 		}, nil
@@ -211,10 +215,11 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 	if !validContainerReference(reference) {
 		return unknown, ErrInvalidContainerReference
 	}
+	path := client.apiPath("/containers/" + reference + "/json")
 	response, err := client.request(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/containers/"+reference+"/json",
+		path,
 		url.Values{"size": {podmanQueryFalse}},
 		nil,
 		false,
@@ -235,7 +240,11 @@ func (client *Client) ProbeContainer(ctx context.Context, reference string) (Con
 		return unknown, ErrProtocol
 	}
 
-	inspection, decodeErr := podmanconfig.DecodeInspect(response.Body, maximumControlBytes)
+	inspection, decodeErr := podmanconfig.DecodeInspect(
+		response.Body,
+		maximumControlBytes,
+		client.version.Protocol,
+	)
 	if decodeErr != nil {
 		return unknown, ErrProtocol
 	}
@@ -283,7 +292,11 @@ func alphaNumeric(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
-func containerConfigurationMatches(container Container, workload domain.DesiredWorkload) bool {
+func containerConfigurationMatches(
+	container Container,
+	workload domain.DesiredWorkload,
+	apiVersion string,
+) bool {
 	observedReference, observedErr := imageref.Parse(container.ImageReference)
 	expectedReference, expectedErr := parseExpectedImageReference(workload.Image)
 	if observedErr != nil || expectedErr != nil ||
@@ -294,7 +307,7 @@ func containerConfigurationMatches(container Container, workload domain.DesiredW
 		return false
 	}
 
-	return podmanconfig.Equivalent(container.WorkloadSpec, workload.WorkloadSpec)
+	return podmanconfig.Equivalent(container.WorkloadSpec, workload.WorkloadSpec, apiVersion)
 }
 
 func containerConfigurationDigest(container Container) domain.Digest {

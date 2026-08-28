@@ -39,10 +39,11 @@ func (client *Client) ProbeImage(
 	if !valid {
 		return unknown, ErrUnsupportedWorkload
 	}
+	path := client.apiPath("/images/" + reference.DigestReference() + "/json")
 	response, err := client.request(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/images/"+reference.DigestReference()+"/json",
+		path,
 		nil,
 		nil,
 		false,
@@ -77,7 +78,7 @@ func (client *Client) ProbeImage(
 func (client *Client) validImage(expected domain.ImageIdentity) (imageref.Reference, bool) {
 	var empty imageref.Reference
 
-	if client == nil || client.version.Protocol != libpodAPIVersion || expected.Origin != domain.ImageOriginRegistry {
+	if !client.negotiated() || expected.Origin != domain.ImageOriginRegistry {
 		return empty, false
 	}
 	reference, err := imageref.Parse(expected.Reference)

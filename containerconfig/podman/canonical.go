@@ -10,22 +10,36 @@ import (
 )
 
 // Equivalent reports whether observed represents expected after native Libpod
-// defaulting and inspect normalization.
-func Equivalent(observed containerconfig.Spec, expected containerconfig.Spec) bool {
+// defaulting and inspect normalization for apiVersion.
+func Equivalent(observed containerconfig.Spec, expected containerconfig.Spec, apiVersion string) bool {
+	version, valid := parseInspectAPIVersion(apiVersion)
+	if !valid {
+		return false
+	}
+	termDefault := !versionLess([3]uint64{4, 6, 2}, version)
+	capDropDefault := apiVersion == podmanAPI431
+	if capDropDefault && slices.ContainsFunc(expected.CapDrop, podmanInspectDefaultCapDrop) {
+		return false
+	}
+
 	observed = observed.Clone()
 	expected = expected.Clone()
 	observed.ServiceName = expected.ServiceName
 	observed.Platform = expected.Platform
-	observed.Environment = podmanComparableEnvironment(observed.Environment, expected.Environment)
+	observed.Environment = podmanComparableEnvironment(observed.Environment, expected.Environment, termDefault)
+	observed.CapDrop = podmanComparableCapDrop(observed.CapDrop, expected.CapDrop, capDropDefault)
 	observed.Ulimits = podmanComparableUlimits(observed.Ulimits, expected.Ulimits)
 	observed.Tmpfs = podmanComparableTmpfs(observed.Tmpfs, expected.Tmpfs)
+	if expected.PidsLimit == nil && observed.PidsLimit != nil && *observed.PidsLimit == defaultPidsLimit {
+		observed.PidsLimit = nil
+	}
 	observed, observedErr := Canonical(observed)
 	expected, expectedErr := Canonical(expected)
 
 	return observedErr == nil && expectedErr == nil && reflect.DeepEqual(observed, expected)
 }
 
-func podmanComparableEnvironment(observed, expected []string) []string {
+func podmanComparableEnvironment(observed, expected []string, termDefault bool) []string {
 	expectedKeys := make(map[string]struct{}, len(expected))
 	for _, value := range expected {
 		key, _, _ := strings.Cut(value, "=")
@@ -36,8 +50,30 @@ func podmanComparableEnvironment(observed, expected []string) []string {
 		key, _, _ := strings.Cut(value, "=")
 		_, explicit := expectedKeys[key]
 
-		return !explicit && (key == "HOME" || key == "HOSTNAME")
+		return !explicit && (key == "HOME" || key == "HOSTNAME" || termDefault && value == "TERM=xterm")
 	})
+}
+
+func podmanComparableCapDrop(observed, expected []string, capDropDefault bool) []string {
+	if !capDropDefault {
+		return observed
+	}
+	explicit := make(map[string]struct{}, len(expected))
+	for _, capability := range expected {
+		explicit[capability] = struct{}{}
+	}
+
+	return slices.DeleteFunc(observed, func(capability string) bool {
+		_, wanted := explicit[capability]
+
+		return !wanted && podmanInspectDefaultCapDrop(capability)
+	})
+}
+
+func podmanInspectDefaultCapDrop(capability string) bool {
+	capability = strings.TrimPrefix(capability, "CAP_")
+
+	return capability == "AUDIT_WRITE" || capability == "MKNOD" || capability == "NET_RAW"
 }
 
 func podmanComparableUlimits(observed, expected []containerconfig.Ulimit) []containerconfig.Ulimit {
@@ -90,6 +126,9 @@ func podmanTmpfsDefault(option string) bool {
 
 //nolint:cyclop // Libpod independently supplies defaults for optional fields.
 func canonicalDefaults(spec *containerconfig.Spec) {
+	if spec.WorkingDirectory == "/" {
+		spec.WorkingDirectory = ""
+	}
 	if spec.Cgroup == namespacePrivate {
 		spec.Cgroup = ""
 	}

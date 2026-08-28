@@ -53,10 +53,13 @@ func (client *Client) resolveSavedImageUser(
 	expected domain.ImageIdentity,
 	specification string,
 ) (string, error) {
+	path := client.apiPath(
+		"/images/" + strings.TrimPrefix(expected.ImageConfig.String(), "sha256:") + "/get",
+	)
 	response, err := client.request(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/images/"+strings.TrimPrefix(expected.ImageConfig.String(), "sha256:")+"/get",
+		path,
 		url.Values{"format": []string{podmanDockerArchiveFormat}},
 		http.Header{"Accept": []string{podmanArchiveContentType}},
 		true,

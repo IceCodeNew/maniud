@@ -27,10 +27,11 @@ func (client *Client) DiscardWorkload(
 			probe.Workload.Lifecycle != application.WorkloadLifecycleExited) {
 		return ErrProtocol
 	}
+	path := client.apiPath("/containers/" + probe.Workload.ID)
 	response, err := client.request( //nolint:bodyclose // decodePodmanRemovalResponse consumes and closes it.
 		ctx,
 		http.MethodDelete,
-		libpodPrefix+"/containers/"+probe.Workload.ID,
+		path,
 		neturl.Values{"force": {podmanQueryTrue}, "volumes": {podmanQueryFalse}},
 		nil,
 		false,

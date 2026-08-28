@@ -86,7 +86,7 @@ func inspectSocket(path string) (socketIdentity, error) {
 	if !validSocketPath(path) {
 		return empty, ErrInvalidEndpoint
 	}
-	metadata, err := os.Lstat(path)
+	metadata, err := os.Lstat(path) //nolint:gosec // The clean absolute path is required; Lstat rejects symlink endpoints.
 	if err != nil || !safeSocketMetadata(metadata) {
 		return empty, ErrInvalidEndpoint
 	}

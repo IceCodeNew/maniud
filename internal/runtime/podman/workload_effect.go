@@ -42,10 +42,11 @@ func (client *Client) CreateWorkload(
 	if !valid {
 		return "", ErrProtocol
 	}
+	path := client.apiPath("/containers/create")
 	response, err := client.requestWithBody( //nolint:bodyclose // decodePodmanCreateResponse consumes and closes it.
 		ctx,
 		http.MethodPost,
-		libpodPrefix+"/containers/create",
+		path,
 		nil,
 		http.Header{podmanContentType: {podmanJSONType}},
 		body,
@@ -100,10 +101,11 @@ func (client *Client) StartWorkload(
 		!validStartedWorkload(probe.Workload, workload, transaction, application.WorkloadLifecycleCreated) {
 		return ErrProtocol
 	}
+	path := client.apiPath("/containers/" + probe.Workload.ID + "/start")
 	response, err := client.request(
 		ctx,
 		http.MethodPost,
-		libpodPrefix+"/containers/"+probe.Workload.ID+"/start",
+		path,
 		nil,
 		nil,
 		false,
@@ -148,7 +150,7 @@ func (client *Client) probeWorkloadEffect(
 
 	return application.WorkloadEffectProbe{
 		State:    application.WorkloadEffectProbeObserved,
-		Workload: podmanWorkloadEffectEvidence(selected, workload),
+		Workload: podmanWorkloadEffectEvidence(selected, workload, client.version.Protocol),
 	}, nil
 }
 
@@ -220,10 +222,11 @@ func (client *Client) ownedContainerID(
 	}
 	filter := []byte(`{` + strconv.Quote("label") + `:[` + strconv.Quote(domain.LabelService+"="+service) + `,` +
 		strconv.Quote(domain.LabelTransaction+"="+transaction) + `]}`)
+	path := client.apiPath("/containers/json")
 	response, err := client.request(
 		ctx,
 		http.MethodGet,
-		libpodPrefix+"/containers/json",
+		path,
 		url.Values{"all": {podmanQueryTrue}, "filters": {string(filter)}},
 		nil,
 		false,
@@ -283,6 +286,7 @@ func selectPodmanContainer(named, owned ContainerProbe) (Container, bool, bool) 
 func podmanWorkloadEffectEvidence(
 	container Container,
 	workload domain.DesiredWorkload,
+	apiVersion string,
 ) application.WorkloadEffectEvidence {
 	storageDigest, _ := domain.ComputeStorageDigest(workload, container.RuntimeMounts)
 
@@ -292,7 +296,7 @@ func podmanWorkloadEffectEvidence(
 		ConfigurationDigest:  containerConfigurationDigest(container),
 		StorageDigest:        storageDigest,
 		RuntimeMounts:        slices.Clone(container.RuntimeMounts),
-		ConfigurationMatches: containerConfigurationMatches(container, workload),
+		ConfigurationMatches: containerConfigurationMatches(container, workload, apiVersion),
 		Lifecycle:            podmanWorkloadLifecycle(container.State),
 		Ownership:            container.Ownership,
 	}

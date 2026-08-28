@@ -1,0 +1,86 @@
+name: Podman Compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/podman-compatibility.yml"
+      - "containerconfig/podman/**"
+      - "internal/application/**"
+      - "internal/domain/**"
+      - "internal/runtime/podman/**"
+      - "scripts/check-podman-compatibility"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - master
+      - "renovate/**"
+    paths:
+      - ".github/workflows/podman-compatibility.yml"
+      - "containerconfig/podman/**"
+      - "internal/application/**"
+      - "internal/domain/**"
+      - "internal/runtime/podman/**"
+      - "scripts/check-podman-compatibility"
+      - "go.mod"
+      - "go.sum"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Podman ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 4.3.1
+            package: podman-4.3.1-2-x86_64.pkg.tar.zst
+            package-sha256: c19994b9d61c2ae04439f2c5e93e327c65fdf8a924f61153c304b5c58e54ea71
+            snapshot: 2022/11/21
+            base-image: archlinux@sha256:353e92f6b8bcd32ae55780feda22ae68cce47c2f41f0c41c2ee596a2e969c1f4
+            firewall-driver: iptables
+          - version: 5.4.2
+            package: podman-5.4.2-2-x86_64.pkg.tar.zst
+            package-sha256: 80ee4cc560157f376bda5029e82b02ff2e05cb511a43900018ad5cc5e08a2a0e
+            snapshot: 2025/04/21
+            base-image: archlinux@sha256:ce4dddea70099cc8360478d162e478997420185683ce9de88223c3f316c17c1e
+            firewall-driver: iptables
+          - version: 5.8.3
+            package: podman-5.8.3-1-x86_64.pkg.tar.zst
+            package-sha256: 3d8a3e464b0212b51d69b4326c6bb315291f6c800a659fe310949fc9c96cf088
+            snapshot: 2026/06/15
+            base-image: archlinux@sha256:ff410a88e200b133e577f5730b7bfa324e26a333075ee056bf45e911c6ac5671
+            firewall-driver: iptables
+          - version: 6.1.0
+            package: podman-6.1.0-1-x86_64.pkg.tar.zst
+            package-sha256: 4c3ca45560399ea0b2c0045467347d63f86cec8511bd70f09f4419d351886204
+            snapshot: 2026/08/17
+            base-image: archlinux@sha256:4bf33b21a715aac0b48ce6e9eaed4782a898eae96f88f5da3635572129c2584a
+            firewall-driver: nftables
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run exact Podman compatibility journey
+        run: |
+          scripts/check-podman-compatibility \
+            '${{ matrix.version }}' \
+            '${{ matrix.package }}' \
+            '${{ matrix.package-sha256 }}' \
+            '${{ matrix.snapshot }}' \
+            '${{ matrix.base-image }}' \
+            '${{ matrix.firewall-driver }}'
