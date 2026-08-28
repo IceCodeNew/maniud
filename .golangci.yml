@@ -53,6 +53,7 @@ linters:
             - "!**/internal/notification/*.go"
             - "!**/internal/registry/*.go"
             - "!**/internal/cli/parse.go"
+            - "!**/internal/custombuild/*.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/containerd/*.go"
             - "!**/containerconfig/docker/*.go"
@@ -64,6 +65,14 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/google/go-cmp
+        custom-builder:
+          list-mode: strict
+          files:
+            - "**/internal/custombuild/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/mod
         cli-syntax-adapter:
           list-mode: strict
           files:

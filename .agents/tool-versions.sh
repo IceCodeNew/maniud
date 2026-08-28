@@ -42,6 +42,12 @@ readonly GOVULNCHECK_VERSION='v1.7.0'
 readonly GOBCO_VERSION='1.3.4'
 # renovate: datasource=github-releases depName=JetBrains/go-modern-guidelines
 readonly GO_MODERN_GUIDELINES_VERSION='v0.1.1'
+# searching-with-fff loads fff-mcp as a long-lived stdio server. Keep the
+# reviewed skill revision and binary checksum together when updating either.
+readonly SEARCHING_WITH_FFF_REVISION='e915d903e58d28f12291b5c6c2c8001b12fafdc3'
+readonly FFF_MCP_VERSION='v0.10.5'
+readonly FFF_MCP_X86_64_LINUX_SHA256='6ab4f411eeee83e7e3900450b23bb50172e4f93d24dc720265126f0c3a1b1f23'
+readonly FFF_MCP_AARCH64_LINUX_SHA256='e5e315a57dc9b282e2105172fb299883e1cf9bb63c2a36dd493f23763c8fdd4d'
 # Gitleaks is installed only by CI and prek, not by Orb setup.
 # renovate: datasource=github-releases depName=gitleaks/gitleaks
 readonly GITLEAKS_VERSION='v8.30.1'

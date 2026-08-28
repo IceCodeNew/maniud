@@ -159,6 +159,13 @@ fi
 source_copy="$temporary_dir/source"
 mkdir -p "$source_copy"
 (cd "$repository_root" && tar --exclude=.git --exclude=.amp -cf - .) | tar -xf - -C "$source_copy"
+# Branch coverage runs tests from the disposable source copy. Give tests that
+# verify source provenance a local revision without copying repository history.
+git -C "$source_copy" init --quiet
+git -C "$source_copy" \
+	-c user.name=maniud-coverage \
+	-c user.email=coverage@localhost \
+	commit --quiet --allow-empty --no-gpg-sign -m coverage-source
 (
 	cd "$source_copy"
 
@@ -230,7 +237,8 @@ PY
 		log="$temporary_dir/branches-$package_number.log"
 		if ! (
 			cd "$module_directory"
-			GOWORK=off CGO_ENABLED="$test_cgo" gobco -branch -stats "$stats" "$package_dir"
+			MANIUD_BRANCH_COVERAGE=1 GOWORK=off CGO_ENABLED="$test_cgo" \
+				gobco -branch -stats "$stats" "$package_dir"
 		) >"$log" 2>&1; then
 			cat "$log" >&2
 			exit 1
