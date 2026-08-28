@@ -19,6 +19,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/registry"
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
 const (
@@ -827,7 +828,7 @@ func TestDefaultGenDependencies(t *testing.T) {
 
 	dependencies, err := defaultGenDependencies(map[string]string{}, io.Discard, func() (string, error) {
 		return testWorkingDirectory, nil
-	})
+	}, testRuntimePlugins(t))
 	assertDefaultGenDependencies(t, dependencies, err)
 	source, err := imageref.Normalize(testRegistrySource)
 	if err != nil {
@@ -854,7 +855,9 @@ func TestDefaultGenDependencies(t *testing.T) {
 		func() (string, error) { return "", io.ErrClosedPipe },
 		func() (string, error) { return testRelativePath, nil },
 	} {
-		if _, err := defaultGenDependencies(nil, io.Discard, getWorkingDirectory); err == nil {
+		if _, err := defaultGenDependencies(
+			nil, io.Discard, getWorkingDirectory, testRuntimePlugins(t),
+		); err == nil {
 			t.Fatal("defaultGenDependencies(invalid cwd) succeeded")
 		}
 	}
@@ -1402,6 +1405,14 @@ func TestRunGenAndFailureClassification(t *testing.T) {
 	}
 	if failure := classifyGenFailure(registry.ErrUnavailable); !failure.Retryable() {
 		t.Fatal("classifyGenFailure(unavailable) is not retryable")
+	}
+}
+
+func TestClassifyGenFailureReportsRuntimeNotBuilt(t *testing.T) {
+	t.Parallel()
+
+	if failure := classifyGenFailure(runtimeplugin.ErrNotBuilt); failure.Code() != domain.ErrorRuntimeNotBuilt {
+		t.Fatalf("classifyGenFailure(runtime not built) = %q", failure.Code())
 	}
 }
 

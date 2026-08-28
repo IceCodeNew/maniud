@@ -56,9 +56,9 @@ linters:
             - "!**/containerconfig/containerd/*.go"
             - "!**/containerconfig/docker/*.go"
             - "!**/containerconfig/podman/*.go"
-            - "!**/internal/runtime/containerd/*.go"
-            - "!**/internal/runtime/docker/*.go"
-            - "!**/internal/runtime/podman/*.go"
+            - "!**/plugins/runtime/containerd/*.go"
+            - "!**/plugins/runtime/docker/*.go"
+            - "!**/plugins/runtime/podman/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -172,7 +172,7 @@ linters:
         containerd-adapter:
           list-mode: strict
           files:
-            - "**/internal/runtime/containerd/*.go"
+            - "**/plugins/runtime/containerd/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -191,7 +191,7 @@ linters:
         docker-adapter:
           list-mode: strict
           files:
-            - "**/internal/runtime/docker/*.go"
+            - "**/plugins/runtime/docker/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
@@ -201,7 +201,7 @@ linters:
         podman-adapter:
           list-mode: strict
           files:
-            - "**/internal/runtime/podman/*.go"
+            - "**/plugins/runtime/podman/*.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud

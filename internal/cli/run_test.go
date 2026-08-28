@@ -89,7 +89,9 @@ func TestRunPublicTransport(t *testing.T) {
 
 			var output bytes.Buffer
 
-			status := Run(context.Background(), test.args, strings.NewReader(""), &output, io.Discard)
+			status := Run(
+				context.Background(), test.args, strings.NewReader(""), &output, io.Discard, testRuntimePlugins(t),
+			)
 			if status != test.wantStatus {
 				t.Fatalf("Run() status = %d, want %d", status, test.wantStatus)
 			}
@@ -112,7 +114,7 @@ func TestRunTreatsRuntimeHelpAsInput(t *testing.T) {
 	var output bytes.Buffer
 	status := Run(context.Background(), []string{
 		string(commandGen), runtimeArgumentsSeparator, testDockerRuntime, runOperation, helpOption,
-	}, nil, &output, io.Discard)
+	}, nil, &output, io.Discard, testRuntimePlugins(t))
 	if status != 1 || !strings.Contains(output.String(), `"code":"generation_failed"`) {
 		t.Fatalf("Run(runtime help) = %d, %q", status, output.String())
 	}
@@ -126,7 +128,9 @@ func TestRunCancellation(t *testing.T) {
 
 	var output bytes.Buffer
 
-	status := Run(cancelled, []string{string(commandApply), composeFileValue}, nil, &output, io.Discard)
+	status := Run(
+		cancelled, []string{string(commandApply), composeFileValue}, nil, &output, io.Discard, testRuntimePlugins(t),
+	)
 	if status != 130 {
 		t.Fatalf("Run() status = %d, want 130", status)
 	}
@@ -189,7 +193,9 @@ func assertRunHelpPage(t *testing.T, args, wantContains, wantAbsent []string) {
 
 	var output bytes.Buffer
 
-	status := Run(context.Background(), args, strings.NewReader(""), &output, io.Discard)
+	status := Run(
+		context.Background(), args, strings.NewReader(""), &output, io.Discard, testRuntimePlugins(t),
+	)
 	if status != 0 {
 		t.Fatalf("Run(%q) status = %d, want 0", args, status)
 	}
@@ -237,6 +243,7 @@ func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
 			output := new(bytes.Buffer)
 			status := runProduction(
 				context.Background(), test.args, output, io.Discard, map[string]string{}, test.getwd,
+				testRuntimePlugins(t),
 			)
 			if status != 1 || !strings.Contains(output.String(), test.wantCode) {
 				t.Fatalf("runProduction() = %d, %q", status, output.String())
@@ -258,6 +265,7 @@ func TestRunProductionWiresLongRunningCommands(t *testing.T) {
 		var output bytes.Buffer
 		status := runProduction(
 			t.Context(), arguments, &output, io.Discard, map[string]string{}, os.Getwd,
+			testRuntimePlugins(t),
 		)
 		if status != 1 {
 			t.Fatalf("runProduction(%v) = %d, %q", arguments, status, output.String())
@@ -307,11 +315,15 @@ func (failingWriter) Write([]byte) (int, error) {
 func TestRunContainsOutputFailures(t *testing.T) {
 	t.Parallel()
 
-	if status := Run(context.Background(), []string{helpOption}, nil, failingWriter{}, io.Discard); status != 1 {
+	if status := Run(
+		context.Background(), []string{helpOption}, nil, failingWriter{}, io.Discard, testRuntimePlugins(t),
+	); status != 1 {
 		t.Fatalf("Run(help) status = %d, want 1", status)
 	}
 
-	if status := Run(context.Background(), nil, nil, failingWriter{}, io.Discard); status != 1 {
+	if status := Run(
+		context.Background(), nil, nil, failingWriter{}, io.Discard, testRuntimePlugins(t),
+	); status != 1 {
 		t.Fatalf("Run(error) status = %d, want 1", status)
 	}
 }

@@ -2,27 +2,21 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/registry"
-	containerdruntime "github.com/IceCodeNew/maniud/internal/runtime/containerd"
-	dockerruntime "github.com/IceCodeNew/maniud/internal/runtime/docker"
-	podmanruntime "github.com/IceCodeNew/maniud/internal/runtime/podman"
 	"github.com/IceCodeNew/maniud/internal/store"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
-type applyRuntime interface {
-	application.Runtime
-	ProbeImage(ctx context.Context, expected domain.ImageIdentity) (application.ImageProbe, error)
-	CloseIdleConnections()
-}
+type applyRuntime = application.OperationRuntime
 
 type applyTransactionReader interface {
 	application.TransactionReader
@@ -42,6 +36,7 @@ func defaultApplyDependencies(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) (applyDependencies, error) {
 	workingDirectory, err := getWorkingDirectory()
 	if err != nil {
@@ -62,7 +57,7 @@ func defaultApplyDependencies(
 			return loadComposeSource(ctx, path, workingDirectory, environment, filepath.Dir(statePath))
 		},
 		openRuntime: func(ctx context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-			return openApplyRuntime(ctx, runtimeKind, environment, stderr)
+			return openApplyRuntime(ctx, runtimeKind, environment, stderr, runtimes)
 		},
 		openReader: func(ctx context.Context) (applyTransactionReader, error) {
 			return store.OpenReader(ctx, statePath)
@@ -88,81 +83,44 @@ func openApplyRuntime(
 	runtimeKind domain.RuntimeKind,
 	environment map[string]string,
 	stderr io.Writer,
+	runtimes runtimeplugin.Set,
 ) (applyRuntime, error) {
-	switch runtimeKind {
-	case domain.RuntimeDocker:
-		client, err := openDockerApplyRuntime(ctx, environment, stderr)
-		if err != nil {
-			return nil, err
-		}
-
-		return client, nil
-	case domain.RuntimePodman:
-		client, err := openPodmanApplyRuntime(ctx, environment)
-		if err != nil {
-			return nil, err
-		}
-
-		return client, nil
-	case domain.RuntimeContainerd:
-		client, err := openContainerdApplyRuntime(ctx, environment)
-		if err != nil {
-			return nil, err
-		}
-
-		return client, nil
-	default:
-		return nil, application.ErrInvalidRequest
-	}
-}
-
-func openDockerApplyRuntime(
-	ctx context.Context,
-	environment map[string]string,
-	stderr io.Writer,
-) (*dockerruntime.Client, error) {
-	endpoint, err := dockerEndpoint(environment, stderr)
-	if err != nil {
-		return nil, err
-	}
-	client, _, err := dockerruntime.Connect(ctx, endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("connect Docker runtime: %w", err)
-	}
-
-	return client, nil
-}
-
-func openPodmanApplyRuntime(
-	ctx context.Context,
-	environment map[string]string,
-) (*podmanruntime.Client, error) {
-	socketPath, err := podmanSocketPath(environment, os.Geteuid())
-	if err != nil {
-		return nil, err
-	}
-	client, _, err := podmanruntime.Connect(ctx, socketPath)
-	if err != nil {
-		return nil, fmt.Errorf("connect Podman runtime: %w", err)
-	}
-
-	return client, nil
-}
-
-func openContainerdApplyRuntime(
-	ctx context.Context,
-	environment map[string]string,
-) (*containerdruntime.Client, error) {
-	client, err := containerdruntime.Connect(
-		ctx,
-		environment[containerdAddressEnvironment],
-		environment[containerdNamespaceEnvironment],
+	factory, err := runtimes.Select(
+		runtimeKind,
+		runtimeEnvironment(environment),
+		runtimeWarningSink(stderr),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("connect containerd runtime: %w", err)
+		return nil, fmt.Errorf("select apply runtime: %w", err)
+	}
+	runtime, err := factory(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open apply runtime: %w", err)
 	}
 
-	return client, nil
+	return runtime, nil
+}
+
+func runtimeEnvironment(environment map[string]string) runtimeplugin.Environment {
+	return func(name string) string { return environment[name] }
+}
+
+func runtimeWarningSink(stderr io.Writer) runtimeplugin.WarningSink {
+	if stderr == nil {
+		return nil
+	}
+
+	return func(warning runtimeplugin.Warning) error {
+		err := json.NewEncoder(stderr).Encode(struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}{Code: warning.Code, Message: warning.Message})
+		if err != nil {
+			return fmt.Errorf("emit runtime endpoint warning: %w", err)
+		}
+
+		return nil
+	}
 }
 
 func applyRuntimeKind(
@@ -186,9 +144,11 @@ func classifyApplyFailure(err error) *domain.FailureError {
 	if errors.Is(err, context.Canceled) || errors.Is(err, registry.ErrCancelled) {
 		return domain.OperationCancelled()
 	}
+	if errors.Is(err, runtimeplugin.ErrNotBuilt) {
+		return domain.RuntimeNotBuilt()
+	}
 
-	retryable := errors.Is(err, containerdruntime.ErrUnavailable) || errors.Is(err, dockerruntime.ErrUnavailable) ||
-		errors.Is(err, podmanruntime.ErrUnavailable) || errors.Is(err, registry.ErrUnavailable) ||
+	retryable := errors.Is(err, runtimeplugin.ErrUnavailable) || errors.Is(err, registry.ErrUnavailable) ||
 		errors.Is(err, registry.ErrRateLimited) || errors.Is(err, store.ErrUnavailable)
 
 	return domain.ApplyFailed(retryable)

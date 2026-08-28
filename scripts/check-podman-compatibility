@@ -40,7 +40,7 @@ printf '%s  %s\n' "$package_sha256" "$temporary_dir/$package_name" | sha256sum -
 (
 	cd "$repo_root"
 	CGO_ENABLED=0 go test -c \
-		-o "$temporary_dir/podman-compatibility.test" ./internal/runtime/podman
+		-o "$temporary_dir/podman-compatibility.test" ./plugins/runtime/podman
 )
 
 docker pull "$base_image"

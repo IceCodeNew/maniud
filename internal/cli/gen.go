@@ -15,15 +15,11 @@ import (
 	"github.com/IceCodeNew/maniud/internal/imagearchive"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/registry"
-	containerdruntime "github.com/IceCodeNew/maniud/internal/runtime/containerd"
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
+	runtimeplugin "github.com/IceCodeNew/maniud/plugins/runtime"
 )
 
-const (
-	nerdctlRuntimeCommand          = "nerdctl"
-	containerdAddressEnvironment   = "CONTAINERD_ADDRESS"
-	containerdNamespaceEnvironment = "CONTAINERD_NAMESPACE"
-)
+const nerdctlRuntimeCommand = "nerdctl"
 
 type genImageResolver interface {
 	Resolve(ctx context.Context, source imageref.Source, platform domain.Platform) (domain.ImageIdentity, error)
@@ -77,6 +73,7 @@ func defaultGenDependencies(
 	environment map[string]string,
 	stderr io.Writer,
 	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
 ) (genDependencies, error) {
 	workingDirectory, err := getWorkingDirectory()
 	if err != nil {
@@ -86,7 +83,7 @@ func defaultGenDependencies(
 		return genDependencies{}, fmt.Errorf("resolve generation working directory: %w", runtimeargv.ErrInvalid)
 	}
 	openRuntime := func(ctx context.Context, runtimeKind domain.RuntimeKind) (applyRuntime, error) {
-		return openApplyRuntime(ctx, runtimeKind, environment, stderr)
+		return openApplyRuntime(ctx, runtimeKind, environment, stderr, runtimes)
 	}
 
 	return genDependencies{
@@ -100,10 +97,10 @@ func defaultGenDependencies(
 			source imageref.Source,
 			platform domain.Platform,
 		) (domain.ImageIdentity, error) {
-			return containerdruntime.ResolveLocalImage(
+			return runtimes.ResolveLocalImage(
 				ctx,
-				environment[containerdAddressEnvironment],
-				environment[containerdNamespaceEnvironment],
+				domain.RuntimeContainerd,
+				runtimeEnvironment(environment),
 				source,
 				platform,
 			)
@@ -559,8 +556,12 @@ func classifyGenFailure(err error) *domain.FailureError {
 	if errors.Is(err, context.Canceled) || errors.Is(err, registry.ErrCancelled) {
 		return domain.OperationCancelled()
 	}
+	if errors.Is(err, runtimeplugin.ErrNotBuilt) {
+		return domain.RuntimeNotBuilt()
+	}
 
-	retryable := errors.Is(err, registry.ErrUnavailable) || errors.Is(err, registry.ErrRateLimited)
+	retryable := errors.Is(err, runtimeplugin.ErrUnavailable) || errors.Is(err, registry.ErrUnavailable) ||
+		errors.Is(err, registry.ErrRateLimited)
 
 	return domain.GenerationFailed(retryable)
 }
