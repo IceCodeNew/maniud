@@ -596,6 +596,8 @@ run_step 'Install mise' install_mise
 run_step 'Configure mise for login shells' configure_mise_login_shell
 run_step 'Install golang' install_golang
 run_step 'Install mise-managed tools' install_mise_tools
+run_step 'Download Go module dependencies' "$repo_root/scripts/run-go-modules" go mod download
+run_step 'Prepare prek hook environments' prek prepare-hooks --no-progress
 run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
 run_step 'Configure signed Git commits' configure_git
 run_step 'Disable commit identity trailers' configure_amp_commit_privacy
