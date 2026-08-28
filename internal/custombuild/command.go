@@ -15,7 +15,6 @@ type commandRunner func(context.Context, string, []string, string, string, ...st
 func buildEnvironment(goos, goarch string) []string {
 	return replacedEnvironment(os.Environ(), []string{
 		"CGO_ENABLED=0",
-		"GOENV=off",
 		"GOFLAGS=",
 		"GOOS=" + goos,
 		"GOARCH=" + goarch,

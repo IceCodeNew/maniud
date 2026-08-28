@@ -4,9 +4,35 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestBuildEnvironmentPreservesGoConfiguration(t *testing.T) {
+	goEnvironment := filepath.Join(t.TempDir(), "go-env")
+	t.Setenv("GOENV", goEnvironment)
+	t.Setenv("GOPROXY", "https://proxy.example.test")
+	t.Setenv("GOOS", "old")
+
+	got := buildEnvironment("linux", "arm64")
+	for _, want := range []string{
+		"GOENV=" + goEnvironment,
+		"GOPROXY=https://proxy.example.test",
+		"GOOS=linux",
+		"GOARCH=arm64",
+		"CGO_ENABLED=0",
+		"GOFLAGS=",
+		"GOWORK=off",
+	} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("buildEnvironment() = %q; missing %q", got, want)
+		}
+	}
+	if slices.Contains(got, "GOOS=old") {
+		t.Fatalf("buildEnvironment() = %q; kept old GOOS", got)
+	}
+}
 
 func TestRunCommandBoundsAndReportsProcessFailures(t *testing.T) {
 	t.Parallel()
