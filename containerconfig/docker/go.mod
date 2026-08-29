@@ -3,7 +3,7 @@ module github.com/IceCodeNew/maniud/containerconfig/docker
 go 1.27.0
 
 require (
-	github.com/IceCodeNew/maniud/containerconfig v0.1.0
+	github.com/IceCodeNew/maniud/containerconfig v0.2.0
 	github.com/moby/moby/api v1.55.0
 )
 

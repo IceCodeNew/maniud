@@ -3,15 +3,15 @@ module github.com/IceCodeNew/maniud
 go 1.27.0
 
 require (
-	github.com/IceCodeNew/maniud/argv v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/compose v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/containerd v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/docker v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/nerdctl v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/podman v0.1.0
-	github.com/IceCodeNew/maniud/containerconfig/runtimeargv v0.1.0
-	github.com/IceCodeNew/maniud/imageref v0.1.0
+	github.com/IceCodeNew/maniud/argv v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/compose v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/containerd v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/docker v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/nerdctl v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/podman v0.2.0
+	github.com/IceCodeNew/maniud/containerconfig/runtimeargv v0.2.0
+	github.com/IceCodeNew/maniud/imageref v0.2.0
 	github.com/alecthomas/kong v1.16.1
 	github.com/compose-spec/compose-go/v2 v2.14.0
 	github.com/containerd/containerd/api v1.11.1
