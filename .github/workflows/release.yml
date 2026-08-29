@@ -94,7 +94,8 @@ jobs:
               "$tested_sha" >&2
             exit 1
           fi
-          git show "${tested_sha}:go.mod" > "$RUNNER_TEMP/tested-go.mod"
+          # setup-go recognizes module manifests by their exact basename.
+          git show "${tested_sha}:go.mod" > "$RUNNER_TEMP/go.mod"
           printf 'Using successful Checks run %s for %s\n' "$run_id" "$run_sha"
       - name: Select next stable version
         id: release
@@ -193,7 +194,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: ${{ runner.temp }}/tested-go.mod
+          go-version-file: ${{ runner.temp }}/go.mod
           cache: false
       - name: Prepare synchronized module manifests
         id: prepare
