@@ -38,6 +38,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify current master and exact-SHA checks
+        id: revision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -56,6 +57,7 @@ jobs:
           tested_sha="$GITHUB_SHA"
           subject="$(git show -s --format=%s "$GITHUB_SHA")"
           if [[ "$subject" =~ ^chore\(release\):\ prepare\ v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            prepared_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
             IFS=$'\t' read -r commit_sha parent_count parent_sha signature_valid < <(
               gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
                 --jq '[.sha, (.parents | length), .parents[0].sha,
@@ -65,10 +67,15 @@ jobs:
             invalid_files="$(grep -Ev '(^|/)go\.mod$' <<< "$changed_files" || true)"
             if [[ "$commit_sha" != "$GITHUB_SHA" || "$parent_count" != 1 || \
                   "$signature_valid" != true || -z "$changed_files" || -n "$invalid_files" ]]; then
-              printf 'Release preparation commit %s is invalid\n' "$GITHUB_SHA" >&2
+              printf 'Release preparation commit %s must be a signed one-parent commit changing only go.mod files\n' \
+                "$GITHUB_SHA" >&2
+              printf 'parents=%s signed=%s changed files:\n%s\n' \
+                "$parent_count" "$signature_valid" "$changed_files" >&2
               exit 1
             fi
             tested_sha="$parent_sha"
+            printf 'prepared_parent=%s\nprepared_version=%s\n' \
+              "$parent_sha" "$prepared_version" >> "$GITHUB_OUTPUT"
           fi
 
           read -r run_id run_sha run_event run_conclusion < <(
@@ -87,6 +94,7 @@ jobs:
               "$tested_sha" >&2
             exit 1
           fi
+          git show "${tested_sha}:go.mod" > "$RUNNER_TEMP/tested-go.mod"
           printf 'Using successful Checks run %s for %s\n' "$run_id" "$run_sha"
       - name: Select next stable version
         id: release
@@ -185,18 +193,38 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ runner.temp }}/tested-go.mod
           cache: false
       - name: Prepare synchronized module manifests
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
+          PREPARED_PARENT: ${{ steps.revision.outputs.prepared_parent }}
+          PREPARED_VERSION: ${{ steps.revision.outputs.prepared_version }}
           RELEASE_BUMP: ${{ inputs.bump }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RESUME_DRAFT: ${{ steps.release.outputs.resume-draft }}
         run: |
           set -euo pipefail
+          if [[ -n "$PREPARED_PARENT" ]]; then
+            if [[ "$PREPARED_VERSION" != "$RELEASE_VERSION" ]]; then
+              printf 'Prepared release commit declares %s, but the selected release version is %s\n' \
+                "$PREPARED_VERSION" "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+
+            replay_root="$RUNNER_TEMP/release-parent"
+            git worktree add --detach "$replay_root" "$PREPARED_PARENT"
+            "$replay_root/scripts/set-release-module-version" "$RELEASE_VERSION"
+            "$replay_root/scripts/check-release-module-version" "$RELEASE_VERSION"
+            if ! git -C "$replay_root" diff --exit-code "$GITHUB_SHA" --; then
+              printf 'Release preparation commit %s does not match manifests generated from tested parent %s for %s\n' \
+                "$GITHUB_SHA" "$PREPARED_PARENT" "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+          fi
+
           scripts/set-release-module-version "$RELEASE_VERSION"
           scripts/check-release-module-version "$RELEASE_VERSION"
 
