@@ -55,6 +55,15 @@
       "matchDatasources": ["go"],
       "matchRegistryUrls": ["https://golang.flatt.tech"],
       "minimumReleaseAge": null
+    },
+    {
+      "description": "Release containerconfig modules together",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": [
+        "github.com/IceCodeNew/maniud/containerconfig",
+        "github.com/IceCodeNew/maniud/containerconfig/**"
+      ],
+      "enabled": false
     }
   ],
   "automergeType": "branch",

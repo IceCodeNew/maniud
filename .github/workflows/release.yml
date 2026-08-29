@@ -20,16 +20,17 @@ concurrency:
 
 jobs:
   preflight:
-    name: Select tested master revision
+    name: Prepare tested release revision
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      actions: read
-      contents: read
+      actions: write
+      contents: write
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       resume-draft: ${{ steps.release.outputs.resume-draft }}
+      publish: ${{ steps.prepare.outputs.publish }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,6 +38,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify current master and exact-SHA checks
+        id: revision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,21 +54,47 @@ jobs:
             exit 1
           fi
 
+          tested_sha="$GITHUB_SHA"
+          subject="$(git show -s --format=%s "$GITHUB_SHA")"
+          if [[ "$subject" =~ ^chore\(release\):\ prepare\ v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            prepared_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            IFS=$'\t' read -r commit_sha parent_count parent_sha signature_valid < <(
+              gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
+                --jq '[.sha, (.parents | length), .parents[0].sha,
+                       .commit.verification.verified] | @tsv'
+            )
+            changed_files="$(git diff --name-only "$parent_sha" "$GITHUB_SHA")"
+            invalid_files="$(grep -Ev '(^|/)go\.mod$' <<< "$changed_files" || true)"
+            if [[ "$commit_sha" != "$GITHUB_SHA" || "$parent_count" != 1 || \
+                  "$signature_valid" != true || -z "$changed_files" || -n "$invalid_files" ]]; then
+              printf 'Release preparation commit %s must be a signed one-parent commit changing only go.mod files\n' \
+                "$GITHUB_SHA" >&2
+              printf 'parents=%s signed=%s changed files:\n%s\n' \
+                "$parent_count" "$signature_valid" "$changed_files" >&2
+              exit 1
+            fi
+            tested_sha="$parent_sha"
+            printf 'prepared_parent=%s\nprepared_version=%s\n' \
+              "$parent_sha" "$prepared_version" >> "$GITHUB_OUTPUT"
+          fi
+
           read -r run_id run_sha run_event run_conclusion < <(
             gh api --method GET \
               "repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
               -f branch=master \
               -f event=push \
-              -f head_sha="$GITHUB_SHA" \
+              -f head_sha="$tested_sha" \
               -f status=success \
               -F per_page=1 \
               --jq '.workflow_runs[0] | [.id, .head_sha, .event, .conclusion] | @tsv'
           )
-          if [[ -z "${run_id:-}" || "$run_sha" != "$GITHUB_SHA" || \
+          if [[ -z "${run_id:-}" || "$run_sha" != "$tested_sha" || \
                 "$run_event" != push || "$run_conclusion" != success ]]; then
-            printf 'Checks has no successful master push run for exact SHA %s\n' "$GITHUB_SHA" >&2
+            printf 'Checks has no successful master push run for tested SHA %s\n' \
+              "$tested_sha" >&2
             exit 1
           fi
+          git show "${tested_sha}:go.mod" > "$RUNNER_TEMP/tested-go.mod"
           printf 'Using successful Checks run %s for %s\n' "$run_id" "$run_sha"
       - name: Select next stable version
         id: release
@@ -165,16 +193,137 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ runner.temp }}/tested-go.mod
           cache: false
-      - name: Verify public module dependency versions
+      - name: Prepare synchronized module manifests
+        id: prepare
         env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_PARENT: ${{ steps.revision.outputs.prepared_parent }}
+          PREPARED_VERSION: ${{ steps.revision.outputs.prepared_version }}
+          RELEASE_BUMP: ${{ inputs.bump }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
-        run: scripts/check-release-module-version "$RELEASE_VERSION"
+          RESUME_DRAFT: ${{ steps.release.outputs.resume-draft }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$PREPARED_PARENT" ]]; then
+            if [[ "$PREPARED_VERSION" != "$RELEASE_VERSION" ]]; then
+              printf 'Prepared release commit declares %s, but the selected release version is %s\n' \
+                "$PREPARED_VERSION" "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+
+            replay_root="$RUNNER_TEMP/release-parent"
+            git worktree add --detach "$replay_root" "$PREPARED_PARENT"
+            "$replay_root/scripts/set-release-module-version" "$RELEASE_VERSION"
+            "$replay_root/scripts/check-release-module-version" "$RELEASE_VERSION"
+            if ! git -C "$replay_root" diff --exit-code "$GITHUB_SHA" --; then
+              printf 'Release preparation commit %s does not match manifests generated from tested parent %s for %s\n' \
+                "$GITHUB_SHA" "$PREPARED_PARENT" "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+          fi
+
+          scripts/set-release-module-version "$RELEASE_VERSION"
+          scripts/check-release-module-version "$RELEASE_VERSION"
+
+          changed_manifests="$(git diff --name-only -- ':(glob)**/go.mod')"
+          changed_files="$(git diff --name-only)"
+          if [[ "$changed_files" != "$changed_manifests" ]]; then
+            printf 'Release preparation changed files outside tracked go.mod manifests:\n%s\n' \
+              "$changed_files" >&2
+            exit 1
+          fi
+          if [[ -z "$changed_manifests" ]]; then
+            printf 'publish=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$RESUME_DRAFT" == true ]]; then
+            printf 'Draft release %s targets manifests that do not declare %s\n' \
+              "$RELEASE_TAG" "$RELEASE_VERSION" >&2
+            exit 1
+          fi
+
+          additions='[]'
+          while IFS= read -r path; do
+            contents="$(base64 -w 0 "$path")"
+            additions="$(
+              jq -c \
+                --arg path "$path" \
+                --arg contents "$contents" \
+                '. + [{path: $path, contents: $contents}]' \
+                <<< "$additions"
+            )"
+          done <<< "$changed_manifests"
+          query="mutation(\$input: CreateCommitOnBranchInput!) {
+            createCommitOnBranch(input: \$input) { commit { oid } }
+          }"
+          request="$(
+            jq -cn \
+              --arg query "$query" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg expected "$GITHUB_SHA" \
+              --arg message "chore(release): prepare $RELEASE_TAG" \
+              --argjson additions "$additions" \
+              '{
+                query: $query,
+                variables: {
+                  input: {
+                    branch: {
+                      repositoryNameWithOwner: $repository,
+                      branchName: "master"
+                    },
+                    expectedHeadOid: $expected,
+                    message: {headline: $message},
+                    fileChanges: {additions: $additions}
+                  }
+                }
+              }'
+          )"
+          release_sha="$(
+            gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid' \
+              <<< "$request"
+          )"
+          if [[ ! "$release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'GitHub did not return the prepared release commit SHA\n' >&2
+            exit 1
+          fi
+
+          read -r commit_sha parent_count parent_sha signature_valid < <(
+            gh api "repos/$GITHUB_REPOSITORY/commits/$release_sha" \
+              --jq '[.sha, (.parents | length), .parents[0].sha,
+                     .commit.verification.verified] | @tsv'
+          )
+          if [[ "$commit_sha" != "$release_sha" || "$parent_count" != 1 || \
+                "$parent_sha" != "$GITHUB_SHA" || "$signature_valid" != true ]]; then
+            printf 'Prepared release commit %s is not a signed child of %s\n' \
+              "$release_sha" "$GITHUB_SHA" >&2
+            exit 1
+          fi
+          remote_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [[ "$remote_sha" != "$release_sha" ]]; then
+            printf 'master does not point to prepared release commit %s; found %s\n' \
+              "$release_sha" "$remote_sha" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$release_sha"
+          git diff --exit-code "$release_sha" --
+
+          remote_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [[ "$remote_sha" != "$release_sha" ]]; then
+            printf 'master moved while checking prepared release commit %s; found %s\n' \
+              "$release_sha" "$remote_sha" >&2
+            exit 1
+          fi
+          gh workflow run release.yml --ref master -f bump="$RELEASE_BUMP"
+          printf 'Prepared signed release commit %s and queued its Release run\n' "$release_sha"
+          printf 'publish=false\n' >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: preflight
+    if: needs.preflight.outputs.publish == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -243,6 +392,7 @@ jobs:
     needs:
       - preflight
       - build
+    if: needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
