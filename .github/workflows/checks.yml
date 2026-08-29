@@ -1,6 +1,7 @@
 name: Checks
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - ".agents/**"
@@ -59,7 +60,7 @@ jobs:
   quality:
     name: Quality and dependency policy
     if: >-
-      github.event_name == 'push' ||
+      github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name != github.repository ||
       !startsWith(github.head_ref, 'renovate/')
     runs-on: ubuntu-24.04

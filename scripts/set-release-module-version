@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 1)) || [[ ! "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+	printf 'usage: %s VERSION\n' "$0" >&2
+	exit 2
+fi
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+version="v$1"
+module_prefix='github.com/IceCodeNew/maniud/'
+
+while IFS= read -r module; do
+	module_root="$repository_root/$module"
+	while IFS= read -r dependency; do
+		(
+			cd "$module_root"
+			GOWORK=off go mod edit "-require=$dependency@$version"
+		)
+	done < <(
+		cd "$module_root"
+		GOWORK=off go mod edit -json |
+			jq -r --arg prefix "$module_prefix" \
+				'(.Require // [])[] | select(.Path | startswith($prefix)) | .Path'
+	)
+done < <("$repository_root/scripts/list-go-modules")

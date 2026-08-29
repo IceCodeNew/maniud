@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 1)); then
+	printf 'usage: %s COMMIT_SHA\n' "$0" >&2
+	exit 2
+fi
+if ((${#1} != 40)) || [[ "$1" == *[!0-9a-f]* ]]; then
+	printf 'usage: %s COMMIT_SHA\n' "$0" >&2
+	exit 2
+fi
+if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+	printf '%s\n' 'GITHUB_REPOSITORY must name the release repository.' >&2
+	exit 2
+fi
+
+commit_sha="$1"
+
+successful_run_id="$(
+	gh api --method GET \
+		"repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+		-f branch=master \
+		-f head_sha="$commit_sha" \
+		-f status=success \
+		-F per_page=100 \
+		--jq '[.workflow_runs[] |
+			select(.event == "push" or .event == "workflow_dispatch")][0].id // empty'
+)"
+if [[ -n "$successful_run_id" ]]; then
+	printf 'Using successful Checks run %s for %s\n' "$successful_run_id" "$commit_sha"
+	exit 0
+fi
+
+previous_run_id="$(
+	gh api --method GET \
+		"repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+		-f branch=master \
+		-f event=workflow_dispatch \
+		-f head_sha="$commit_sha" \
+		-F per_page=1 \
+		--jq '.workflow_runs[0].id // 0'
+)"
+gh workflow run checks.yml --repo "$GITHUB_REPOSITORY" --ref master
+checks_run_id=
+for _ in {1..60}; do
+	checks_run_id="$(
+		gh api --method GET \
+			"repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+			-f branch=master \
+			-f event=workflow_dispatch \
+			-f head_sha="$commit_sha" \
+			-F per_page=100 \
+			--jq "[.workflow_runs[] | select(.id > $previous_run_id)][0].id // empty"
+	)"
+	if [[ -n "$checks_run_id" ]]; then
+		break
+	fi
+	sleep 2
+done
+if [[ -z "$checks_run_id" ]]; then
+	printf 'Checks did not start for commit %s\n' "$commit_sha" >&2
+	exit 1
+fi
+
+gh run watch "$checks_run_id" --repo "$GITHUB_REPOSITORY" --exit-status
