@@ -14,6 +14,8 @@ import (
 type tuiCatalog struct {
 	registrationPath string
 	loadSource       func(context.Context, string) (compose.Source, error)
+	environment      map[string]string
+	suggestedPath    string
 }
 
 func defaultTUICatalog(
@@ -24,17 +26,24 @@ func defaultTUICatalog(
 	if err != nil {
 		return &tuiCatalog{loadSource: loadSource}
 	}
+	home := environment[homeKey]
+	suggestedPath := ""
+	if filepath.IsAbs(home) && filepath.Clean(home) == home {
+		suggestedPath = filepath.Join(home, "maniud-desired-state")
+	}
 
 	return &tuiCatalog{
 		registrationPath: gitOpsRegistrationPath(statePath),
 		loadSource:       loadSource,
+		environment:      environment,
+		suggestedPath:    suggestedPath,
 	}
 }
 
 func (catalog *tuiCatalog) Snapshot(ctx context.Context) tui.CatalogSnapshot {
 	registration, state := catalog.registration()
 	if state != tui.CatalogReady {
-		return tui.CatalogSnapshot{State: state}
+		return tui.CatalogSnapshot{State: state, SuggestedRepository: catalog.suggestedPath}
 	}
 
 	paths, err := listGitOpsServiceFiles(registration.Repository)
@@ -64,7 +73,9 @@ func (catalog *tuiCatalog) Snapshot(ctx context.Context) tui.CatalogSnapshot {
 		services = append(services, service)
 	}
 
-	return tui.CatalogSnapshot{State: tui.CatalogReady, Services: services}
+	return tui.CatalogSnapshot{
+		State: tui.CatalogReady, Services: services, SuggestedRepository: catalog.suggestedPath,
+	}
 }
 
 func (catalog *tuiCatalog) OpenRegistered(ctx context.Context, id string) tui.OpenResult {
@@ -104,6 +115,20 @@ func (catalog *tuiCatalog) OpenPath(ctx context.Context, path string) tui.OpenRe
 	}
 
 	return result
+}
+
+func (catalog *tuiCatalog) Register(ctx context.Context, path string) tui.RegistrationResult {
+	err := executeGitOpsInit(ctx, gitOpsInitInvocation{repository: path, branch: defaultGitOpsBranch}, catalog.environment)
+	if err != nil {
+		blocker := tui.BlockerUnavailable
+		if errors.Is(err, errGitOpsRepositoryInvalid) || errors.Is(err, errGitOpsRegistrationExists) {
+			blocker = tui.BlockerInvalid
+		}
+
+		return tui.RegistrationResult{Blocker: blocker}
+	}
+
+	return tui.RegistrationResult{Snapshot: catalog.Snapshot(ctx)}
 }
 
 func (catalog *tuiCatalog) registration() (gitOpsRegistration, tui.CatalogState) {

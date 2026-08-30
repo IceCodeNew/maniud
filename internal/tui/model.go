@@ -15,6 +15,7 @@ import (
 const (
 	statusReady         = "Ready for confirmation"
 	statusRefreshing    = "Refreshing review"
+	statusReviewLarger  = "Review again at a larger terminal"
 	keyEscape           = "esc"
 	keyEnter            = "enter"
 	keyDown             = "down"
@@ -42,6 +43,11 @@ type catalogResultMsg struct {
 type openResultMsg struct {
 	sequence uint64
 	result   OpenResult
+}
+
+type registrationResultMsg struct {
+	sequence uint64
+	result   RegistrationResult
 }
 
 type snapshotResultMsg struct {
@@ -76,6 +82,19 @@ type openPathPage struct {
 }
 
 func (openPathPage) isPage() {}
+
+type registrationPage struct {
+	value string
+}
+
+func (registrationPage) isPage() {}
+
+type registrationConfirmationPage struct {
+	registration registrationPage
+	focus        confirmationFocus
+}
+
+func (registrationConfirmationPage) isPage() {}
 
 type serviceChoice struct {
 	project string
@@ -149,6 +168,7 @@ type model struct {
 	cancel             context.CancelFunc
 	err                error
 	quitAfterOperation bool
+	registrationSeen   bool
 }
 
 func newModel(
@@ -190,6 +210,8 @@ func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:iret
 		return state, state.handleCatalogResult(message)
 	case openResultMsg:
 		return state, state.handleOpenResult(message)
+	case registrationResultMsg:
+		return state, state.handleRegistrationResult(message)
 	case snapshotResultMsg:
 		return state, state.handleSnapshotResult(message)
 	case applyResultMsg:
@@ -209,16 +231,27 @@ func (state *model) resize(width, height int) {
 	state.height = max(height, 1)
 	current := layoutFor(state.width, state.height)
 	if previous >= layoutCompact && current < layoutCompact {
-		if confirmation, valid := state.page.(confirmationPage); valid {
-			state.page = confirmation.review
-			state.status = "Review again at a larger terminal"
-		}
+		state.invalidateConfirmation()
+	}
+}
+
+func (state *model) invalidateConfirmation() {
+	switch current := state.page.(type) {
+	case confirmationPage:
+		state.page = current.review
+		state.status = statusReviewLarger
+	case registrationConfirmationPage:
+		state.page = current.registration
+		state.status = statusReviewLarger
 	}
 }
 
 func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 	key := message.String()
 	if command, handled := state.handleSessionKey(key); handled {
+		return command
+	}
+	if command, handled := state.handleRegistrationPageKey(message); handled {
 		return command
 	}
 
@@ -237,6 +270,19 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 		return state.handleConfirmationKey(current, key)
 	default:
 		return nil
+	}
+}
+
+func (state *model) handleRegistrationPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
+	switch current := state.page.(type) {
+	case registrationPage:
+		state.handleRegistrationKey(current, message)
+
+		return nil, true
+	case registrationConfirmationPage:
+		return state.handleRegistrationConfirmationKey(current, message.String()), true
+	default:
+		return nil, false
 	}
 }
 
@@ -260,7 +306,8 @@ func (state *model) handleSessionKey(key string) (tea.Cmd, bool) {
 }
 
 func (state *model) handleHomeKey(current homePage, key string) tea.Cmd {
-	items := len(current.catalog.Services) + 1
+	setupIndex := registrationSetupIndex(current.catalog)
+	items := homeItemCount(current.catalog)
 	switch key {
 	case "up", "k":
 		current.cursor = (current.cursor - 1 + items) % items
@@ -270,6 +317,12 @@ func (state *model) handleHomeKey(current homePage, key string) tea.Cmd {
 		if current.cursor == len(current.catalog.Services) {
 			state.page = openPathPage{}
 			state.status = "Enter a committed Compose path"
+
+			return nil
+		}
+		if current.cursor == setupIndex {
+			state.page = registrationPage{value: current.catalog.SuggestedRepository}
+			state.status = "Review the desired-state repository path"
 
 			return nil
 		}
@@ -289,6 +342,23 @@ func (state *model) handleHomeKey(current homePage, key string) tea.Cmd {
 	state.page = current
 
 	return nil
+}
+
+func homeItemCount(catalog CatalogSnapshot) int {
+	count := len(catalog.Services) + 1
+	if registrationSetupIndex(catalog) >= 0 {
+		count++
+	}
+
+	return count
+}
+
+func registrationSetupIndex(catalog CatalogSnapshot) int {
+	if catalog.State == CatalogReady || catalog.SuggestedRepository == "" {
+		return -1
+	}
+
+	return len(catalog.Services) + 1
 }
 
 func (state *model) handleOpenPathKey(current openPathPage, message tea.KeyPressMsg) tea.Cmd {
@@ -317,6 +387,93 @@ func (state *model) handleOpenPathKey(current openPathPage, message tea.KeyPress
 				current.value = candidate
 			}
 		}
+	}
+	state.page = current
+
+	return nil
+}
+
+func (state *model) handleRegistrationKey(current registrationPage, message tea.KeyPressMsg) {
+	switch message.String() {
+	case keyEnter:
+		if current.value == "" {
+			state.status = "Enter a repository path"
+
+			return
+		}
+		state.page = registrationConfirmationPage{registration: current, focus: confirmationBack}
+		state.status = "Confirm repository setup or go back"
+
+		return
+	case keyEscape:
+		state.registrationSeen = true
+		state.page = homePage{catalog: CatalogSnapshot{
+			State: CatalogMissing, SuggestedRepository: current.value,
+		}}
+		state.status = "No registered repository"
+
+		return
+	}
+
+	current.value = editSingleLine(current.value, message)
+	state.page = current
+}
+
+func editSingleLine(value string, message tea.KeyPressMsg) string {
+	if message.String() == "backspace" {
+		characters := []rune(value)
+		if len(characters) > 0 {
+			return string(characters[:len(characters)-1])
+		}
+
+		return value
+	}
+	text := message.Key().Text
+	if !printableSingleLine(text) {
+		return value
+	}
+	candidate := value + text
+	if _, err := terminaltext.Canonicalize(candidate, displayLimits()); err != nil {
+		return value
+	}
+
+	return candidate
+}
+
+func (state *model) handleRegistrationConfirmationKey(
+	current registrationConfirmationPage,
+	key string,
+) tea.Cmd {
+	if layoutFor(state.width, state.height) < layoutCompact {
+		state.page = current.registration
+		state.status = statusReviewLarger
+
+		return nil
+	}
+
+	switch key {
+	case keyTab, "left", "right", "shift+tab":
+		if current.focus == confirmationBack {
+			current.focus = confirmationApply
+		} else {
+			current.focus = confirmationBack
+		}
+	case keyEnter:
+		if current.focus == confirmationBack {
+			state.page = current.registration
+			state.status = "Review repository path"
+
+			return nil
+		}
+
+		return state.startRegistration(current.registration.value)
+	case keyEscape:
+		state.page = current.registration
+		state.status = "Review repository path"
+
+		return nil
+	case keyQuit:
+		return tea.Quit
 	}
 	state.page = current
 
@@ -483,6 +640,16 @@ func (state *model) startOpenPath(path string) tea.Cmd {
 	})
 }
 
+func (state *model) startRegistration(path string) tea.Cmd {
+	return state.begin("Setting up repository", func(ctx context.Context, sequence uint64) tea.Cmd {
+		catalog := state.catalog
+
+		return func() tea.Msg {
+			return registrationResultMsg{sequence: sequence, result: catalog.Register(ctx, path)}
+		}
+	})
+}
+
 func (state *model) startSnapshot(request application.Request) tea.Cmd {
 	state.activeRequest = request
 
@@ -522,8 +689,34 @@ func (state *model) handleCatalogResult(result catalogResultMsg) tea.Cmd {
 	}
 
 	snapshot := canonicalCatalog(result.snapshot)
+	if snapshot.State == CatalogMissing && snapshot.SuggestedRepository != "" && !state.registrationSeen {
+		state.registrationSeen = true
+		state.page = registrationPage{value: snapshot.SuggestedRepository}
+		state.status = "Set up a desired-state repository or press Esc to skip"
+
+		return command
+	}
 	state.page = homePage{catalog: snapshot}
 	state.status = catalogMessage(snapshot)
+
+	return command
+}
+
+func (state *model) handleRegistrationResult(result registrationResultMsg) tea.Cmd {
+	accepted, command := state.completeOperation(result.sequence, nil)
+	if !accepted {
+		return command
+	}
+	if result.result.Blocker != BlockerNone {
+		state.status = blockerMessage(result.result.Blocker)
+
+		return command
+	}
+
+	snapshot := canonicalCatalog(result.result.Snapshot)
+	state.page = homePage{catalog: snapshot}
+	state.status = "Repository ready"
+	state.mutationOutcome = "Repository created"
 
 	return command
 }
@@ -653,6 +846,13 @@ func (state *model) finishOperation() {
 }
 
 func canonicalCatalog(snapshot CatalogSnapshot) CatalogSnapshot {
+	suggested, err := canonicalDisplay(snapshot.SuggestedRepository)
+	if err != nil {
+		snapshot.State = CatalogUnavailable
+		snapshot.SuggestedRepository = ""
+	} else {
+		snapshot.SuggestedRepository = suggested
+	}
 	services := make([]Service, 0, len(snapshot.Services))
 	for _, service := range snapshot.Services {
 		location, locationErr := canonicalDisplay(service.Location)

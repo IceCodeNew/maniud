@@ -38,6 +38,7 @@ type catalogFixture struct {
 	snapshot         CatalogSnapshot
 	registeredResult OpenResult
 	pathResult       OpenResult
+	registration     RegistrationResult
 	calls            []string
 	ready            chan struct{}
 	readyOnce        sync.Once
@@ -62,6 +63,12 @@ func (fixture *catalogFixture) OpenPath(_ context.Context, path string) OpenResu
 	fixture.record("path:" + path)
 
 	return fixture.pathResult
+}
+
+func (fixture *catalogFixture) Register(_ context.Context, path string) RegistrationResult {
+	fixture.record("register:" + path)
+
+	return fixture.registration
 }
 
 func (fixture *catalogFixture) record(call string) {

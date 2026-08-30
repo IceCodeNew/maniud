@@ -170,6 +170,8 @@ func (state *model) locationLine() string {
 		return "Home / Select service"
 	case openPathPage:
 		return "Home / Open Compose file"
+	case registrationPage, registrationConfirmationPage:
+		return "Home / Repository setup"
 	default:
 		return "Home"
 	}
@@ -207,20 +209,22 @@ func (state *model) rail() []string {
 }
 
 func (state *model) body(width int, compact bool) []string {
-	var lines []string
-	switch current := state.page.(type) {
-	case homePage:
-		lines = state.homeBody(current, width)
-	case openPathPage:
-		lines = state.openPathBody(current, width)
-	case selectServicePage:
-		lines = state.selectServiceBody(current, width)
-	case reviewPage:
-		lines = state.reviewBody(current, width, compact)
-	case detailsPage:
-		lines = state.detailsBody(current, width)
-	case confirmationPage:
-		lines = state.confirmationBody(current, width)
+	lines, setupPage := state.registrationPageBody(width)
+	if !setupPage {
+		switch current := state.page.(type) {
+		case homePage:
+			lines = state.homeBody(current, width)
+		case openPathPage:
+			lines = state.openPathBody(current, width)
+		case selectServicePage:
+			lines = state.selectServiceBody(current, width)
+		case reviewPage:
+			lines = state.reviewBody(current, width, compact)
+		case detailsPage:
+			lines = state.detailsBody(current, width)
+		case confirmationPage:
+			lines = state.confirmationBody(current, width)
+		}
 	}
 
 	if state.mutationOutcome != "" {
@@ -232,6 +236,17 @@ func (state *model) body(width int, compact bool) []string {
 	}
 
 	return lines
+}
+
+func (state *model) registrationPageBody(width int) ([]string, bool) {
+	switch current := state.page.(type) {
+	case registrationPage:
+		return state.registrationBody(current, width), true
+	case registrationConfirmationPage:
+		return state.registrationConfirmationBody(current, width), true
+	default:
+		return nil, false
+	}
 }
 
 func (state *model) homeBody(current homePage, width int) []string {
@@ -254,6 +269,11 @@ func (state *model) homeBody(current homePage, width int) []string {
 		lines = append(lines, state.choice(index == current.cursor, label, width))
 	}
 	lines = append(lines, "", state.choice(current.cursor == len(current.catalog.Services), "Open Compose file", width))
+	if registrationSetupIndex(current.catalog) >= 0 {
+		lines = append(lines, state.choice(
+			current.cursor == len(current.catalog.Services)+1, "Set up desired-state repository", width,
+		))
+	}
 
 	return lines
 }
@@ -272,6 +292,38 @@ func (state *model) openPathBody(current openPathPage, width int) []string {
 		state.accent(line + state.symbol("▌", "_")),
 		"",
 		state.muted("Enter  Open    Esc  Back"),
+	}
+}
+
+func (state *model) registrationBody(current registrationPage, width int) []string {
+	line := "Path  " + terminaltext.Middle(current.value, max(width-pathLabelWidth, 1), "…")
+
+	return []string{
+		state.title("Set up repository"),
+		"Create or register the desired-state repository used by maniud.",
+		"",
+		line,
+		"",
+		state.muted("Enter Review   Esc Skip"),
+	}
+}
+
+func (state *model) registrationConfirmationBody(
+	current registrationConfirmationPage,
+	width int,
+) []string {
+	path := terminaltext.Middle(current.registration.value, max(width-pathLabelWidth, 1), "…")
+
+	return []string{
+		state.title("Confirm repository setup"),
+		"Create a Git repository when the path is absent, or register a clean existing checkout.",
+		"",
+		"Path  " + path,
+		"",
+		state.choice(current.focus == confirmationBack, "Back", width),
+		state.choice(current.focus == confirmationApply, "Set up repository", width),
+		"",
+		state.muted("Tab Change focus   Enter Select   Esc Back"),
 	}
 }
 
@@ -377,6 +429,10 @@ func (state *model) footer(width int) string {
 		keys = "Tab Focus   Enter Choose   Esc Back   q Quit"
 	case openPathPage:
 		keys = "Type path   Enter Open   Esc Back"
+	case registrationPage:
+		keys = "Edit path   Enter Review   Esc Skip"
+	case registrationConfirmationPage:
+		keys = "Tab Focus   Enter Choose   Esc Back   q Quit"
 	}
 
 	return state.muted(terminaltext.Clip(keys, width))

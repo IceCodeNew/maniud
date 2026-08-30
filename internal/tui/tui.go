@@ -56,8 +56,15 @@ type Service struct {
 
 // CatalogSnapshot is one fresh registered-service inventory.
 type CatalogSnapshot struct {
-	State    CatalogState
-	Services []Service
+	State               CatalogState
+	Services            []Service
+	SuggestedRepository string
+}
+
+// RegistrationResult is one privacy-safe repository setup result.
+type RegistrationResult struct {
+	Snapshot CatalogSnapshot
+	Blocker  SourceBlocker
 }
 
 // Target is one validated service that can enter the operation façade.
@@ -79,6 +86,7 @@ type Catalog interface {
 	Snapshot(ctx context.Context) CatalogSnapshot
 	OpenRegistered(ctx context.Context, id string) OpenResult
 	OpenPath(ctx context.Context, path string) OpenResult
+	Register(ctx context.Context, path string) RegistrationResult
 }
 
 // Operations is the mutation façade consumed by the TUI.

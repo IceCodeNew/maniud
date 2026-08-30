@@ -70,6 +70,10 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 	}{
 		{page: homePage{catalog: CatalogSnapshot{State: CatalogMissing}}, contains: "Services"},
 		{page: openPathPage{value: strings.Repeat("path/", 40)}, contains: "Open Compose file"},
+		{page: registrationPage{value: "/home/user/maniud-desired-state"}, contains: "Set up repository"},
+		{page: registrationConfirmationPage{
+			registration: registrationPage{value: "/home/user/maniud-desired-state"}, focus: confirmationBack,
+		}, contains: "Confirm repository setup"},
 		{page: selectServicePage{choices: []serviceChoice{{
 			project: testProject, service: testService, runtime: testRuntime,
 		}}},

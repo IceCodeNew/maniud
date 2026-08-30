@@ -95,6 +95,59 @@ func TestModelOpensPathAndSelectsService(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // This lifecycle test keeps both effect confirmations and their default focus contiguous.
+func TestModelConfirmsFirstRunRepositorySetup(t *testing.T) {
+	t.Parallel()
+
+	state, catalog, _ := newTestModel(t)
+	const repository = "/home/user/maniud-desired-state"
+	catalog.snapshot = CatalogSnapshot{State: CatalogMissing, SuggestedRepository: repository}
+	catalog.registration = RegistrationResult{Snapshot: CatalogSnapshot{State: CatalogReady}}
+	deliver(t, state, state.startCatalog())
+	registration, valid := state.page.(registrationPage)
+	if !valid || registration.value != repository {
+		t.Fatalf("first-run page = %#v", state.page)
+	}
+
+	state.handleKey(key("enter"))
+	confirmation, valid := state.page.(registrationConfirmationPage)
+	if !valid || confirmation.focus != confirmationBack {
+		t.Fatalf("registration confirmation = %#v", state.page)
+	}
+	state.handleKey(key("enter"))
+	if _, valid = state.page.(registrationPage); !valid || len(catalog.recordedCalls()) != 1 {
+		t.Fatal("default registration confirmation performed an effect")
+	}
+
+	state.handleKey(key("enter"))
+	state.handleKey(key("tab"))
+	deliver(t, state, state.handleKey(key("enter")))
+	if home, homeValid := state.page.(homePage); !homeValid || home.catalog.State != CatalogReady ||
+		state.mutationOutcome != "Repository created" ||
+		!slices.Equal(catalog.recordedCalls(), []string{snapshotCall, "register:" + repository}) {
+		t.Fatalf("registered state = %#v, calls = %q", state, catalog.recordedCalls())
+	}
+}
+
+func TestModelCanSkipAndReopenRepositorySetup(t *testing.T) {
+	t.Parallel()
+
+	state, catalog, _ := newTestModel(t)
+	const repository = "/home/user/maniud-desired-state"
+	catalog.snapshot = CatalogSnapshot{State: CatalogMissing, SuggestedRepository: repository}
+	deliver(t, state, state.startCatalog())
+	state.handleKey(key("esc"))
+	home := homePageValue(t, state)
+	if home.catalog.SuggestedRepository != repository {
+		t.Fatalf("skipped home = %#v", home.catalog)
+	}
+	state.handleKey(key("down"))
+	state.handleKey(key("enter"))
+	if registration, valid := state.page.(registrationPage); !valid || registration.value != repository {
+		t.Fatalf("reopened setup = %#v", state.page)
+	}
+}
+
 func TestModelContainsCatalogBlockersAndUnsafeDisplayValues(t *testing.T) {
 	t.Parallel()
 

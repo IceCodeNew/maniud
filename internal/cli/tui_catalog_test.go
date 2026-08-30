@@ -18,7 +18,8 @@ func TestDefaultTUICatalogReportsRegistrationState(t *testing.T) {
 		map[string]string{homeKey: t.TempDir()},
 		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
 	)
-	if snapshot := missing.Snapshot(t.Context()); snapshot.State != tui.CatalogMissing {
+	if snapshot := missing.Snapshot(t.Context()); snapshot.State != tui.CatalogMissing ||
+		snapshot.SuggestedRepository == "" {
 		t.Fatalf("missing Snapshot() = %#v", snapshot)
 	}
 
@@ -28,6 +29,29 @@ func TestDefaultTUICatalogReportsRegistrationState(t *testing.T) {
 	)
 	if snapshot := unavailable.Snapshot(t.Context()); snapshot.State != tui.CatalogUnavailable {
 		t.Fatalf("unavailable Snapshot() = %#v", snapshot)
+	}
+}
+
+func TestTUICatalogRegistersDefaultRepository(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	repository := filepath.Join(home, "desired-state")
+	catalog := defaultTUICatalog(
+		map[string]string{homeKey: home, "XDG_STATE_HOME": filepath.Join(home, "state")},
+		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
+	)
+	result := catalog.Register(t.Context(), repository)
+	if result.Blocker != tui.BlockerNone || result.Snapshot.State != tui.CatalogReady {
+		t.Fatalf("Register() = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
+		t.Fatalf("registered repository: %v", err)
+	}
+
+	invalid := catalog.Register(t.Context(), "relative")
+	if invalid.Blocker != tui.BlockerInvalid {
+		t.Fatalf("Register(relative) = %#v", invalid)
 	}
 }
 

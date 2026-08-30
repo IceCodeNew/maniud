@@ -123,6 +123,10 @@ func (*tuiCatalogFixture) OpenPath(context.Context, string) tui.OpenResult {
 	return tui.OpenResult{Blocker: tui.BlockerNotFound}
 }
 
+func (fixture *tuiCatalogFixture) Register(context.Context, string) tui.RegistrationResult {
+	return tui.RegistrationResult{Snapshot: fixture.snapshot}
+}
+
 type tuiOperationsFixture struct{}
 
 func (*tuiOperationsFixture) DryRun(
