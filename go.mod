@@ -24,6 +24,7 @@ require (
 	github.com/containernetworking/cni v1.3.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.22.0
+	github.com/mattn/go-shellwords v1.0.12
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/sys/user v0.4.1
 	github.com/nikoksr/notify v1.5.0
@@ -68,7 +69,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
-	github.com/mattn/go-shellwords v1.0.12 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect

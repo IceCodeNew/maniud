@@ -31,6 +31,7 @@ const (
 	snapshotCall    = "snapshot"
 	evidenceCall    = "evidence"
 	registeredAPIID = "services/api.yaml"
+	testServicePath = "services/service.yaml"
 )
 
 type catalogFixture struct {
@@ -89,6 +90,7 @@ type operationsFixture struct {
 	mu             sync.Mutex
 	calls          []string
 	requests       []application.Request
+	dryRunPlan     application.Plan
 	snapshot       application.OperationSnapshot
 	evidence       application.EvidenceBundle
 	applyErr       error
@@ -97,6 +99,81 @@ type operationsFixture struct {
 	blockApply     bool
 	cancelObserved chan struct{}
 	cancelOnce     sync.Once
+}
+
+type workspaceFixture struct {
+	mu         sync.Mutex
+	draft      ServiceDraft
+	staged     StagedService
+	commit     ServiceCommitResult
+	previewErr error
+	stageErr   error
+	commitErr  error
+	discardErr error
+	calls      []string
+}
+
+func (fixture *workspaceFixture) Preview(_ context.Context, input string) (ServiceDraft, error) {
+	fixture.record("preview:" + input)
+
+	return fixture.draft, fixture.previewErr
+}
+
+func (fixture *workspaceFixture) Stage(context.Context) (StagedService, error) {
+	fixture.record("stage")
+
+	return fixture.staged, fixture.stageErr
+}
+
+func (fixture *workspaceFixture) Commit(
+	_ context.Context,
+	message string,
+	unsigned bool,
+) (ServiceCommitResult, error) {
+	fixture.record(fmt.Sprintf("commit:%t:%s", unsigned, message))
+
+	return fixture.commit, fixture.commitErr
+}
+
+func (fixture *workspaceFixture) Discard(context.Context) error {
+	fixture.record("discard")
+
+	return fixture.discardErr
+}
+
+func (fixture *workspaceFixture) record(call string) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	fixture.calls = append(fixture.calls, call)
+}
+
+func (fixture *workspaceFixture) recordedCalls() []string {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+
+	return slices.Clone(fixture.calls)
+}
+
+func newWorkspaceFixture() *workspaceFixture {
+	return &workspaceFixture{
+		draft: ServiceDraft{
+			Runtime: "docker", Image: "registry.example/api@sha256:aaaaaaaa", Service: testAPI,
+			ComposePath: "services/api.yaml",
+		},
+		staged: StagedService{
+			Diff:        "diff --git a/services/api.yaml b/services/api.yaml\n+image: example\n",
+			ComposePath: "services/api.yaml", CommitMessage: "Add api service",
+		},
+	}
+}
+
+func (fixture *operationsFixture) DryRun(
+	_ context.Context,
+	request application.Request,
+) (application.Plan, error) {
+	fixture.record("dry-run", request)
+
+	return fixture.dryRunPlan, fixture.snapshotErr
 }
 
 func (fixture *operationsFixture) Apply(
@@ -150,6 +227,7 @@ func newOperationsFixture() *operationsFixture {
 	plan := testPlan()
 
 	return &operationsFixture{
+		dryRunPlan: plan,
 		snapshot: application.OperationSnapshot{
 			Plan:       plan,
 			HasApplied: true,
@@ -197,7 +275,7 @@ func newTestModel(t *testing.T) (*model, *catalogFixture, *operationsFixture) {
 		pathResult:       OpenResult{Targets: []Target{target}},
 	}
 	operations := newOperationsFixture()
-	state := newModel(t.Context(), catalog, operations, NewEventStream(), Options{})
+	state := newModel(t.Context(), catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{})
 	state.resize(defaultWidth, defaultHeight)
 
 	return state, catalog, operations
@@ -248,6 +326,28 @@ func homePageValue(t *testing.T, state *model) homePage {
 	value, valid := state.page.(homePage)
 	if !valid {
 		t.Fatalf("page = %T, want homePage", state.page)
+	}
+
+	return value
+}
+
+func commitServicePageValue(t *testing.T, state *model) commitServicePage {
+	t.Helper()
+
+	value, valid := state.page.(commitServicePage)
+	if !valid {
+		t.Fatalf("page = %T, want commitServicePage", state.page)
+	}
+
+	return value
+}
+
+func workspaceFixtureValue(t *testing.T, state *model) *workspaceFixture {
+	t.Helper()
+
+	value, valid := state.workspace.(*workspaceFixture)
+	if !valid {
+		t.Fatalf("workspace = %T, want *workspaceFixture", state.workspace)
 	}
 
 	return value
@@ -309,20 +409,23 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 	t.Parallel()
 
 	catalog := &catalogFixture{}
+	workspace := newWorkspaceFixture()
 	operations := newOperationsFixture()
 	events := NewEventStream()
 	tests := []struct {
 		catalog    Catalog
+		workspace  ServiceWorkspace
 		operations Operations
 		events     *EventStream
 	}{
-		{catalog: nil, operations: operations, events: events},
-		{catalog: catalog, operations: nil, events: events},
-		{catalog: catalog, operations: operations, events: nil},
+		{catalog: nil, workspace: workspace, operations: operations, events: events},
+		{catalog: catalog, workspace: nil, operations: operations, events: events},
+		{catalog: catalog, workspace: workspace, operations: nil, events: events},
+		{catalog: catalog, workspace: workspace, operations: operations, events: nil},
 	}
 	for _, test := range tests {
 		if err := Run(
-			t.Context(), nil, io.Discard, test.catalog, test.operations, test.events, Options{},
+			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.operations, test.events, Options{},
 		); !errors.Is(err, errInvalidInput) {
 			t.Fatalf("Run(invalid) error = %v", err)
 		}
@@ -330,7 +433,7 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := Run(cancelled, nil, io.Discard, catalog, operations, events, Options{}); !errors.Is(
+	if err := Run(cancelled, nil, io.Discard, catalog, workspace, operations, events, Options{}); !errors.Is(
 		err,
 		context.Canceled,
 	) {
@@ -343,22 +446,28 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 
 	ready := make(chan struct{})
 	catalog := &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
+	workspace := newWorkspaceFixture()
 	if err := Run(
 		t.Context(),
 		&signalReader{ready: ready, content: []byte("q")},
 		io.Discard,
 		catalog,
+		workspace,
 		newOperationsFixture(),
 		NewEventStream(),
 		Options{},
 	); err != nil {
 		t.Fatalf("Run(success) error = %v", err)
 	}
+	if !slices.Equal(workspace.recordedCalls(), []string{"discard"}) {
+		t.Fatalf("Run(success) workspace calls = %q", workspace.recordedCalls())
+	}
 
 	ready = make(chan struct{})
 	catalog = &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
 	if err := Run(
-		t.Context(), failingReader{ready: ready}, io.Discard, catalog, newOperationsFixture(), NewEventStream(), Options{},
+		t.Context(), failingReader{ready: ready}, io.Discard, catalog, newWorkspaceFixture(),
+		newOperationsFixture(), NewEventStream(), Options{},
 	); !errors.Is(err, errTestTUI) {
 		t.Fatalf("Run(reader failure) error = %v", err)
 	}

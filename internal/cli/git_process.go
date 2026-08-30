@@ -40,6 +40,19 @@ func (output *boundedGitOutput) bytes() []byte {
 }
 
 func runGit(ctx context.Context, directory string, arguments ...string) ([]byte, error) {
+	return runGitProcess(ctx, directory, false, arguments...)
+}
+
+func runGitWithUserConfig(ctx context.Context, directory string, arguments ...string) ([]byte, error) {
+	return runGitProcess(ctx, directory, true, arguments...)
+}
+
+func runGitProcess(
+	ctx context.Context,
+	directory string,
+	useUserConfig bool,
+	arguments ...string,
+) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
@@ -73,6 +86,9 @@ func runGit(ctx context.Context, directory string, arguments ...string) ([]byte,
 		"LC_ALL=C",
 		"PATH=" + os.Getenv("PATH"),
 	}
+	if useUserConfig {
+		command.Env = userConfiguredGitEnvironment()
+	}
 	output := new(boundedGitOutput)
 	command.Stdout = output
 	command.Stderr = nil
@@ -81,6 +97,25 @@ func runGit(ctx context.Context, directory string, arguments ...string) ([]byte,
 	}
 
 	return output.bytes(), nil
+}
+
+func userConfiguredGitEnvironment() []string {
+	environment := []string{
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_TERMINAL_PROMPT=0",
+		"LANG=C",
+		"LC_ALL=C",
+	}
+	for _, name := range []string{
+		"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "GNUPGHOME", "GPG_TTY", "SSH_AUTH_SOCK",
+	} {
+		if value, found := os.LookupEnv(name); found {
+			environment = append(environment, name+"="+value)
+		}
+	}
+
+	return environment
 }
 
 func validateGitProcessConfiguration(ctx context.Context, root string) error {

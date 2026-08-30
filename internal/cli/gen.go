@@ -62,6 +62,9 @@ type generatedCompose struct {
 	content             []byte
 	path                string
 	absolutePath        string
+	runtime             domain.RuntimeKind
+	image               string
+	service             string
 	preparation         []byte
 	preparationPath     string
 	preparationAbsolute string
@@ -313,11 +316,27 @@ func renderGen(
 		return generatedCompose{}, fmt.Errorf("render runtime arguments: %w", err)
 	}
 
+	return generatedRuntimeCompose(
+		rendered, selectedPath, absolutePath, projection, image, preparation, preparationPath,
+		preparationAbsolute, warnings,
+	), nil
+}
+
+func generatedRuntimeCompose(
+	rendered []byte,
+	selectedPath, absolutePath string,
+	projection runtimeargv.Projection,
+	image domain.ImageIdentity,
+	preparation []byte,
+	preparationPath, preparationAbsolute string,
+	warnings []runtimeargv.Warning,
+) generatedCompose {
 	return generatedCompose{
 		content: rendered, path: selectedPath, absolutePath: absolutePath,
+		runtime: projection.Runtime(), image: image.Reference, service: projection.Name(),
 		preparation: preparation, preparationPath: preparationPath, preparationAbsolute: preparationAbsolute,
 		importCommand: "", warnings: warnings,
-	}, nil
+	}
 }
 
 func prepareGeneratedWorkload(

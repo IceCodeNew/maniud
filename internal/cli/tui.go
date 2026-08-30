@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -24,15 +25,16 @@ func executeTUI(
 	input io.Reader,
 	output io.Writer,
 	catalog tui.Catalog,
+	workspace tui.ServiceWorkspace,
 	dependencies applyDependencies,
 	events *tui.EventStream,
 	options tui.Options,
 ) error {
-	if catalog == nil || dependencies.operations == nil || events == nil {
+	if catalog == nil || workspace == nil || dependencies.operations == nil || events == nil {
 		return errInvalidArguments
 	}
 
-	return errors.Join(tui.Run(ctx, input, output, catalog, dependencies.operations, events, options))
+	return errors.Join(tui.Run(ctx, input, output, catalog, workspace, dependencies.operations, events, options))
 }
 
 func executeProductionTUI(
@@ -61,10 +63,32 @@ func executeProductionTUI(
 		return err
 	}
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
+	workspace := defaultTUIServiceWorkspace(environment, runtimes, dependencies.loadSource)
 
-	return errors.Join(runtimes.Classify(executeTUI(
-		ctx, input, output, catalog, dependencies, tuiEvents, tuiOptions(environment),
-	)))
+	err = runtimes.Classify(executeTUI(
+		ctx, input, output, catalog, workspace, dependencies, tuiEvents, tuiOptions(environment),
+	))
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	return writeTUIInstructions(output, workspace.Instructions())
+}
+
+func writeTUIInstructions(output io.Writer, instructions []string) error {
+	if len(instructions) == 0 {
+		return nil
+	}
+	if _, err := io.WriteString(output, "Next steps:\n"); err != nil {
+		return fmt.Errorf("write TUI next steps: %w", err)
+	}
+	for _, instruction := range instructions {
+		if _, err := fmt.Fprintf(output, "$ %s\n", instruction); err != nil {
+			return fmt.Errorf("write TUI next step: %w", err)
+		}
+	}
+
+	return nil
 }
 
 type fileDescriptor interface {

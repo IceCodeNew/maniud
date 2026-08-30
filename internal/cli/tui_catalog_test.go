@@ -220,7 +220,7 @@ func TestRegisteredTUIServiceID(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	want := "services/api.yaml"
+	want := tuiTestServicePath
 	id, valid := registeredTUIServiceID(root, filepath.Join(root, "services", "api.yaml"))
 	if !valid || id != want {
 		t.Fatalf("registeredTUIServiceID(valid) = %q, %t", id, valid)

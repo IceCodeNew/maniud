@@ -95,6 +95,99 @@ func TestModelOpensPathAndSelectsService(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // The Add service confirmations and post-commit validation must stay in order.
+func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	workspace.commit = ServiceCommitResult{NeedsUnsignedApproval: true}
+	deliver(t, state, state.startCatalog())
+	state.handleKey(key("down"))
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(addServicePage); !valid {
+		t.Fatalf("add service page = %T", state.page)
+	}
+
+	const input = "docker://registry.example/api@sha256:aaaaaaaa"
+	state.handleKey(key(input))
+	deliver(t, state, state.handleKey(key("enter")))
+	preview, valid := state.page.(servicePreviewPage)
+	if !valid || preview.input != input || preview.draft.Service != testAPI ||
+		!slices.Equal(workspace.recordedCalls(), []string{"preview:" + input}) {
+		t.Fatalf("preview = %#v, calls = %q", state.page, workspace.recordedCalls())
+	}
+
+	state.handleKey(key("enter"))
+	confirmation, valid := state.page.(stageServiceConfirmationPage)
+	if !valid || confirmation.focus != confirmationBack {
+		t.Fatalf("stage confirmation = %#v", state.page)
+	}
+	state.handleKey(key("enter"))
+	if _, valid = state.page.(servicePreviewPage); !valid || len(workspace.recordedCalls()) != 1 {
+		t.Fatal("default stage confirmation performed an effect")
+	}
+	state.handleKey(key("enter"))
+	state.handleKey(key("tab"))
+	deliver(t, state, state.handleKey(key("enter")))
+	commit, valid := state.page.(commitServicePage)
+	if !valid || commit.focus != confirmationBack || commit.message != "Add api service" {
+		t.Fatalf("commit review = %#v", state.page)
+	}
+
+	state.handleKey(key("e"))
+	state.handleKey(key("!"))
+	state.handleKey(key("enter"))
+	state.handleKey(key("d"))
+	state.handleKey(key("down"))
+	state.handleKey(key("d"))
+	commit = commitServicePageValue(t, state)
+	if commit.message != "Add api service!" || commit.editing {
+		t.Fatalf("edited commit = %#v", commit)
+	}
+	state.handleKey(key("tab"))
+	deliver(t, state, state.handleKey(key("enter")))
+	unsigned, valid := state.page.(unsignedCommitConfirmationPage)
+	if !valid || unsigned.focus != confirmationBack {
+		t.Fatalf("unsigned confirmation = %#v", state.page)
+	}
+	state.handleKey(key("enter"))
+	if _, valid = state.page.(commitServicePage); !valid {
+		t.Fatalf("unsigned default back page = %T", state.page)
+	}
+
+	deliver(t, state, state.handleKey(key("enter")))
+	workspace.commit = ServiceCommitResult{
+		Request: application.Request{Service: testAPI}, Committed: true,
+	}
+	state.handleKey(key("tab"))
+	deliver(t, state, state.handleKey(key("enter")))
+	if _, valid = state.page.(reviewPage); !valid || state.mutationOutcome != "Compose commit created" {
+		t.Fatalf("validated commit state = %#v", state)
+	}
+	if !slices.Equal(workspace.recordedCalls(), []string{
+		"preview:" + input,
+		"stage",
+		"commit:false:Add api service!",
+		"commit:false:Add api service!",
+		"commit:true:Add api service!",
+	}) || !slices.Equal(operations.recordedCalls(), []string{"dry-run", snapshotCall, evidenceCall}) {
+		t.Fatalf("calls = %q / %q", workspace.recordedCalls(), operations.recordedCalls())
+	}
+}
+
+func TestModelRejectsCommittedPlanDrift(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	operations.dryRunPlan.Service = "changed"
+	deliver(t, state, state.startCommittedSnapshot(application.Request{Service: testAPI}))
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Committed service changed during validation" ||
+		!slices.Equal(operations.recordedCalls(), []string{"dry-run", snapshotCall, evidenceCall}) {
+		t.Fatalf("drift state = %#v, calls = %q", state, operations.recordedCalls())
+	}
+}
+
 //nolint:cyclop // This lifecycle test keeps both effect confirmations and their default focus contiguous.
 func TestModelConfirmsFirstRunRepositorySetup(t *testing.T) {
 	t.Parallel()
@@ -141,6 +234,7 @@ func TestModelCanSkipAndReopenRepositorySetup(t *testing.T) {
 	if home.catalog.SuggestedRepository != repository {
 		t.Fatalf("skipped home = %#v", home.catalog)
 	}
+	state.handleKey(key("down"))
 	state.handleKey(key("down"))
 	state.handleKey(key("enter"))
 	if registration, valid := state.page.(registrationPage); !valid || registration.value != repository {
@@ -293,6 +387,16 @@ func TestModelInvalidatesConfirmationBelowCompactFloor(t *testing.T) {
 	if _, valid := state.page.(confirmationPage); valid || state.status != "Resize to continue to confirmation" {
 		t.Fatalf("hard-floor confirmation = %#v", state)
 	}
+
+	state.resize(defaultWidth, defaultHeight)
+	preview := servicePreviewPage{draft: ServiceDraft{
+		Runtime: testRuntime, Image: "image", Service: testService, ComposePath: testServicePath,
+	}}
+	state.page = stageServiceConfirmationPage{preview: preview, focus: confirmationApply}
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	if _, valid := state.page.(servicePreviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("stage hard-floor state = %#v", state)
+	}
 }
 
 func TestModelRoutesPageNavigationAndContext(t *testing.T) {
@@ -305,6 +409,7 @@ func TestModelRoutesPageNavigationAndContext(t *testing.T) {
 	state.handleKey(key("k"))
 	state.handleKey(key("j"))
 	state.handleKey(key("tab"))
+	state.handleKey(key("down"))
 	state.handleKey(key("enter"))
 	if _, valid := state.page.(openPathPage); !valid {
 		t.Fatalf("home navigation page = %T", state.page)

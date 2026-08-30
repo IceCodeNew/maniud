@@ -101,6 +101,22 @@ func TestClassifyTUIFailure(t *testing.T) {
 	}
 }
 
+func TestWriteTUIInstructionsUsesShellReadyLines(t *testing.T) {
+	t.Parallel()
+
+	output := new(bytes.Buffer)
+	if err := writeTUIInstructions(output, []string{"git push", tuiCommand}); err != nil ||
+		output.String() != "Next steps:\n$ git push\n$ "+tuiCommand+"\n" {
+		t.Fatalf("writeTUIInstructions() = %q, %v", output.String(), err)
+	}
+	if err := writeTUIInstructions(output, nil); err != nil {
+		t.Fatalf("writeTUIInstructions(nil) error = %v", err)
+	}
+	if err := writeTUIInstructions(failingWriter{}, []string{tuiCommand}); err == nil {
+		t.Fatal("writeTUIInstructions(write failure) succeeded")
+	}
+}
+
 type tuiCatalogFixture struct {
 	snapshot tui.CatalogSnapshot
 	ready    chan struct{}
@@ -125,6 +141,24 @@ func (*tuiCatalogFixture) OpenPath(context.Context, string) tui.OpenResult {
 
 func (fixture *tuiCatalogFixture) Register(context.Context, string) tui.RegistrationResult {
 	return tui.RegistrationResult{Snapshot: fixture.snapshot}
+}
+
+type tuiWorkspaceFixture struct{}
+
+func (*tuiWorkspaceFixture) Preview(context.Context, string) (tui.ServiceDraft, error) {
+	return tui.ServiceDraft{}, nil
+}
+
+func (*tuiWorkspaceFixture) Stage(context.Context) (tui.StagedService, error) {
+	return tui.StagedService{}, nil
+}
+
+func (*tuiWorkspaceFixture) Commit(context.Context, string, bool) (tui.ServiceCommitResult, error) {
+	return tui.ServiceCommitResult{}, nil
+}
+
+func (*tuiWorkspaceFixture) Discard(context.Context) error {
+	return nil
 }
 
 type tuiOperationsFixture struct{}
@@ -165,7 +199,8 @@ func TestExecuteTUIRunsCatalogHome(t *testing.T) {
 	input := &tuiSignalReader{ready: ready, content: []byte("q")}
 	dependencies := applyDependencies{operations: &tuiOperationsFixture{}}
 	if err := executeTUI(
-		t.Context(), input, io.Discard, catalog, dependencies, tui.NewEventStream(), tui.Options{},
+		t.Context(), input, io.Discard, catalog, &tuiWorkspaceFixture{},
+		dependencies, tui.NewEventStream(), tui.Options{},
 	); err != nil {
 		t.Fatalf("executeTUI() error = %v", err)
 	}
@@ -175,20 +210,24 @@ func TestExecuteTUIRejectsInvalidDependencies(t *testing.T) {
 	t.Parallel()
 
 	validCatalog := &tuiCatalogFixture{}
+	validWorkspace := &tuiWorkspaceFixture{}
 	validDependencies := applyDependencies{operations: &tuiOperationsFixture{}}
 	events := tui.NewEventStream()
 	tests := []struct {
 		catalog      tui.Catalog
+		workspace    tui.ServiceWorkspace
 		dependencies applyDependencies
 		events       *tui.EventStream
 	}{
-		{catalog: nil, dependencies: validDependencies, events: events},
-		{catalog: validCatalog, dependencies: applyDependencies{}, events: events},
-		{catalog: validCatalog, dependencies: validDependencies, events: nil},
+		{catalog: nil, workspace: validWorkspace, dependencies: validDependencies, events: events},
+		{catalog: validCatalog, workspace: nil, dependencies: validDependencies, events: events},
+		{catalog: validCatalog, workspace: validWorkspace, dependencies: applyDependencies{}, events: events},
+		{catalog: validCatalog, workspace: validWorkspace, dependencies: validDependencies, events: nil},
 	}
 	for _, test := range tests {
 		if err := executeTUI(
-			t.Context(), nil, io.Discard, test.catalog, test.dependencies, test.events, tui.Options{},
+			t.Context(), nil, io.Discard, test.catalog, test.workspace,
+			test.dependencies, test.events, tui.Options{},
 		); !errors.Is(err, errInvalidArguments) {
 			t.Fatalf("executeTUI(invalid) error = %v", err)
 		}

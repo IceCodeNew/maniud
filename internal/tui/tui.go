@@ -67,6 +67,31 @@ type RegistrationResult struct {
 	Blocker  SourceBlocker
 }
 
+// ServiceDraft is one generated, effect-free service candidate.
+type ServiceDraft struct {
+	Runtime      string
+	Image        string
+	Service      string
+	ComposePath  string
+	Preparation  string
+	WarningCount int
+}
+
+// StagedService is the exact Git index projection awaiting commit.
+type StagedService struct {
+	Diff          string
+	ComposePath   string
+	Preparation   string
+	CommitMessage string
+}
+
+// ServiceCommitResult is one proven commit outcome or an explicit unsigned fallback request.
+type ServiceCommitResult struct {
+	Request               application.Request
+	NeedsUnsignedApproval bool
+	Committed             bool
+}
+
 // Target is one validated service that can enter the operation façade.
 type Target struct {
 	Project string
@@ -89,8 +114,17 @@ type Catalog interface {
 	Register(ctx context.Context, path string) RegistrationResult
 }
 
+// ServiceWorkspace owns the generated file and Git transaction behind Add service.
+type ServiceWorkspace interface {
+	Preview(ctx context.Context, input string) (ServiceDraft, error)
+	Stage(ctx context.Context) (StagedService, error)
+	Commit(ctx context.Context, message string, unsigned bool) (ServiceCommitResult, error)
+	Discard(ctx context.Context) error
+}
+
 // Operations is the mutation façade consumed by the TUI.
 type Operations interface {
+	DryRun(ctx context.Context, request application.Request) (application.Plan, error)
 	Apply(ctx context.Context, request application.Request) (application.Plan, error)
 	Snapshot(ctx context.Context, request application.Request) (application.OperationSnapshot, error)
 	Evidence(snapshot application.OperationSnapshot) (application.EvidenceBundle, error)
@@ -161,32 +195,34 @@ func Run(
 	input io.Reader,
 	output io.Writer,
 	catalog Catalog,
+	workspace ServiceWorkspace,
 	operations Operations,
 	events *EventStream,
 	options Options,
 ) error {
-	if catalog == nil || operations == nil || events == nil {
+	if catalog == nil || workspace == nil || operations == nil || events == nil {
 		return errInvalidInput
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	state := newModel(runCtx, catalog, operations, events, options)
+	state := newModel(runCtx, catalog, workspace, operations, events, options)
 	_, err := tea.NewProgram(
 		state,
 		tea.WithInput(input),
 		tea.WithOutput(output),
 	).Run()
+	discardErr := workspace.Discard(context.WithoutCancel(ctx))
 	if err != nil {
-		return fmt.Errorf("run TUI: %w", err)
+		return errors.Join(fmt.Errorf("run TUI: %w", err), discardErr)
 	}
 	if state.err != nil {
-		return fmt.Errorf("run TUI operation: %w", state.err)
+		return errors.Join(fmt.Errorf("run TUI operation: %w", state.err), discardErr)
 	}
 	if err = ctx.Err(); err != nil {
-		return fmt.Errorf("run TUI context: %w", err)
+		return errors.Join(fmt.Errorf("run TUI context: %w", err), discardErr)
 	}
 
-	return nil
+	return errors.Join(discardErr)
 }

@@ -56,6 +56,7 @@ linters:
             - "!**/internal/terminaltext/*.go"
             - "!**/internal/changescope/*.go"
             - "!**/internal/cli/parse.go"
+            - "!**/internal/cli/tui_workspace.go"
             - "!**/internal/custombuild/*.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/containerd/*.go"
@@ -100,6 +101,14 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/alecthomas/kong
+        tui-workspace-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/cli/tui_workspace.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/mattn/go-shellwords
         public-imageref:
           list-mode: strict
           files:

@@ -7,6 +7,8 @@ import (
 	"github.com/IceCodeNew/maniud/internal/terminaltext"
 )
 
+const testAddServiceMessage = "Add service"
+
 func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +66,19 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		kind: testUpgrade, project: testProject, service: testService, runtime: testRuntime, platform: testPlatform,
 		current: "old", proposed: "new", status: statusReady, warningText: "1 warning(s) require review",
 	}}
+	preview := servicePreviewPage{input: "docker run image", draft: ServiceDraft{
+		Runtime: testRuntime, Image: strings.Repeat("registry.example/image@sha256:a", 4),
+		Service: testService, ComposePath: testServicePath, Preparation: "services/service.prepare.sh",
+		WarningCount: 1,
+	}}
+	commit := commitServicePage{
+		preview: preview,
+		staged: StagedService{
+			Diff:        "diff --git a/services/service.yaml b/services/service.yaml\n+image: pinned\n",
+			ComposePath: testServicePath, CommitMessage: testAddServiceMessage,
+		},
+		message: testAddServiceMessage, focus: confirmationBack,
+	}
 	pages := []struct {
 		page     page
 		contains string
@@ -74,6 +89,14 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		{page: registrationConfirmationPage{
 			registration: registrationPage{value: "/home/user/maniud-desired-state"}, focus: confirmationBack,
 		}, contains: "Confirm repository setup"},
+		{page: addServicePage{value: "docker run image"}, contains: testAddServiceMessage},
+		{page: preview, contains: "parsed, not run"},
+		{page: stageServiceConfirmationPage{preview: preview, focus: confirmationBack},
+			contains: "Confirm file mutation"},
+		{page: commit, contains: "STAGED DIFF"},
+		{page: stagedDiffPage{commit: commit}, contains: "This page is read-only"},
+		{page: unsignedCommitConfirmationPage{commit: commit, focus: confirmationBack},
+			contains: "Confirm unsigned commit"},
 		{page: selectServicePage{choices: []serviceChoice{{
 			project: testProject, service: testService, runtime: testRuntime,
 		}}},
