@@ -243,18 +243,29 @@ func TestRecoverGitOpsServicesRunsOnlyRecoveryPlans(t *testing.T) {
 			dependencies: dependencies,
 			plan:         application.Plan{Kind: application.PlanResume},
 		},
+		{
+			arguments: applyInvocation{
+				compose: composeFileValue,
+				service: applyServiceValue,
+			},
+			dependencies: dependencies,
+			plan:         application.Plan{Kind: application.PlanRestore},
+		},
 	}
 	if err := recoverGitOpsServices(t.Context(), services, io.Discard); err != nil {
 		t.Fatalf("recoverGitOpsServices() error = %v", err)
 	}
-	if got := countEvent(events, string(commandApply)); got != 1 {
+	if got := countEvent(events, string(commandApply)); got != 2 {
 		t.Fatalf("mutation events = %d, events = %q", got, events)
 	}
 
+	events = events[:0]
 	operations.applyErr = errApplyTest
 	services[1].dependencies = dependencies
-	if err := recoverGitOpsServices(t.Context(), services[1:], io.Discard); !errors.Is(err, errApplyTest) {
-		t.Fatalf("recoverGitOpsServices(failure) = %v", err)
+	counts, err := recoverGitOpsServicesResult(t.Context(), services[1:], io.Discard)
+	if !errors.Is(err, errApplyTest) || counts.failed != 1 || counts.deferred != 1 ||
+		countEvent(events, string(commandApply)) != 1 {
+		t.Fatalf("recoverGitOpsServicesResult(failure) = %#v, %v, events = %q", counts, err, events)
 	}
 }
 

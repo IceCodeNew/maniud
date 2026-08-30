@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,6 +22,24 @@ type cliEventSinkFunc func(application.Event) bool
 
 func (publish cliEventSinkFunc) TryPublish(event application.Event) bool {
 	return publish(event)
+}
+
+type restartedRecoveryOperations struct {
+	*applyOperationsFixture
+
+	durable *application.ApplyFacade
+}
+
+func (operations *restartedRecoveryOperations) RepositoryInventory(
+	ctx context.Context,
+	scope compose.RepositoryScope,
+) ([]application.RepositoryTransaction, error) {
+	inventory, err := operations.durable.RepositoryInventory(ctx, scope)
+	if err != nil {
+		return nil, fmt.Errorf("read restarted recovery inventory: %w", err)
+	}
+
+	return inventory, nil
 }
 
 func TestExecuteDaemonStopsPollingWhenCancelled(t *testing.T) {
@@ -398,11 +417,161 @@ func TestReconcileRegisteredRepositoryContinuesPastInvalidSourceAndRejectsFetchF
 	}
 }
 
-func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *testing.T) {
+//nolint:cyclop,funlen,gocognit // One table keeps the no-fetch matrix and its shared spy assertions together.
+func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBeforeRecoverySettles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		entry         string
+		inventoryErr  error
+		invalidSource bool
+		sourceDrift   bool
+		newPlan       bool
+		checkoutDrift bool
+		applyErr      error
+		wantErr       error
+		wantStatus    string
+		wantLoads     bool
+		wantMutations int
+	}{
+		{
+			name: "inventory read failure", inventoryErr: errApplyTest,
+			wantErr: errApplyTest, wantStatus: gitOpsCycleFailed,
+		},
+		{
+			name: "inventory overflow", inventoryErr: application.ErrRepositoryInventoryOverflow,
+			wantErr: application.ErrRepositoryInventoryOverflow, wantStatus: gitOpsCycleFailed,
+		},
+		{
+			name: "missing associated source", entry: "services/missing.yaml",
+			wantErr: errGitOpsRecoverySourceBlocked, wantStatus: errGitOpsRecoverySourceBlocked.Error(),
+			wantLoads: true,
+		},
+		{
+			name: "invalid associated source", invalidSource: true,
+			wantErr: errGitOpsRecoverySourceBlocked, wantStatus: errGitOpsRecoverySourceBlocked.Error(),
+			wantLoads: true,
+		},
+		{
+			name: "associated source digest drift", sourceDrift: true,
+			wantErr: errGitOpsRecoverySourceBlocked, wantStatus: errGitOpsRecoverySourceBlocked.Error(),
+			wantLoads: true,
+		},
+		{
+			name: "transaction is not a recovery", newPlan: true,
+			wantErr: errGitOpsRecoverySourceBlocked, wantStatus: errGitOpsRecoverySourceBlocked.Error(),
+			wantLoads: true,
+		},
+		{
+			name: "checkout drifts before recovery mutation", checkoutDrift: true,
+			wantErr: errGitOpsRepositoryInvalid, wantStatus: gitOpsCycleFailed, wantLoads: true,
+		},
+		{
+			name: "recovery mutation failure", applyErr: errApplyTest,
+			wantErr: errApplyTest, wantStatus: gitOpsCycleFailed, wantLoads: true, wantMutations: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := initGitOpsSnapshotTestRepository(t)
+			state, err := cleanGitTree(t.Context(), root)
+			if err != nil {
+				t.Fatalf("cleanGitTree() error = %v", err)
+			}
+			scope, err := compose.NewRepositoryScope(root, root, gitOpsTestBranch)
+			if err != nil {
+				t.Fatalf("NewRepositoryScope() error = %v", err)
+			}
+			entry := test.entry
+			if entry == "" {
+				entry = tuiTestServicePath
+			}
+			path := filepath.Join(root, filepath.FromSlash(entry))
+			source := repositoryRecoverySource(t, root, path)
+			location, err := scope.Location(source.Repository.Entry)
+			if err != nil {
+				t.Fatalf("RepositoryScope.Location() error = %v", err)
+			}
+			digest := source.Repository.Digest
+			if test.sourceDrift {
+				digest = domain.Hash([]byte("superseded source"))
+			}
+
+			events := make([]string, 0, 8)
+			operations := &applyOperationsFixture{
+				events:       &events,
+				dryRunPlan:   application.Plan{Kind: application.PlanResume},
+				applyPlan:    application.Plan{Kind: application.PlanResume},
+				applyErr:     test.applyErr,
+				inventoryErr: test.inventoryErr,
+				inventory: []application.RepositoryTransaction{{
+					Source: digest, Location: location,
+				}},
+			}
+			if test.newPlan {
+				operations.dryRunPlan.Kind = application.PlanBootstrap
+			}
+			dependencies := operationApplyDependencies(t, &events, operations)
+			loads := 0
+			drifted := false
+			dependencies.loadSource = func(_ context.Context, requested string) (compose.Source, error) {
+				loads++
+				if test.checkoutDrift && !drifted {
+					drifted = true
+					if writeErr := os.WriteFile(
+						filepath.Join(root, "concurrent-change"), []byte("changed\n"), 0o600,
+					); writeErr != nil {
+						return compose.Source{}, fmt.Errorf("write concurrent checkout drift: %w", writeErr)
+					}
+				}
+				if test.invalidSource && requested == path {
+					return compose.Source{}, compose.ErrInvalidSource
+				}
+
+				return repositoryRecoverySource(t, root, requested), nil
+			}
+			registration := gitOpsRegistration{
+				Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
+				Remote: gitOpsRemoteName, BaselineCommit: state.head,
+			}
+			fetched := false
+			output := new(bytes.Buffer)
+			err = reconcileRegisteredGitOpsCheckout(
+				t.Context(), output, registration, dependencies,
+				func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
+					fetched = true
+
+					return gitOpsCheckoutSelection{}, nil
+				},
+			)
+			mutations := countEvent(events, string(commandApply))
+			if !errors.Is(err, test.wantErr) || fetched || mutations != test.wantMutations ||
+				(loads > 0) != test.wantLoads {
+				t.Fatalf(
+					"reconcileRegisteredGitOpsCheckout() error = %v, fetched = %t, loads = %d, mutations = %d",
+					err,
+					fetched,
+					loads,
+					mutations,
+				)
+			}
+			summary := decodeGitOpsCycleSummary(t, output)
+			if summary.Status != test.wantStatus || summary.Failed != 1 {
+				t.Fatalf("recovery failure cycle summary = %#v", summary)
+			}
+		})
+	}
+}
+
+//nolint:cyclop,funlen // The restart fixture verifies each durable resource boundary before orchestration.
+func TestReconcileRegisteredGitOpsCheckoutRecoversDurableStateBeforeFetch(t *testing.T) {
 	t.Parallel()
 
 	root := initGitOpsSnapshotTestRepository(t)
-	state, err := cleanGitTree(t.Context(), root)
+	checkout, err := cleanGitTree(t.Context(), root)
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
@@ -410,50 +579,94 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *t
 	if err != nil {
 		t.Fatalf("NewRepositoryScope() error = %v", err)
 	}
-	path := filepath.Join(root, gitOpsServicesDirectory, "api.yaml")
+	path := filepath.Join(root, filepath.FromSlash(tuiTestServicePath))
 	source := repositoryRecoverySource(t, root, path)
 	location, err := scope.Location(source.Repository.Entry)
 	if err != nil {
 		t.Fatalf("RepositoryScope.Location() error = %v", err)
 	}
+
+	stateRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve state directory: %v", err)
+	}
+	if err = os.Chmod(stateRoot, 0o700); err != nil { //nolint:gosec // SQLite state needs a private traversable directory.
+		t.Fatalf("secure state directory: %v", err)
+	}
+	statePath := filepath.Join(stateRoot, stateDatabaseName)
+	durableState, err := store.Open(t.Context(), statePath)
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	lock, err := durableState.TryLockService(testProjectName, applyServiceValue)
+	if err != nil {
+		_ = durableState.Close()
+		t.Fatalf("TryLockService() error = %v", err)
+	}
+	_, err = lock.BeginTransaction(t.Context(), store.TransactionIntent{
+		Kind:                  store.TransactionBootstrap,
+		Runtime:               domain.RuntimeDocker,
+		SourceDigest:          source.Repository.Digest,
+		EffectiveDigest:       domain.Hash([]byte("effective source")),
+		ExecutionDigest:       domain.Hash([]byte("execution context")),
+		RepositoryVersion:     scope.Version,
+		RepositoryScopeDigest: scope.Digest, RepositoryLocationDigest: location,
+		HasRepository: true,
+	})
+	if err != nil {
+		_ = lock.Close()
+		_ = durableState.Close()
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	if err = errors.Join(lock.Close(), durableState.Close()); err != nil {
+		t.Fatalf("close pre-restart state: %v", err)
+	}
+
 	events := make([]string, 0, 4)
-	operations := &applyOperationsFixture{
-		events: &events,
-		inventory: []application.RepositoryTransaction{{
-			Source: source.Repository.Digest, Location: location,
-		}},
+	operations := &restartedRecoveryOperations{
+		applyOperationsFixture: &applyOperationsFixture{
+			events:     &events,
+			dryRunPlan: application.Plan{Kind: application.PlanResume},
+			applyPlan:  application.Plan{Kind: application.PlanResume},
+		},
+		durable: application.NewApplyFacade(
+			nil, nil, nil,
+			func(ctx context.Context) (application.OperationReader, error) {
+				return store.OpenReader(ctx, statePath)
+			},
+			nil, nil,
+		),
 	}
 	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(_ context.Context, requested string) (compose.Source, error) {
-		if requested == path {
-			return compose.Source{}, compose.ErrInvalidSource
-		}
-
 		return repositoryRecoverySource(t, root, requested), nil
 	}
 	registration := gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: state.head,
+		Remote: gitOpsRemoteName, BaselineCommit: checkout.head,
 	}
-	fetched := false
 	output := new(bytes.Buffer)
 	err = reconcileRegisteredGitOpsCheckout(
-		t.Context(),
-		output,
-		registration,
-		dependencies,
+		t.Context(), output, registration, dependencies,
 		func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
-			fetched = true
+			events = append(events, "fetch")
 
-			return gitOpsCheckoutSelection{}, nil
+			return gitOpsCheckoutSelection{
+				root: root, commit: checkout.head, awaitingPush: true,
+			}, nil
 		},
 	)
-	if !errors.Is(err, errGitOpsRecoverySourceBlocked) || fetched {
-		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, fetched = %t", err, fetched)
+	if err != nil || len(events) != 3 || events[0] != dryRunEvent ||
+		events[1] != string(commandApply) || events[2] != "fetch" {
+		t.Fatalf("restart recovery error = %v, events = %q", err, events)
 	}
-	summary := decodeGitOpsCycleSummary(t, output)
-	if summary.Status != errGitOpsRecoverySourceBlocked.Error() || summary.Failed != 1 {
-		t.Fatalf("blocked-recovery cycle summary = %#v", summary)
+	lines := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'})
+	var summary gitOpsCycleSummary
+	if err = json.Unmarshal(lines[len(lines)-1], &summary); err != nil {
+		t.Fatalf("decode post-restart cycle summary: %v; output = %q", err, output.String())
+	}
+	if summary.Status != gitOpsCycleAwaitingPush || summary.Applied != 1 || summary.Failed != 0 {
+		t.Fatalf("post-restart cycle summary = %#v", summary)
 	}
 }
 
