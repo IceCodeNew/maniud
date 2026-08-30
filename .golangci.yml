@@ -206,6 +206,7 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - charm.land/bubbletea/v2
+            - github.com/charmbracelet/x/term
         public-docker-adapter:
           list-mode: strict
           files:

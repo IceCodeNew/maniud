@@ -67,6 +67,7 @@ func TestDebugFailureIncludesRedactedCauseAndCallSites(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	if status != 1 {
 		t.Fatalf("runWithEnvironment() status = %d, want 1", status)
@@ -165,7 +166,7 @@ func TestDebugInvalidInputAndCancellation(t *testing.T) {
 			if test.cancelled {
 				ctx = cancelledContext()
 			}
-			status := runWithEnvironment(ctx, test.args, output, nil, nil, nil, nil, nil, nil)
+			status := runWithEnvironment(ctx, test.args, output, nil, nil, nil, nil, nil, nil, nil)
 			var failure publicFailure
 			err := json.Unmarshal(output.Bytes(), &failure)
 			if status != test.wantStatus || err != nil || failure.Code != test.wantCode || failure.Debug == nil {

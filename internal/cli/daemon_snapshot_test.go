@@ -93,7 +93,8 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 	root := initGitOpsSnapshotTestRepository(t)
 	events := make([]string, 0, 16)
 	plan := application.Plan{
-		Kind: application.PlanBootstrap, Project: testProjectName, Service: "api", Runtime: domain.RuntimeDocker,
+		Kind: application.PlanBootstrap, Project: testProjectName, Service: applyServiceValue,
+		Runtime: domain.RuntimeDocker,
 	}
 	operations := &applyOperationsFixture{
 		events: &events, dryRunPlan: plan, applyErr: errApplyTest,

@@ -17,6 +17,7 @@ The default result omits private paths, endpoint details, credentials, and upstr
 | `operation_cancelled` | A signal or calling context cancelled the operation. | Run the same command again so maniud can recover an unfinished operation. |
 | `generation_failed` | `gen` could not validate the image, service, or output. | Follow the standard-error hint, pull the requested image when it is missing, and rerun `gen`. |
 | `apply_failed` | `apply`, `daemon`, or `doctor` could not prove a safe result. | Retry only when `retryable` is true; otherwise preserve the current state and inspect `--debug` output. |
+| `tui_unavailable` | `maniud tui` has no interactive terminal input, terminal output, or usable `TERM`. | Run it in an interactive terminal, or validate with `maniud apply --dry-run <compose>` and add `--json` when structured output is required. |
 | `internal_error` | The binary could not provide the selected command service. | Verify the installed release and report its version with the JSON result. |
 
 `retryable: true` means the same input may succeed after the runtime, registry, rate limit, or state store becomes available again.

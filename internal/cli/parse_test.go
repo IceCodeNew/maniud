@@ -87,13 +87,11 @@ func TestParseAcceptedCommands(t *testing.T) {
 			},
 		},
 		{
-			name: "apply interactively",
-			args: []string{string(commandApply), composeFileValue, applyServiceValue, tuiOption},
+			name: "interactive workspace",
+			args: []string{string(commandTUI)},
 			want: invocation{
-				arguments: applyInvocation{
-					compose: composeFileValue, service: applyServiceValue, tui: true,
-				},
-				debug: false,
+				arguments: tuiInvocation{},
+				debug:     false,
 			},
 		},
 		{
@@ -202,8 +200,8 @@ func TestParseRejectsInvalidCommands(t *testing.T) {
 		{string(commandGen), imageValue, unknownOption, "value"},
 		{string(commandApply)},
 		{string(commandApply), "one", "two", "three"},
-		{string(commandApply), composeFileValue, tuiOption, dryRunOption},
-		{string(commandApply), composeFileValue, tuiOption, jsonOption},
+		{string(commandApply), composeFileValue, "--tui"},
+		{string(commandTUI), composeFileValue},
 		{gitOpsCommand},
 		{gitOpsCommand, unknownValue},
 		{gitOpsCommand, initCommand},

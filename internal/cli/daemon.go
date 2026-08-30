@@ -35,7 +35,7 @@ func executeDaemon(
 		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory, events, runtimes)
 	case commandDaemonStop:
 		return executeDaemonStop(ctx, output, environment)
-	case commandGen, commandApply, commandGitOpsInit, commandDoctor:
+	case commandGen, commandApply, commandTUI, commandGitOpsInit, commandDoctor:
 		return errGitOpsRepositoryInvalid
 	default:
 		return errGitOpsRepositoryInvalid

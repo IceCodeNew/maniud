@@ -1,0 +1,290 @@
+package tui
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/IceCodeNew/maniud/internal/application"
+)
+
+//nolint:cyclop // This lifecycle test keeps the safety-critical confirmation and readback sequence contiguous.
+func TestModelNavigatesHomeReviewConfirmationAndApply(t *testing.T) {
+	t.Parallel()
+
+	state, catalog, operations := newTestModel(t)
+	deliver(t, state, state.startCatalog())
+	if _, valid := state.page.(homePage); !valid || state.status != "Choose a service" {
+		t.Fatalf("catalog state = %#v", state)
+	}
+
+	deliver(t, state, state.handleKey(key("enter")))
+	review, valid := state.page.(reviewPage)
+	if !valid || review.plan.status != statusReady || state.busy {
+		t.Fatalf("review state = %#v", state)
+	}
+	if !slices.Equal(catalog.recordedCalls(), []string{snapshotCall, "registered:" + registeredAPIID}) ||
+		!slices.Equal(operations.recordedCalls(), []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("calls = %q / %q", catalog.recordedCalls(), operations.recordedCalls())
+	}
+
+	state.handleKey(key("a"))
+	if len(operations.recordedCalls()) != 2 {
+		t.Fatal("review shortcut bypassed confirmation")
+	}
+	state.handleKey(key("enter"))
+	confirmation, valid := state.page.(confirmationPage)
+	if !valid || confirmation.focus != confirmationBack {
+		t.Fatalf("initial confirmation = %#v", state.page)
+	}
+	state.handleKey(key("enter"))
+	if _, valid = state.page.(reviewPage); !valid || len(operations.recordedCalls()) != 2 {
+		t.Fatal("default confirmation focus performed a mutation")
+	}
+
+	state.handleKey(key("enter"))
+	state.handleKey(key("tab"))
+	deliver(t, state, state.handleKey(key("enter")))
+	if _, valid = state.page.(reviewPage); !valid || state.mutationOutcome != "Apply completed" ||
+		!slices.Equal(operations.recordedCalls(), []string{
+			snapshotCall, evidenceCall, "apply", snapshotCall, evidenceCall,
+		}) {
+		t.Fatalf("post-apply state = %#v, calls = %q", state, operations.recordedCalls())
+	}
+}
+
+func TestModelOpensPathAndSelectsService(t *testing.T) {
+	t.Parallel()
+
+	state, catalog, operations := newTestModel(t)
+	catalog.pathResult = OpenResult{Targets: []Target{
+		{Project: testProject, Service: testAPI, Runtime: testRuntime,
+			Request: application.Request{Service: testAPI}},
+		{Project: testProject, Service: testWorker, Runtime: testRuntime,
+			Request: application.Request{Service: testWorker}},
+	}}
+	state.page = openPathPage{}
+	for _, character := range []string{"c", "o", "m", "p", "o", "s", "e", ".", "y", "m", "l"} {
+		state.handleKey(key(character))
+	}
+	state.handleKey(key("backspace"))
+	state.handleKey(key("l"))
+	state.handleKey(tea.KeyPressMsg(tea.Key{Text: "\n", Code: '\n'}))
+	path := openPathPageValue(t, state).value
+	if path != "compose.yml" {
+		t.Fatalf("path input = %q", path)
+	}
+
+	deliver(t, state, state.handleKey(key("enter")))
+	selection, valid := state.page.(selectServicePage)
+	if !valid || len(selection.choices) != 2 || selection.cursor != 0 {
+		t.Fatalf("service selection = %#v", state.page)
+	}
+	state.handleKey(key("up"))
+	state.handleKey(key("down"))
+	state.handleKey(key("j"))
+	deliver(t, state, state.handleKey(key("enter")))
+	review := reviewPageValue(t, state)
+	if review.request.Service != testWorker || !slices.Contains(catalog.recordedCalls(), "path:compose.yml") ||
+		!slices.Equal(operations.recordedCalls(), []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("selected review = %#v, calls %q / %q", review, catalog.recordedCalls(), operations.recordedCalls())
+	}
+}
+
+func TestModelContainsCatalogBlockersAndUnsafeDisplayValues(t *testing.T) {
+	t.Parallel()
+
+	state, catalog, _ := newTestModel(t)
+	catalog.snapshot.Services[0].Location = "services/\x1b[31mapi.yaml"
+	catalog.snapshot.Services[0].Name = strings.Repeat("x", displayLimits().Bytes+1)
+	deliver(t, state, state.startCatalog())
+	home := homePageValue(t, state)
+	if home.catalog.Services[0].Blocker != BlockerInvalid || strings.Contains(state.View().Content, "\x1b[31m") {
+		t.Fatalf("unsafe catalog = %#v, view %q", home.catalog, state.View().Content)
+	}
+
+	catalog.registeredResult = OpenResult{Blocker: BlockerNotFound}
+	home.catalog.Services[0] = Service{ID: "gone", Location: "gone", Name: testService}
+	state.page = home
+	deliver(t, state, state.handleKey(key("enter")))
+	if state.status != "Compose source is no longer registered" {
+		t.Fatalf("missing source status = %q", state.status)
+	}
+
+	for blocker, message := range map[SourceBlocker]string{
+		BlockerInvalid:     "Compose source did not pass validation",
+		BlockerUnavailable: "Compose source is unavailable",
+	} {
+		state.handleOpenResult(openResultMsg{sequence: state.sequence, result: OpenResult{Blocker: blocker}})
+		if state.status != message {
+			t.Fatalf("blocker %q status = %q", blocker, state.status)
+		}
+	}
+}
+
+//nolint:cyclop // One test covers both explicit cancellation paths through the same in-flight operation.
+func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	operations.blockApply = true
+	operations.cancelObserved = make(chan struct{})
+	review := reviewPage{request: application.Request{Service: testService}, plan: planView{status: statusReady}}
+	command := state.startApply(review)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- command() }()
+
+	if next := state.handleKey(key("esc")); next != nil || state.status != "Cancelling" || !state.busy {
+		t.Fatalf("cancel state = %#v", state)
+	}
+	if state.startCatalog() != nil {
+		t.Fatal("busy model started a second operation")
+	}
+	<-operations.cancelObserved
+	state.Update(<-result)
+	if state.busy || state.status != "Cancelled" || state.err != nil {
+		t.Fatalf("cancelled state = %#v", state)
+	}
+
+	operations.blockApply = true
+	operations.cancelObserved = make(chan struct{})
+	operations.cancelOnce = sync.Once{}
+	command = state.startApply(review)
+	result = make(chan tea.Msg, 1)
+	go func() { result <- command() }()
+	if next := state.handleKey(key("q")); next != nil || !state.quitAfterOperation {
+		t.Fatalf("busy quit state = %#v", state)
+	}
+	<-operations.cancelObserved
+	_, quit := state.Update(<-result)
+	if quit == nil || state.busy || state.quitAfterOperation {
+		t.Fatalf("completed quit state = %#v", state)
+	}
+}
+
+func TestModelContainsOperationFailuresAndStaleResults(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	state.page = reviewPage{request: application.Request{}, plan: planView{status: statusReady}}
+	operations.applyErr = errTestSecret
+	deliver(t, state, state.startApply(reviewPageValue(t, state)))
+	if !errors.Is(state.err, errTestSecret) || strings.Contains(state.View().Content, errTestSecret.Error()) {
+		t.Fatalf("operation failure = %#v, view %q", state, state.View().Content)
+	}
+
+	state.err = nil
+	state.status = "stable"
+	state.sequence = 10
+	state.Update(snapshotResultMsg{sequence: 9, err: errTestTUI})
+	state.Update(applyResultMsg{sequence: 9, err: errTestTUI})
+	state.Update(openResultMsg{sequence: 9, result: OpenResult{Blocker: BlockerInvalid}})
+	state.Update(catalogResultMsg{sequence: 9, snapshot: CatalogSnapshot{State: CatalogUnavailable}})
+	if state.err != nil || state.status != "stable" {
+		t.Fatalf("stale results changed state = %#v", state)
+	}
+
+	state.sequence = 11
+	state.busy = true
+	state.Update(snapshotResultMsg{sequence: 11, err: context.Canceled})
+	if state.err != nil || state.status != "Cancelled" {
+		t.Fatalf("cancelled result = %#v", state)
+	}
+}
+
+func TestModelRequiresEvidenceAndSafePlanProjection(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	request := application.Request{Service: testService}
+	operations.evidence.Version = 0
+	deliver(t, state, state.startSnapshot(request))
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Review evidence is unavailable" {
+		t.Fatalf("invalid evidence state = %#v", state)
+	}
+
+	operations.evidence.Version = application.EvidenceBundleVersion
+	operations.snapshot.Plan.Project = strings.Repeat("x", displayLimits().Bytes+1)
+	deliver(t, state, state.startSnapshot(request))
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Review content could not be displayed safely" {
+		t.Fatalf("unsafe plan state = %#v", state)
+	}
+
+	operations.snapshotErr = errTestTUI
+	before := len(operations.recordedCalls())
+	deliver(t, state, state.startSnapshot(request))
+	if !errors.Is(state.err, errTestTUI) || len(operations.recordedCalls()) != before+1 {
+		t.Fatalf("snapshot failure = %#v, calls %q", state, operations.recordedCalls())
+	}
+}
+
+func TestModelInvalidatesConfirmationBelowCompactFloor(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	review := reviewPage{plan: planView{status: statusReady}}
+	state.page = review
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(confirmationPage); !valid {
+		t.Fatal("full layout did not enter confirmation")
+	}
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	if _, valid := state.page.(reviewPage); !valid || state.status != "Review again at a larger terminal" {
+		t.Fatalf("hard-floor state = %#v", state)
+	}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(confirmationPage); valid || state.status != "Resize to continue to confirmation" {
+		t.Fatalf("hard-floor confirmation = %#v", state)
+	}
+}
+
+func TestModelRoutesPageNavigationAndContext(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	deliver(t, state, state.startCatalog())
+	state.handleKey(key("down"))
+	state.handleKey(key("up"))
+	state.handleKey(key("k"))
+	state.handleKey(key("j"))
+	state.handleKey(key("tab"))
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(openPathPage); !valid {
+		t.Fatalf("home navigation page = %T", state.page)
+	}
+	state.handleKey(key("esc"))
+	state.finishOperation()
+	state.page = openPathPage{}
+	state.handleKey(key("enter"))
+	if state.status != "Enter a Compose path" {
+		t.Fatalf("empty path status = %q", state.status)
+	}
+
+	review := reviewPage{plan: planView{status: statusReady}}
+	state.page = review
+	state.handleKey(key("d"))
+	state.handleKey(key("down"))
+	state.handleKey(key("up"))
+	state.handleKey(key("d"))
+	state.handleKey(key("enter"))
+	state.handleKey(key("right"))
+	state.handleKey(key("left"))
+	state.handleKey(key("shift+tab"))
+	state.handleKey(key("esc"))
+	if _, valid := state.page.(reviewPage); !valid {
+		t.Fatalf("page navigation ended at %T", state.page)
+	}
+	state.Update(eventMsg(application.Event{}))
+	state.Update(struct{}{})
+	_, quit := state.Update(contextDoneMsg{})
+	if quit == nil {
+		t.Fatal("context completion did not quit")
+	}
+	if state.handleKey(key("ctrl+c")) == nil || state.handleKey(key("q")) == nil {
+		t.Fatal("idle quit keys did not quit")
+	}
+}

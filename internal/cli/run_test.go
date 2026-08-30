@@ -55,7 +55,7 @@ func TestRunPublicTransport(t *testing.T) {
 			name:         "root help",
 			args:         []string{helpOption},
 			wantStatus:   0,
-			wantContains: []string{"Usage: maniud <command> [flags]", "gitops", "daemon", versionOption},
+			wantContains: []string{"Usage: maniud <command> [flags]", "tui", "gitops", "daemon", versionOption},
 		},
 		{
 			name:         "short root help",
@@ -157,6 +157,12 @@ func TestRunHelpPages(t *testing.T) {
 		{
 			args:         []string{debugOption, string(commandApply), shortHelpOption},
 			wantContains: []string{"Usage: maniud apply", "Dry run passed", jsonOption},
+		},
+		{
+			args: []string{string(commandTUI), helpOption},
+			wantContains: []string{
+				"Usage: maniud tui", "terminal input and output", "maniud apply --dry-run <compose>",
+			},
 		},
 		{
 			args:         []string{daemonCommand, helpOption},
@@ -404,21 +410,26 @@ func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
 	}
 }
 
-func TestRunProductionWiresInteractiveApply(t *testing.T) {
+func TestRunProductionRejectsNonTerminalTUIBeforeDependencies(t *testing.T) {
 	t.Parallel()
 
+	workingDirectoryRead := false
 	var stdout bytes.Buffer
 	status := runProduction(
 		t.Context(),
-		[]string{string(commandApply), tuiOption, composeFileValue},
+		[]string{string(commandTUI)},
 		strings.NewReader("q"),
 		&stdout,
 		io.Discard,
 		map[string]string{homeKey: t.TempDir()},
-		func() (string, error) { return t.TempDir(), nil },
+		func() (string, error) {
+			workingDirectoryRead = true
+
+			return t.TempDir(), nil
+		},
 		testRuntimePlugins(t),
 	)
-	if status != 1 || !strings.Contains(stdout.String(), `"code":"apply_failed"`) {
+	if status != 1 || !strings.Contains(stdout.String(), `"code":"tui_unavailable"`) || workingDirectoryRead {
 		t.Fatalf("runProduction(TUI) = %d, %q", status, stdout.String())
 	}
 }
@@ -427,6 +438,7 @@ func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 	t.Parallel()
 
 	tests := []invocation{
+		{arguments: tuiInvocation{}},
 		{arguments: gitOpsInitInvocation{}},
 		{arguments: daemonInvocation{operation: commandDaemonStart}},
 		{arguments: daemonInvocation{operation: commandDaemonStop}},
@@ -438,6 +450,7 @@ func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 			parsed, &output, nil,
 			func(genInvocation) error { return nil },
 			func(applyInvocation) error { return nil },
+			func(tuiInvocation) error { return nil },
 			func(gitOpsInitInvocation) error { return nil },
 			func(daemonInvocation) error { return nil },
 			func(doctorInvocation) error { return nil },
@@ -449,7 +462,7 @@ func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 
 	var output bytes.Buffer
 	status := dispatchParsedCommand(
-		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil,
+		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil, nil,
 	)
 	if status != 1 || output.String() != internalErrorJSON {
 		t.Fatalf("dispatchParsedCommand(unavailable) = %d, %q", status, output.String())

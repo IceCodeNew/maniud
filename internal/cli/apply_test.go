@@ -383,7 +383,7 @@ func TestWriteHumanApplyPlanReportsCompletedApply(t *testing.T) {
 
 func applyPlanTestFixture(kind application.PlanKind) application.Plan {
 	return application.Plan{
-		Kind: kind, Project: testProjectName, Service: "api", Runtime: domain.RuntimeDocker,
+		Kind: kind, Project: testProjectName, Service: applyServiceValue, Runtime: domain.RuntimeDocker,
 		Platform: domain.Platform{OS: linuxOS, Architecture: testArchitectureAMD64},
 		Image:    domain.ImageIdentity{Reference: "example.invalid/api:1"},
 		Warnings: []application.Warning{{

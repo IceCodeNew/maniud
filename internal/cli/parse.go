@@ -17,6 +17,7 @@ type command string
 const (
 	commandGen                command = "gen"
 	commandApply              command = "apply"
+	commandTUI                command = "tui"
 	commandGitOpsInit         command = "gitops init"
 	commandDaemonStart        command = "daemon start"
 	commandDaemonStop         command = "daemon stop"
@@ -33,7 +34,6 @@ const (
 	intervalOption                    = "--interval"
 	dryRunOption                      = "--dry-run"
 	jsonOption                        = "--json"
-	tuiOption                         = "--tui"
 	debugOption                       = "--debug"
 	helpOption                        = "--help"
 	shortHelpOption                   = "-h"
@@ -77,11 +77,16 @@ type applyInvocation struct {
 	service string
 	dryRun  bool
 	json    bool
-	tui     bool
 }
 
 func (applyInvocation) kind() command {
 	return commandApply
+}
+
+type tuiInvocation struct{}
+
+func (tuiInvocation) kind() command {
+	return commandTUI
 }
 
 type gitOpsInitInvocation struct {
@@ -118,6 +123,7 @@ type commandLine struct {
 	Version kong.VersionFlag  `help:"Show the release version or source revision."`
 	Gen     genCommandLine    `cmd:""                                                          help:"Create a deployable Compose file."`
 	Apply   applyCommandLine  `cmd:""                                                          help:"Deploy one Compose service."`
+	TUI     tuiCommandLine    `cmd:""                                                          help:"Open the interactive service workspace."`
 	GitOps  gitOpsCommandLine `cmd:""                                                          help:"Register a desired-state repository."                name:"gitops"`
 	Daemon  daemonCommandLine `cmd:""                                                          help:"Start or stop registered-repository reconciliation."`
 	Doctor  doctorCommandLine `cmd:""                                                          help:"Inspect or rebuild maniud's internal backup index."`
@@ -146,9 +152,16 @@ func (*genCommandLine) Help() string {
 type applyCommandLine struct {
 	DryRun  bool   `help:"Validate and show the planned action without changing anything." name:"dry-run"`
 	JSON    bool   `help:"Print one detailed JSON object instead of the short summary."`
-	TUI     bool   `help:"Open an interactive apply session."`
 	Compose string `arg:""                                                                 help:"Compose file to apply."                                  name:"compose"`
 	Service string `arg:""                                                                 help:"Service to select when the file contains more than one." name:"service" optional:""`
+}
+
+type tuiCommandLine struct{}
+
+func (*tuiCommandLine) Help() string {
+	return "Open an interactive workspace for registered services or a committed Compose file.\n\n" +
+		"The command requires terminal input and output. For non-interactive validation, use " +
+		"'maniud apply --dry-run <compose>' or 'maniud apply --dry-run --json <compose>'."
 }
 
 func (*applyCommandLine) Help() string {
@@ -248,7 +261,14 @@ func (value commandLine) invocation(path string, args []string) (invocation, err
 	case commandGen:
 		return value.genInvocation(args)
 	case commandApply:
-		return value.parsedApplyInvocation()
+		return invocation{arguments: applyInvocation{
+			compose: value.Apply.Compose,
+			service: value.Apply.Service,
+			dryRun:  value.Apply.DryRun,
+			json:    value.Apply.JSON,
+		}, debug: value.Debug}, nil
+	case commandTUI:
+		return invocation{arguments: tuiInvocation{}, debug: value.Debug}, nil
 	case commandGitOpsInit:
 		return invocation{arguments: gitOpsInitInvocation{
 			repository: value.GitOps.Init.Repository,
@@ -278,20 +298,6 @@ func (value commandLine) invocation(path string, args []string) (invocation, err
 	default:
 		return invocation{}, errInvalidArguments
 	}
-}
-
-func (value commandLine) parsedApplyInvocation() (invocation, error) {
-	if value.Apply.TUI && (value.Apply.DryRun || value.Apply.JSON) {
-		return invocation{}, errInvalidArguments
-	}
-
-	return invocation{arguments: applyInvocation{
-		compose: value.Apply.Compose,
-		service: value.Apply.Service,
-		dryRun:  value.Apply.DryRun,
-		json:    value.Apply.JSON,
-		tui:     value.Apply.TUI,
-	}, debug: value.Debug}, nil
 }
 
 func (value commandLine) genInvocation(args []string) (invocation, error) {
