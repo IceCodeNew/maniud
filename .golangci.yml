@@ -53,6 +53,7 @@ linters:
             - "!**/internal/notification/*.go"
             - "!**/internal/registry/*.go"
             - "!**/internal/tui/*.go"
+            - "!**/internal/terminaltext/*.go"
             - "!**/internal/changescope/*.go"
             - "!**/internal/cli/parse.go"
             - "!**/internal/custombuild/*.go"
@@ -75,6 +76,14 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - golang.org/x/mod
+        terminal-text:
+          list-mode: strict
+          files:
+            - "**/internal/terminaltext/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/charmbracelet/x/ansi
         custom-builder:
           list-mode: strict
           files:
