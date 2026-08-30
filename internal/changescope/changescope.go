@@ -267,18 +267,19 @@ func extractRevision(repository, revision, destination string) error {
 	extract := exec.CommandContext(context.Background(), "tar", "-xf", "-", "-C", destination)
 	pipe, _ := archive.StdoutPipe()
 	extract.Stdin = pipe
-	var stderr bytes.Buffer
-	archive.Stderr, extract.Stderr = &stderr, &stderr
+	var archiveStderr, extractStderr bytes.Buffer
+	archive.Stderr = &archiveStderr
+	extract.Stderr = &extractStderr
 	if err := extract.Start(); err != nil {
 		return fmt.Errorf("start archive extraction: %w", err)
 	}
 	if err := archive.Run(); err != nil {
 		_ = extract.Wait()
 
-		return fmt.Errorf("git archive: %w: %s", err, stderr.String())
+		return fmt.Errorf("git archive: %w: %s", err, archiveStderr.String())
 	}
 	if err := extract.Wait(); err != nil {
-		return fmt.Errorf("extract archive: %w: %s", err, stderr.String())
+		return fmt.Errorf("extract archive: %w: %s", err, extractStderr.String())
 	}
 
 	return nil
