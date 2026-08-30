@@ -434,14 +434,36 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *t
 		io.Discard,
 		registration,
 		dependencies,
-		func(context.Context, string, string, string) (string, string, error) {
+		func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
 			fetched = true
 
-			return "", "", nil
+			return gitOpsCheckoutSelection{}, nil
 		},
 	)
 	if !errors.Is(err, errGitOpsRecoverySourceBlocked) || fetched {
 		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, fetched = %t", err, fetched)
+	}
+}
+
+func TestReconcileRegisteredGitOpsCheckoutDoesNotMutateLocalAheadCommit(t *testing.T) {
+	t.Parallel()
+
+	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
+	writeGitOpsTestCommit(t, checkout, tuiTestServicePath, "services: {}\n", "local api")
+	events := make([]string, 0, 4)
+	operations := &applyOperationsFixture{events: &events}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	registration := gitOpsRegistration{
+		Version: gitOpsRegistrationVersion, Repository: checkout, Branch: gitOpsTestBranch,
+		Remote: gitOpsRemoteName, BaselineCommit: registered,
+	}
+
+	err := reconcileRegisteredGitOpsCheckout(
+		t.Context(), io.Discard, registration, dependencies, fastForwardGitOpsCheckout,
+	)
+	if err != nil || countEvent(events, dryRunEvent) != 0 ||
+		countEvent(events, string(commandApply)) != 0 {
+		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, events = %q", err, events)
 	}
 }
 

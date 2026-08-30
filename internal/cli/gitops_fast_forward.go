@@ -5,23 +5,39 @@ import (
 	"os"
 )
 
+type gitOpsCheckoutSelection struct {
+	root         string
+	commit       string
+	awaitingPush bool
+}
+
 func fastForwardGitOpsCheckout(
 	ctx context.Context,
 	path string,
 	branch string,
 	registeredCommit string,
-) (string, string, error) {
+) (gitOpsCheckoutSelection, error) {
 	root, before, err := registeredGitOpsCheckout(ctx, path, branch, registeredCommit)
 	if err != nil {
-		return "", "", err
+		return gitOpsCheckoutSelection{}, err
 	}
 
 	upstream, err := fetchGitOpsCommit(ctx, root, branch)
-	if err != nil || requireFastForward(ctx, root, before, upstream) != nil {
-		return "", "", errGitOpsRepositoryInvalid
+	if err != nil {
+		return gitOpsCheckoutSelection{}, errGitOpsRepositoryInvalid
+	}
+	if requireFastForward(ctx, root, before, upstream) == nil {
+		if err = advanceGitOpsCheckout(ctx, root, before, upstream); err != nil {
+			return gitOpsCheckoutSelection{}, err
+		}
+
+		return gitOpsCheckoutSelection{root: root, commit: upstream}, nil
+	}
+	if requireFastForward(ctx, root, upstream, before) == nil {
+		return gitOpsCheckoutSelection{root: root, commit: before, awaitingPush: true}, nil
 	}
 
-	return root, upstream, advanceGitOpsCheckout(ctx, root, before, upstream)
+	return gitOpsCheckoutSelection{}, errGitOpsRepositoryInvalid
 }
 
 func registeredGitOpsCheckout(

@@ -225,7 +225,7 @@ func reconcileRegisteredGitOpsCheckout(
 	output io.Writer,
 	registration gitOpsRegistration,
 	dependencies applyDependencies,
-	fastForward func(context.Context, string, string, string) (string, string, error),
+	fastForward func(context.Context, string, string, string) (gitOpsCheckoutSelection, error),
 ) error {
 	root, currentCommit, err := registeredGitOpsCheckout(
 		ctx,
@@ -250,7 +250,7 @@ func reconcileRegisteredGitOpsCheckout(
 		return err
 	}
 
-	root, selectedCommit, err := fastForward(
+	selection, err := fastForward(
 		ctx,
 		registration.Repository,
 		registration.Branch,
@@ -259,8 +259,11 @@ func reconcileRegisteredGitOpsCheckout(
 	if err != nil {
 		return err
 	}
+	if selection.awaitingPush {
+		return nil
+	}
 
-	return reconcileGitOpsSnapshot(ctx, root, selectedCommit, output, dependencies)
+	return reconcileGitOpsSnapshot(ctx, selection.root, selection.commit, output, dependencies)
 }
 
 func listGitOpsServiceFiles(root string) ([]string, error) {
