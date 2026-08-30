@@ -186,15 +186,19 @@ type schemaFacts struct {
 
 func (facts schemaFacts) valid() bool {
 	return facts.objectCount == currentObjectCount &&
-		facts.schemaDefinition == schemaTableSQL &&
+		facts.definitionsValid() &&
+		facts.schemaRows == 1 && facts.invalidSchemaRows == 0
+}
+
+func (facts schemaFacts) definitionsValid() bool {
+	return facts.schemaDefinition == schemaTableSQL &&
 		facts.writerLeaseDefinition == writerLeaseTableSQL &&
 		facts.transactionDefinition == journalTransactionTableSQL &&
 		facts.unresolvedDefinition == journalUnresolvedIndexSQL &&
 		facts.repositoryInventoryDefinition == journalRepositoryInventoryIndexSQL &&
 		facts.actionDefinition == journalActionTableSQL &&
 		facts.appliedDefinition == appliedServiceTableSQL &&
-		facts.backupDefinition == backupIndexTableSQL &&
-		facts.schemaRows == 1 && facts.invalidSchemaRows == 0
+		facts.backupDefinition == backupIndexTableSQL
 }
 
 func validateSchema(ctx context.Context, database rowQueryer) error {
