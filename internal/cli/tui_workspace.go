@@ -382,18 +382,19 @@ func (workspace *tuiServiceWorkspace) commitWith(
 
 	commitErr := commit(ctx, staged, message, unsigned)
 
-	return workspace.settleCommit(ctx, staged, unsigned, commitErr)
+	return workspace.settleCommit(ctx, staged, message, unsigned, commitErr)
 }
 
 //nolint:funcorder // settleCommit completes commitWith while the transaction lock is held.
 func (workspace *tuiServiceWorkspace) settleCommit(
 	ctx context.Context,
 	staged tuiStagedService,
+	message string,
 	unsigned bool,
 	commitErr error,
 ) (tui.ServiceCommitResult, error) {
 	proofCtx := context.WithoutCancel(ctx)
-	committedHead, unchanged := proveTUICommit(proofCtx, staged, !unsigned)
+	committedHead, unchanged := proveTUICommit(proofCtx, staged, message, !unsigned)
 	if committedHead != "" {
 		workspace.staged = nil
 		workspace.draft = nil
@@ -460,7 +461,12 @@ func verifyTUIStagedState(ctx context.Context, staged tuiStagedService) bool {
 	return err == nil && tree == staged.expectedTree
 }
 
-func proveTUICommit(ctx context.Context, staged tuiStagedService, requireSignature bool) (string, bool) {
+func proveTUICommit(
+	ctx context.Context,
+	staged tuiStagedService,
+	message string,
+	requireSignature bool,
+) (string, bool) {
 	head, err := resolveGitObject(ctx, staged.draft.repository, "HEAD^{commit}")
 	if err != nil {
 		return "", false
@@ -468,7 +474,7 @@ func proveTUICommit(ctx context.Context, staged tuiStagedService, requireSignatu
 	if head == staged.draft.base.head {
 		return "", verifyTUIStagedState(ctx, staged)
 	}
-	if !proveNewTUICommit(ctx, staged, head, requireSignature) {
+	if !proveNewTUICommit(ctx, staged, head, message, requireSignature) {
 		return "", false
 	}
 
@@ -479,9 +485,10 @@ func proveNewTUICommit(
 	ctx context.Context,
 	staged tuiStagedService,
 	head string,
+	message string,
 	requireSignature bool,
 ) bool {
-	if !matchesTUICommit(ctx, staged, head, requireSignature) {
+	if !matchesTUICommit(ctx, staged, head, message, requireSignature) {
 		return false
 	}
 	state, err := cleanGitTree(ctx, staged.draft.repository)
@@ -493,6 +500,7 @@ func matchesTUICommit(
 	ctx context.Context,
 	staged tuiStagedService,
 	head string,
+	message string,
 	requireSignature bool,
 ) bool {
 	parents, err := runGit(ctx, staged.draft.repository, "rev-list", "--parents", "-n", "1", head)
@@ -504,11 +512,21 @@ func matchesTUICommit(
 	if err != nil || tree != staged.expectedTree {
 		return false
 	}
-	if requireSignature && !gitCommitHasSignature(ctx, staged.draft.repository, head) {
+	if !gitCommitMatches(ctx, staged.draft.repository, head, message, requireSignature) {
 		return false
 	}
 
 	return true
+}
+
+func gitCommitMatches(ctx context.Context, repository, head, message string, requireSignature bool) bool {
+	commit, err := runGit(ctx, repository, "cat-file", "commit", head)
+	header, body, found := bytes.Cut(commit, []byte("\n\n"))
+	if err != nil || !found || string(body) != message+"\n" {
+		return false
+	}
+
+	return !requireSignature || bytes.Contains(header, []byte("\ngpgsig "))
 }
 
 func gitCommitHasSignature(ctx context.Context, repository, head string) bool {

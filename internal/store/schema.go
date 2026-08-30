@@ -11,7 +11,7 @@ type rowQueryer interface {
 
 const (
 	currentSchemaVersion = 1
-	currentObjectCount   = 7
+	currentObjectCount   = 8
 	schemaTableName      = "schema_version"
 	schemaTableSQL       = "CREATE TABLE schema_version (" +
 		"singleton INTEGER PRIMARY KEY CHECK (singleton = 1), " +
@@ -63,6 +63,10 @@ const (
 	journalUnresolvedIndexName = "journal_one_unresolved_transaction_per_service"
 	journalUnresolvedIndexSQL  = "CREATE UNIQUE INDEX journal_one_unresolved_transaction_per_service " +
 		"ON journal_transactions(service_id) WHERE state IN ('active', 'degraded')"
+	journalRepositoryInventoryIndexName = "journal_unresolved_repository_inventory"
+	journalRepositoryInventoryIndexSQL  = "CREATE INDEX journal_unresolved_repository_inventory " +
+		"ON journal_transactions(repository_scope_digest, repository_location_digest, transaction_id) " +
+		"WHERE state IN ('active', 'degraded')"
 	journalActionTableName = "journal_actions"
 	journalActionTableSQL  = "CREATE TABLE journal_actions (" +
 		"transaction_id BLOB NOT NULL CHECK (typeof(transaction_id) = 'blob' AND length(transaction_id) = 16), " +
@@ -116,8 +120,8 @@ const (
 	initialSchemaSQL = schemaTableSQL + "; " +
 		"INSERT INTO schema_version (singleton, version) VALUES (1, 1); " +
 		writerLeaseTableSQL + "; " + journalTransactionTableSQL + "; " +
-		journalUnresolvedIndexSQL + "; " + journalActionTableSQL + "; " +
-		appliedServiceTableSQL + "; " + backupIndexTableSQL
+		journalUnresolvedIndexSQL + "; " + journalRepositoryInventoryIndexSQL + "; " +
+		journalActionTableSQL + "; " + appliedServiceTableSQL + "; " + backupIndexTableSQL
 )
 
 func ensureInitialSchema(ctx context.Context, database *sql.DB) error {
@@ -167,16 +171,17 @@ func initializeSchema(ctx context.Context, database *sql.DB) error {
 }
 
 type schemaFacts struct {
-	objectCount           int
-	schemaDefinition      string
-	writerLeaseDefinition string
-	transactionDefinition string
-	unresolvedDefinition  string
-	actionDefinition      string
-	appliedDefinition     string
-	backupDefinition      string
-	schemaRows            int
-	invalidSchemaRows     int
+	objectCount                   int
+	schemaDefinition              string
+	writerLeaseDefinition         string
+	transactionDefinition         string
+	unresolvedDefinition          string
+	repositoryInventoryDefinition string
+	actionDefinition              string
+	appliedDefinition             string
+	backupDefinition              string
+	schemaRows                    int
+	invalidSchemaRows             int
 }
 
 func (facts schemaFacts) valid() bool {
@@ -185,6 +190,7 @@ func (facts schemaFacts) valid() bool {
 		facts.writerLeaseDefinition == writerLeaseTableSQL &&
 		facts.transactionDefinition == journalTransactionTableSQL &&
 		facts.unresolvedDefinition == journalUnresolvedIndexSQL &&
+		facts.repositoryInventoryDefinition == journalRepositoryInventoryIndexSQL &&
 		facts.actionDefinition == journalActionTableSQL &&
 		facts.appliedDefinition == appliedServiceTableSQL &&
 		facts.backupDefinition == backupIndexTableSQL &&
@@ -225,6 +231,8 @@ func readSchemaFacts(
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'journal_transactions'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'index' "+
 			" AND name = 'journal_one_unresolved_transaction_per_service'), ''), "+
+			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'index' "+
+			" AND name = 'journal_unresolved_repository_inventory'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'journal_actions'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'applied_services'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workload_backups'), ''), "+
@@ -238,6 +246,7 @@ func readSchemaFacts(
 		&facts.writerLeaseDefinition,
 		&facts.transactionDefinition,
 		&facts.unresolvedDefinition,
+		&facts.repositoryInventoryDefinition,
 		&facts.actionDefinition,
 		&facts.appliedDefinition,
 		&facts.backupDefinition,

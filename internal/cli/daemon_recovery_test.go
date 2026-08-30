@@ -27,13 +27,13 @@ func TestRecoverGitOpsSnapshotSkipsNewOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	if err = recoverGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies); err != nil {
-		t.Fatalf("recoverGitOpsSnapshot() error = %v", err)
+	if _, err = recoverGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies); err != nil {
+		t.Fatalf("recoverGitOpsSnapshotResult() error = %v", err)
 	}
-	if err = recoverGitOpsSnapshot(
+	if _, err = recoverGitOpsSnapshotResult(
 		t.Context(), root, "ffffffffffffffffffffffffffffffffffffffff", io.Discard, dependencies,
 	); err == nil {
-		t.Fatal("recoverGitOpsSnapshot(mismatched commit) succeeded")
+		t.Fatal("recoverGitOpsSnapshotResult(mismatched commit) succeeded")
 	}
 }
 
@@ -55,9 +55,9 @@ func TestRecoverGitOpsSnapshotReadsInventoryBeforeSources(t *testing.T) {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 
-	err = recoverGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	_, err = recoverGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies)
 	if !errors.Is(err, errApplyTest) || loaded {
-		t.Fatalf("recoverGitOpsSnapshot() error = %v, loaded = %t", err, loaded)
+		t.Fatalf("recoverGitOpsSnapshotResult() error = %v, loaded = %t", err, loaded)
 	}
 }
 
@@ -210,9 +210,9 @@ services:
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 
-	err = recoverGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	_, err = recoverGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies)
 	if mutations := countEvent(events, string(commandApply)); err != nil || mutations != 2 {
-		t.Fatalf("recoverGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+		t.Fatalf("recoverGitOpsSnapshotResult() error = %v, mutations = %d", err, mutations)
 	}
 }
 
@@ -281,10 +281,10 @@ func assertBlockedRecoverySource(t *testing.T, test blockedRecoverySourceTest) {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 
-	err = recoverGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	_, err = recoverGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies)
 	mutations := countEvent(events, string(commandApply))
 	if !errors.Is(err, errGitOpsRecoverySourceBlocked) || mutations != 0 {
-		t.Fatalf("recoverGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+		t.Fatalf("recoverGitOpsSnapshotResult() error = %v, mutations = %d", err, mutations)
 	}
 }
 
@@ -315,8 +315,8 @@ func TestRecoverGitOpsServicesRunsOnlyRecoveryPlans(t *testing.T) {
 			plan:         application.Plan{Kind: application.PlanRestore},
 		},
 	}
-	if err := recoverGitOpsServices(t.Context(), services, io.Discard); err != nil {
-		t.Fatalf("recoverGitOpsServices() error = %v", err)
+	if _, err := recoverGitOpsServicesResult(t.Context(), services, io.Discard); err != nil {
+		t.Fatalf("recoverGitOpsServicesResult() error = %v", err)
 	}
 	if got := countEvent(events, string(commandApply)); got != 2 {
 		t.Fatalf("mutation events = %d, events = %q", got, events)

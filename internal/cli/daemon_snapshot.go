@@ -28,18 +28,6 @@ type gitOpsSourceSnapshot struct {
 	blocked  bool
 }
 
-func reconcileGitOpsSnapshot(
-	ctx context.Context,
-	root string,
-	selectedCommit string,
-	output io.Writer,
-	dependencies applyDependencies,
-) error {
-	_, err := reconcileGitOpsSnapshotResult(ctx, root, selectedCommit, output, dependencies)
-
-	return err
-}
-
 func reconcileGitOpsSnapshotResult(
 	ctx context.Context,
 	root string,
@@ -71,18 +59,6 @@ func reconcileGitOpsSnapshotResult(
 	}
 
 	return counts, nil
-}
-
-func recoverGitOpsSnapshot(
-	ctx context.Context,
-	root string,
-	selectedCommit string,
-	output io.Writer,
-	dependencies applyDependencies,
-) error {
-	_, err := recoverGitOpsSnapshotResult(ctx, root, selectedCommit, output, dependencies)
-
-	return err
 }
 
 //nolint:cyclop // Recovery keeps inventory, source capture, and final checkout proof in one ordered transaction.
@@ -220,16 +196,6 @@ func sourceMatchesRepositoryInventory(
 	return true
 }
 
-func recoverGitOpsServices(
-	ctx context.Context,
-	services []gitOpsServiceSnapshot,
-	output io.Writer,
-) error {
-	_, err := recoverGitOpsServicesResult(ctx, services, output)
-
-	return err
-}
-
 func recoverGitOpsServicesResult(
 	ctx context.Context,
 	services []gitOpsServiceSnapshot,
@@ -281,17 +247,6 @@ func gitOpsRecoveryPlan(kind application.PlanKind) bool {
 	return kind == application.PlanResume ||
 		kind == application.PlanProbeUnknownEffect ||
 		kind == application.PlanRestore
-}
-
-func captureGitOpsSnapshot(
-	ctx context.Context,
-	root string,
-	selectedCommit string,
-	dependencies applyDependencies,
-) ([]gitOpsServiceSnapshot, error) {
-	snapshot, err := prepareGitOpsSnapshot(ctx, root, selectedCommit, dependencies)
-
-	return snapshot.services, err
 }
 
 func prepareGitOpsSnapshot(

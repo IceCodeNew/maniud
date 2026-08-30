@@ -94,9 +94,9 @@ services:
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 
-	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	_, err = reconcileGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies)
 	if mutations := countEvent(events, string(commandApply)); !errors.Is(err, errApplyTest) || mutations != 0 {
-		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+		t.Fatalf("reconcileGitOpsSnapshotResult() error = %v, mutations = %d", err, mutations)
 	}
 }
 
@@ -122,17 +122,17 @@ func TestReconcileGitOpsSnapshotEmitsValidatedServiceResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, output, dependencies)
+	_, err = reconcileGitOpsSnapshotResult(t.Context(), root, state.head, output, dependencies)
 	mutations := countEvent(events, string(commandApply))
 	if err != nil || mutations != 2 {
-		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+		t.Fatalf("reconcileGitOpsSnapshotResult() error = %v, mutations = %d", err, mutations)
 	}
 	decoder := json.NewDecoder(output)
 	for index := range mutations {
 		var got applyPlan
 		if decodeErr := decoder.Decode(&got); decodeErr != nil || len(got.Warnings) != 1 ||
 			got.Warnings[0].Code != application.WarningDaemonMountProbeUnavailable {
-			t.Fatalf("reconcileGitOpsSnapshot() result %d = %#v, %v", index, got, decodeErr)
+			t.Fatalf("reconcileGitOpsSnapshotResult() result %d = %#v, %v", index, got, decodeErr)
 		}
 	}
 }
@@ -262,7 +262,7 @@ func TestReconcileGitOpsSnapshotDoesNotPublishApplyFailureForOutputFailure(t *te
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	err = reconcileGitOpsSnapshot(
+	_, err = reconcileGitOpsSnapshotResult(
 		t.Context(),
 		root,
 		state.head,
@@ -270,7 +270,7 @@ func TestReconcileGitOpsSnapshotDoesNotPublishApplyFailureForOutputFailure(t *te
 		dependencies,
 	)
 	if !errors.Is(err, errApplyOutputTest) {
-		t.Fatalf("reconcileGitOpsSnapshot() error = %v", err)
+		t.Fatalf("reconcileGitOpsSnapshotResult() error = %v", err)
 	}
 	if len(observed) != 0 {
 		t.Fatalf("GitOps failure events = %#v", observed)
@@ -294,9 +294,10 @@ func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return compose.Source{}, compose.ErrInvalidSource
 	}
-	services, err := captureGitOpsSnapshot(t.Context(), root, state.head, dependencies)
+	snapshot, err := prepareGitOpsSnapshot(t.Context(), root, state.head, dependencies)
+	services := snapshot.services
 	if err != nil || len(services) != 0 {
-		t.Fatalf("captureGitOpsSnapshot(load failure) = %#v, %v", services, err)
+		t.Fatalf("prepareGitOpsSnapshot(load failure) = %#v, %v", snapshot, err)
 	}
 
 	modified := false
@@ -310,10 +311,10 @@ func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
 
 		return testComposeSource(t), nil
 	}
-	if _, err = captureGitOpsSnapshot(
+	if _, err = prepareGitOpsSnapshot(
 		t.Context(), root, state.head, dependencies,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
-		t.Fatalf("captureGitOpsSnapshot(checkout drift) = %v", err)
+		t.Fatalf("prepareGitOpsSnapshot(checkout drift) = %v", err)
 	}
 }
 
@@ -338,22 +339,22 @@ func TestCaptureGitOpsSnapshotRejectsInvalidServiceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	if _, err = captureGitOpsSnapshot(t.Context(), root, state.head, applyDependencies{}); err == nil {
-		t.Fatal("captureGitOpsSnapshot(service directory file) succeeded")
+	if _, err = prepareGitOpsSnapshot(t.Context(), root, state.head, applyDependencies{}); err == nil {
+		t.Fatal("prepareGitOpsSnapshot(service directory file) succeeded")
 	}
 
 	if err = os.WriteFile(filepath.Join(root, "dirty"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("WriteFile(dirty) error = %v", err)
 	}
-	if _, err = captureGitOpsSnapshot(
+	if _, err = prepareGitOpsSnapshot(
 		t.Context(), root, state.head, applyDependencies{},
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
-		t.Fatalf("captureGitOpsSnapshot(dirty) = %v", err)
+		t.Fatalf("prepareGitOpsSnapshot(dirty) = %v", err)
 	}
-	if err = recoverGitOpsSnapshot(
+	if _, err = recoverGitOpsSnapshotResult(
 		t.Context(), root, state.head, io.Discard, applyDependencies{},
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
-		t.Fatalf("recoverGitOpsSnapshot(dirty) = %v", err)
+		t.Fatalf("recoverGitOpsSnapshotResult(dirty) = %v", err)
 	}
 }
 

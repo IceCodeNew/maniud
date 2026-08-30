@@ -51,11 +51,14 @@ type selection struct {
 }
 
 var (
-	errChangedPathEmpty  = errors.New("changed path is empty")
-	errPathUnclassified  = errors.New("cannot classify changed path")
-	errNoModulesSelected = errors.New("selector produced no modules")
-	errModuleMissing     = errors.New("missing module directive")
-	errPackageOutside    = errors.New("package directory is outside the revision")
+	errChangedPathEmpty   = errors.New("changed path is empty")
+	errPathUnclassified   = errors.New("cannot classify changed path")
+	errNoModulesSelected  = errors.New("selector produced no modules")
+	errModuleMissing      = errors.New("missing module directive")
+	errModuleNotRegular   = errors.New("module file is not regular")
+	errRevisionSymlink    = errors.New("revision contains a symbolic link")
+	errReplacementOutside = errors.New("local replacement is outside the revision")
+	errPackageOutside     = errors.New("package directory is outside the revision")
 )
 
 // Select computes affected modules and the reverse package-import closure from both revisions.
@@ -118,9 +121,21 @@ func (selected *selection) expandImporters(graphs []*side) {
 	for _, graph := range graphs {
 		allImports = mergeEdges(allImports, graph.imports)
 	}
-	for changed := range selected.packages {
-		for importer := range reverseClosure(changed, allImports) {
-			selected.packages[importer] = true
+	reverseImports := map[string][]string{}
+	for importer, dependencies := range allImports {
+		for _, dependency := range dependencies {
+			reverseImports[dependency] = append(reverseImports[dependency], importer)
+		}
+	}
+	queue := slices.Collect(maps.Keys(selected.packages))
+	for len(queue) > 0 {
+		dependency := queue[0]
+		queue = queue[1:]
+		for _, importer := range reverseImports[dependency] {
+			if !selected.packages[importer] {
+				selected.packages[importer] = true
+				queue = append(queue, importer)
+			}
 		}
 	}
 }
@@ -290,8 +305,16 @@ func loadModules(root string, graph *side) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			relative, _ := filepath.Rel(root, path)
+
+			return fmt.Errorf("%w: %s", errRevisionSymlink, filepath.ToSlash(relative))
+		}
 		if entry.Name() != "go.mod" {
 			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("%w: %s", errModuleNotRegular, filepath.ToSlash(path))
 		}
 		relative, _ := filepath.Rel(root, filepath.Dir(path))
 		relative = filepath.ToSlash(relative)
@@ -309,16 +332,8 @@ func loadModules(root string, graph *side) error {
 			return fmt.Errorf("%w: %s", errModuleMissing, relative)
 		}
 		graph.modules[relative] = file.Module.Mod.Path
-		for _, replacement := range file.Replace {
-			if !modfile.IsDirectoryPath(replacement.New.Path) {
-				continue
-			}
-			target := filepath.Clean(filepath.Join(relative, replacement.New.Path))
-			target = filepath.ToSlash(target)
-			graph.replaces[target] = append(graph.replaces[target], relative)
-		}
 
-		return nil
+		return recordLocalReplacements(relative, file.Replace, graph)
 	})
 	if err != nil {
 		return fmt.Errorf("load revision modules: %w", err)
@@ -327,10 +342,28 @@ func loadModules(root string, graph *side) error {
 	return nil
 }
 
+func recordLocalReplacements(relative string, replacements []*modfile.Replace, graph *side) error {
+	for _, replacement := range replacements {
+		if !modfile.IsDirectoryPath(replacement.New.Path) {
+			continue
+		}
+		replacementPath := filepath.FromSlash(replacement.New.Path)
+		target := filepath.Clean(filepath.Join(filepath.FromSlash(relative), replacementPath))
+		if filepath.IsAbs(replacementPath) || target == ".." ||
+			strings.HasPrefix(target, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("%w: %s", errReplacementOutside, replacement.New.Path)
+		}
+		target = filepath.ToSlash(target)
+		graph.replaces[target] = append(graph.replaces[target], relative)
+	}
+
+	return nil
+}
+
 func loadPackages(graph *side, moduleDirectory string) error {
 	command := exec.CommandContext(context.Background(), "go", "list", "-json", "./...")
 	command.Dir = filepath.Join(graph.root, moduleDirectory)
-	command.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+	command.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0", "GOTOOLCHAIN=local")
 	output, err := command.Output()
 	if err != nil {
 		return fmt.Errorf("go list %s: %w", moduleDirectory, err)
@@ -399,27 +432,6 @@ func mergeEdges(graphs ...map[string][]string) map[string][]string {
 	for _, graph := range graphs {
 		for pkg, imports := range graph {
 			result[pkg] = append(result[pkg], imports...)
-		}
-	}
-
-	return result
-}
-
-func reverseClosure(changed string, imports map[string][]string) map[string]bool {
-	result := map[string]bool{changed: true}
-	for grew := true; grew; {
-		grew = false
-		for pkg, dependencies := range imports {
-			if result[pkg] {
-				continue
-			}
-			for _, dependency := range dependencies {
-				if result[dependency] {
-					result[pkg], grew = true, true
-
-					break
-				}
-			}
 		}
 	}
 

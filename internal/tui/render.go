@@ -26,8 +26,9 @@ const (
 	comparisonColumns  = 2
 	diffSummaryRows    = 4
 	detailsPadding     = 2
-	railExtraLines     = 6
 	selectionBaseRows  = 3
+	reviewBodyBaseRows = 7
+	reviewStatusRows   = 7
 	detailsBaseRows    = 12
 	diagnosticBaseRows = 16
 	commitBaseRows     = 10
@@ -103,7 +104,7 @@ func (state *model) fullView(width, height int) []string {
 	bodyWidth := width - fullBodyOffset
 	header := state.header(width)
 	rail := state.rail()
-	body := state.body(bodyWidth, false)
+	body := state.body(bodyWidth)
 	contentHeight := min(max(len(rail), len(body)), max(height-fullFrameRows, 0))
 	horizontal := strings.Repeat(state.symbol("─", "-"), width)
 	lines := make([]string, 0, fullFrameRows+contentHeight)
@@ -126,14 +127,33 @@ func (state *model) fullView(width, height int) []string {
 
 func (state *model) compactView(width, height int) []string {
 	horizontal := strings.Repeat(state.symbol("─", "-"), width)
-	body := state.body(width, true)
-	body = body[:min(len(body), max(height-compactFrameRows, 0))]
+	bodyHeight := max(height-compactFrameRows, 0)
+	body := state.compactBody(width, bodyHeight)
 	lines := make([]string, 0, compactFrameRows+len(body))
 	lines = append(lines, state.header(width), horizontal, state.locationLine())
 	lines = append(lines, body...)
 	lines = append(lines, horizontal, state.footer(width))
 
 	return lines
+}
+
+func (state *model) compactBody(width, height int) []string {
+	if current, ok := state.page.(reviewPage); ok {
+		summary := []string{
+			state.muted("CURRENT"), terminaltext.Middle(current.plan.current, width, "…"),
+			state.muted("PROPOSED"), terminaltext.Middle(current.plan.proposed, width, "…"),
+		}
+		fixed := state.appendBodyState(state.reviewStatusBody(current.plan, width, true))
+		if height-len(fixed) > len(summary) {
+			summary = append([]string{state.title("Review image change")}, summary...)
+		}
+		summary = summary[:min(len(summary), max(height-len(fixed), 0))]
+
+		return append(summary, fixed...)
+	}
+	body := state.body(width)
+
+	return body[:min(len(body), height)]
 }
 
 func (state *model) hardFloorView(width int) []string {
@@ -224,20 +244,7 @@ func (state *model) rail() []string {
 		}
 	}
 
-	lines := make([]string, 0, len(steps)+railExtraLines)
-	lines = append(lines, state.muted("FLOW"), "")
-	for index, step := range steps {
-		marker := "  "
-		if index == current {
-			marker = state.accent(state.symbol("◆", ">")) + " "
-		} else if index < current {
-			marker = state.success(state.symbol("✓", "*")) + " "
-		}
-		lines = append(lines, marker+step)
-	}
-	lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
-
-	return lines
+	return state.flowRail("FLOW", steps, current)
 }
 
 func (state *model) serviceWorkspaceRail() ([]string, bool) {
@@ -254,24 +261,31 @@ func (state *model) serviceWorkspaceRail() ([]string, bool) {
 		return nil, false
 	}
 	steps := []string{"Input", "Preview", "Commit", "Validate"}
-	lines := make([]string, 0, len(steps)+railExtraLines)
-	lines = append(lines, state.muted("ADD SERVICE"), "")
+
+	return state.flowRail("ADD SERVICE", steps, current), true
+}
+
+func (state *model) flowRail(label string, steps []string, current int) []string {
+	lines := []string{state.muted(label), ""}
 	for index, step := range steps {
-		marker := "  "
-		if index == current {
-			marker = state.accent(state.symbol("◆", ">")) + " "
-		} else if index < current {
-			marker = state.success(state.symbol("✓", "*")) + " "
+		marker := state.muted(state.symbol("○ ", "[ ] "))
+		switch {
+		case index < current:
+			marker = state.success(state.symbol("✓ ", "[x] "))
+		case index == current:
+			marker = state.accent(state.symbol("● ", "[*] "))
 		}
 		lines = append(lines, marker+step)
+		if index < len(steps)-1 {
+			lines = append(lines, state.muted(state.symbol("│", " |")))
+		}
 	}
 	lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
 
-	return lines, true
+	return lines
 }
 
-//nolint:cyclop // The type switch is the single renderer dispatch table for all page states.
-func (state *model) body(width int, compact bool) []string {
+func (state *model) body(width int) []string {
 	lines, setupPage := state.auxiliaryPageBody(width)
 	if !setupPage {
 		switch current := state.page.(type) {
@@ -284,7 +298,7 @@ func (state *model) body(width int, compact bool) []string {
 		case selectServicePage:
 			lines = state.selectServiceBody(current, width)
 		case reviewPage:
-			lines = state.reviewBody(current, width, compact)
+			lines = state.reviewBody(current, width)
 		case detailsPage:
 			lines = state.detailsBody(current, width)
 		case confirmationPage:
@@ -292,7 +306,12 @@ func (state *model) body(width int, compact bool) []string {
 		}
 	}
 
-	if state.mutationOutcome != "" {
+	return state.appendBodyState(lines)
+}
+
+func (state *model) appendBodyState(lines []string) []string {
+	_, reviewing := state.page.(reviewPage)
+	if state.mutationOutcome != "" && (!reviewing || state.mutationOutcome != statusApplyCompleted) {
 		lines = append(lines, "", state.success(state.symbol("✓ ", "OK ")+state.mutationOutcome))
 	}
 	if state.err != nil {
@@ -616,36 +635,50 @@ func (state *model) selectServiceBody(current selectServicePage, width int) []st
 	return lines
 }
 
-func (state *model) reviewBody(current reviewPage, width int, compact bool) []string {
+func (state *model) reviewBody(current reviewPage, width int) []string {
 	plan := current.plan
-	lines := []string{
+	lines := make([]string, 0, reviewBodyBaseRows)
+	lines = append(lines,
 		state.title("Review image change"),
 		"Compare the current and proposed image identities before continuing.",
 		"",
 		fmt.Sprintf("Service   %s / %s", plan.project, plan.service),
 		fmt.Sprintf("Runtime   %s on %s", plan.runtime, plan.platform),
-		"Action    " + plan.kind,
+		"Action    "+plan.kind,
 		"",
+	)
+	lines = append(lines, imageComparison(plan.current, plan.proposed, width)...)
+	lines = append(lines, state.reviewStatusBody(plan, width, false)...)
+
+	return lines
+}
+
+func (state *model) reviewStatusBody(plan planView, width int, compact bool) []string {
+	status := plan.status
+	if state.mutationOutcome == statusApplyCompleted {
+		status = statusApplyCompleted
 	}
-	if compact {
-		lines = append(lines,
-			state.muted("CURRENT"), terminaltext.Middle(plan.current, width, "…"),
-			state.muted("PROPOSED"), terminaltext.Middle(plan.proposed, width, "…"),
-		)
-	} else {
-		lines = append(lines, imageComparison(plan.current, plan.proposed, width)...)
+	lines := make([]string, 0, reviewStatusRows)
+	if !compact {
+		lines = append(lines, "")
 	}
-	lines = append(lines, "", state.statusCard(plan.status))
+	lines = append(lines, state.statusCard(status))
 	if plan.warningText != "" {
 		lines = append(lines, state.failure(plan.warningText))
 	}
-	lines = append(lines,
-		"Compose validation and read-only runtime checks passed.",
-		"No runtime change has started.",
-		"",
-		state.choice(true, "Continue to confirmation", width),
-		state.muted("d Details   r Refresh   Esc Back"),
-	)
+	if !compact {
+		lines = append(lines, "Compose validation and read-only runtime checks passed.")
+	}
+	if state.mutationOutcome != statusApplyCompleted {
+		lines = append(lines, "No runtime change has started.")
+	}
+	if !compact {
+		lines = append(lines, "")
+	}
+	lines = append(lines, state.choice(true, "Continue to confirmation", width))
+	if !compact {
+		lines = append(lines, state.muted("d Details   r Refresh   Esc Back"))
+	}
 
 	return lines
 }
@@ -737,7 +770,11 @@ func (state *model) serviceWorkspaceFooter() (string, bool) {
 }
 
 func (state *model) statusCard(status string) string {
-	return state.success(state.symbol("◆ ", "OK ") + status)
+	if status == statusApplyCompleted {
+		return state.success(state.symbol("✓ ", "[x] ") + status)
+	}
+
+	return state.accent(state.symbol("⬟ ", "[OK] ") + status)
 }
 
 func (state *model) choice(selected bool, label string, width int) string {

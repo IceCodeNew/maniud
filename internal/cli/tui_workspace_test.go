@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	tuiTestDigest      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	tuiTestServicePath = "services/api.yaml"
-	tuiCommand         = "maniud tui"
+	tuiTestDigest        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tuiTestServicePath   = "services/api.yaml"
+	tuiTestCommitMessage = "Add api service"
+	tuiCommand           = "maniud tui"
 )
 
 func TestTUIGenInvocationAcceptsOneNonExecutingServiceSource(t *testing.T) {
@@ -451,11 +452,12 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 	}
 
 	staged := tuiStagedService{draft: draft, paths: []string{draft.generated.path}}
-	if committed, unchanged := proveTUICommit(t.Context(), staged, false); committed != "" || unchanged {
+	committed, unchanged := proveTUICommit(t.Context(), staged, tuiTestCommitMessage, false)
+	if committed != "" || unchanged {
 		t.Fatalf("proveTUICommit(invalid stage) = %q, %t", committed, unchanged)
 	}
-	if proveNewTUICommit(t.Context(), staged, draft.base.head, false) ||
-		matchesTUICommit(t.Context(), staged, draft.base.head, false) {
+	if proveNewTUICommit(t.Context(), staged, draft.base.head, tuiTestCommitMessage, false) ||
+		matchesTUICommit(t.Context(), staged, draft.base.head, tuiTestCommitMessage, false) {
 		t.Fatal("invalid new commit proof succeeded")
 	}
 	if gitCommitHasSignature(t.Context(), draft.repository, draft.base.head) {
@@ -729,7 +731,7 @@ func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
 	})
 }
 
-//nolint:cyclop // Assertions jointly prove path identity, parentage, tree identity, and signature policy.
+//nolint:cyclop,funlen // Assertions jointly prove path identity, parentage, tree identity, and signature policy.
 func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	t.Parallel()
 
@@ -751,7 +753,7 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	}
 	if committed, unchanged := proveTUICommit(t.Context(), tuiStagedService{draft: tuiServiceDraft{
 		repository: filepath.Join(draft.repository, testMissingName),
-	}}, false); committed != "" || unchanged {
+	}}, tuiTestCommitMessage, false); committed != "" || unchanged {
 		t.Fatalf("proveTUICommit(missing repository) = %q, %t", committed, unchanged)
 	}
 
@@ -768,18 +770,25 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve HEAD error = %v", err)
 	}
-	if matchesTUICommit(t.Context(), staged, draft.base.head, false) {
+	if matchesTUICommit(t.Context(), staged, draft.base.head, "add api", false) {
 		t.Fatal("matchesTUICommit(previous commit) succeeded")
 	}
 	mismatchedTree := staged
 	mismatchedTree.expectedTree = draft.base.tree
-	if matchesTUICommit(t.Context(), mismatchedTree, head, false) {
+	if matchesTUICommit(t.Context(), mismatchedTree, head, "add api", false) {
 		t.Fatal("matchesTUICommit(mismatched tree) succeeded")
 	}
-	if committed, unchanged := proveTUICommit(t.Context(), mismatchedTree, false); committed != "" || unchanged {
+	committed, unchanged := proveTUICommit(t.Context(), mismatchedTree, "add api", false)
+	if committed != "" || unchanged {
 		t.Fatalf("proveTUICommit(mismatched tree) = %q, %t", committed, unchanged)
 	}
-	if matchesTUICommit(t.Context(), staged, head, true) {
+	if !matchesTUICommit(t.Context(), staged, head, "add api", false) {
+		t.Fatal("matchesTUICommit(exact unsigned commit) failed")
+	}
+	if matchesTUICommit(t.Context(), staged, head, "different message", false) {
+		t.Fatal("matchesTUICommit(mismatched message) succeeded")
+	}
+	if matchesTUICommit(t.Context(), staged, head, "add api", true) {
 		t.Fatal("matchesTUICommit(unsigned commit) succeeded with required signature")
 	}
 	if _, err := committedTUIRequest(

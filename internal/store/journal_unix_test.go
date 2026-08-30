@@ -111,6 +111,34 @@ func TestJournalBindsRepositoryAssociationAndInventoriesUnresolvedState(t *testi
 	requireNoError(t, reader.Close())
 }
 
+func TestRepositoryInventoryQueryUsesScopeIndex(t *testing.T) {
+	t.Parallel()
+
+	state := openJournalStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	t.Cleanup(func() { requireNoError(t, state.Close()) })
+	scope := domain.Hash([]byte("repository scope"))
+	rows, err := state.database.QueryContext(
+		t.Context(),
+		"EXPLAIN QUERY PLAN "+unresolvedRepositoryTransactionsSQL,
+		scope[:],
+		unresolvedRepositoryTransactionQueryLimit,
+	)
+	requireNoError(t, err)
+	defer func() { requireNoError(t, rows.Close()) }()
+
+	used := false
+	for rows.Next() {
+		var identifier, parent, unused int
+		var detail string
+		requireNoError(t, rows.Scan(&identifier, &parent, &unused, &detail))
+		used = used || strings.Contains(detail, journalRepositoryInventoryIndexName)
+	}
+	requireNoError(t, rows.Err())
+	if !used {
+		t.Fatalf("repository inventory query did not use %s", journalRepositoryInventoryIndexName)
+	}
+}
+
 func TestJournalRejectsIncompleteRepositoryAssociation(t *testing.T) {
 	t.Parallel()
 

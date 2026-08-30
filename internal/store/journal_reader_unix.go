@@ -15,6 +15,9 @@ const (
 	transactionSelectColumns                  = "transaction_id, kind, state, runtime, source_digest, " +
 		"effective_digest, execution_digest, repository_version, repository_scope_digest, " +
 		"repository_location_digest, base_transaction_id, predecessor_workload_id"
+	unresolvedRepositoryTransactionsSQL = "SELECT " + transactionSelectColumns + " FROM journal_transactions " +
+		"WHERE state IN ('active', 'degraded') AND repository_scope_digest = ? " +
+		"ORDER BY repository_location_digest, transaction_id LIMIT ?"
 )
 
 // Transaction loads one durable transaction by its runtime ownership ID.
@@ -108,9 +111,7 @@ func unresolvedRepositoryTransactions(
 	//nolint:rowserrcheck // readTransactions checks the iterator before this function closes it.
 	rows, err := database.QueryContext(
 		ctx,
-		"SELECT "+transactionSelectColumns+" FROM journal_transactions "+
-			"WHERE state IN ('active', 'degraded') AND repository_scope_digest = ? "+
-			"ORDER BY repository_location_digest, transaction_id LIMIT ?",
+		unresolvedRepositoryTransactionsSQL,
 		scope[:],
 		unresolvedRepositoryTransactionQueryLimit,
 	)

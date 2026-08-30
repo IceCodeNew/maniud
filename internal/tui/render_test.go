@@ -8,7 +8,13 @@ import (
 	"github.com/IceCodeNew/maniud/internal/terminaltext"
 )
 
-const testAddServiceMessage = "Add service"
+const (
+	testAddServiceMessage = "Add service"
+	testCurrentLabel      = "CURRENT"
+	testProposedLabel     = "PROPOSED"
+	testCurrentImage      = "current"
+	testProposedImage     = "proposed"
+)
 
 func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
 	t.Parallel()
@@ -23,8 +29,11 @@ func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
 		width, height int
 		contains      []string
 	}{
-		{width: 100, height: 30, contains: []string{"FLOW", "CURRENT", "PROPOSED", "Continue to confirmation"}},
-		{width: 60, height: 20, contains: []string{"project / service / docker", "CURRENT", "PROPOSED"}},
+		{width: 100, height: 30, contains: []string{"FLOW", testCurrentLabel, testProposedLabel, "Continue to confirmation"}},
+		{width: 60, height: 20, contains: []string{"project / service / docker", testCurrentLabel, testProposedLabel}},
+		{width: 56, height: 16, contains: []string{
+			testCurrentLabel, testProposedLabel, statusReady, "Continue to confirmation",
+		}},
 		{width: 40, height: 10, contains: []string{"Status: Ready for confirmation", "r Review"}},
 		{width: 20, height: 5, contains: []string{"Resize to at least"}},
 	} {
@@ -35,6 +44,38 @@ func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
 			if !strings.Contains(content, part) {
 				t.Fatalf("%dx%d view misses %q: %q", test.width, test.height, part, content)
 			}
+		}
+	}
+
+	state.page = reviewPage{plan: planView{
+		project: testProject, service: testService, runtime: testRuntime,
+		current: testCurrentImage, proposed: testProposedImage, status: statusReady,
+		warningText: "1 warning requires review",
+	}}
+	state.mutationOutcome = statusApplyCompleted
+	state.err = errTestSecret
+	state.resize(compactMinimum, compactMinHeight)
+	content := state.View().Content
+	assertViewContains(t, content, "compact completed review", testCurrentLabel, testCurrentImage,
+		testProposedLabel, testProposedImage, statusApplyCompleted, "Continue to confirmation", "Operation failed.")
+	if strings.Contains(content, "No runtime change has started") || strings.Contains(content, errTestSecret.Error()) {
+		t.Fatalf("compact completed review contains stale or unsafe copy: %q", content)
+	}
+
+	state.mutationOutcome = ""
+	content = state.View().Content
+	assertViewContains(t, content, "compact constrained review", testCurrentLabel, testCurrentImage,
+		testProposedLabel, testProposedImage, statusReady, "Continue to confirmation", "Operation failed.")
+	if strings.Contains(content, "Review image change") || strings.Contains(content, errTestSecret.Error()) {
+		t.Fatalf("compact constrained review kept expendable or unsafe copy: %q", content)
+	}
+}
+
+func assertViewContains(t *testing.T, content, description string, parts ...string) {
+	t.Helper()
+	for _, part := range parts {
+		if !strings.Contains(content, part) {
+			t.Fatalf("%s misses %q: %q", description, part, content)
 		}
 	}
 }
@@ -49,12 +90,14 @@ func TestViewUsesColorUnicodeAndASCIICapabilities(t *testing.T) {
 	}}
 	state.options = Options{Color: true, Unicode: true}
 	colored := state.View().Content
-	if !strings.Contains(colored, "\x1b[") || !strings.Contains(colored, "◆") || !strings.Contains(colored, "│") {
+	if !strings.Contains(colored, "\x1b[") || !strings.Contains(colored, "⬟") || !strings.Contains(colored, "│") {
 		t.Fatalf("colored Unicode view = %q", colored)
 	}
 	state.options = Options{}
 	plain := state.View().Content
-	if strings.Contains(plain, "\x1b[") || strings.ContainsAny(plain, "◆✓›│─…▌") || !strings.Contains(plain, "OK ") {
+	if strings.Contains(plain, "\x1b[") || strings.ContainsAny(plain, "⬟✓●○›│─…▌") ||
+		!strings.Contains(plain, "[OK] ") || !strings.Contains(plain, "[*] Review") ||
+		!strings.Contains(plain, "[ ] Confirm") {
 		t.Fatalf("plain ASCII view = %q", plain)
 	}
 }
@@ -232,7 +275,7 @@ func TestRenderConditionalStatePaths(t *testing.T) {
 		t.Fatal("non-reviewing apply rail is empty")
 	}
 	state.page = nil
-	if lines := state.body(defaultWidth, false); len(lines) != 0 {
+	if lines := state.body(defaultWidth); len(lines) != 0 {
 		t.Fatalf("unknown page body = %q", lines)
 	}
 	if lines := state.sourceDiagnosticBody(sourceDiagnosticPage{diagnostic: SourceDiagnostic{

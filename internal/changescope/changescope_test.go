@@ -215,7 +215,7 @@ func TestWriteReportsEveryOutputFailure(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,funlen // Each subtest exercises a distinct fail-closed loader boundary.
+//nolint:cyclop,funlen,gocognit // Each subtest exercises a distinct fail-closed loader boundary.
 func TestLoaderReportsFilesystemAndPackageFailures(t *testing.T) {
 	t.Run("temporary root", func(t *testing.T) {
 		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
@@ -235,13 +235,49 @@ func TestLoaderReportsFilesystemAndPackageFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("module read", func(t *testing.T) {
+	t.Run("module type", func(t *testing.T) {
 		root := t.TempDir()
 		if err := os.Mkdir(filepath.Join(root, "go.mod"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := loadModules(root, emptySide(root)); err == nil {
 			t.Fatal("loadModules() accepted a go.mod directory")
+		}
+	})
+
+	t.Run("module read", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, root, "go.mod", "module example.test/root\n\ngo 1.27\n")
+		path := filepath.Join(root, "go.mod")
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+		if err := loadModules(root, emptySide(root)); err == nil {
+			t.Fatal("loadModules() accepted an unreadable go.mod")
+		}
+	})
+
+	t.Run("module symlink", func(t *testing.T) {
+		root := t.TempDir()
+		outside := filepath.Join(t.TempDir(), "outside.mod")
+		write(t, filepath.Dir(outside), filepath.Base(outside), "module example.test/outside\n\ngo 1.27\n")
+		if err := os.Symlink(outside, filepath.Join(root, "go.mod")); err != nil {
+			t.Fatal(err)
+		}
+		if err := loadModules(root, emptySide(root)); !errors.Is(err, errRevisionSymlink) {
+			t.Fatalf("loadModules(module symlink) error = %v", err)
+		}
+	})
+
+	t.Run("source symlink", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, root, "go.mod", "module example.test/root\n\ngo 1.27\n")
+		if err := os.Symlink(filepath.Join(t.TempDir(), "outside.go"), filepath.Join(root, "outside.go")); err != nil {
+			t.Fatal(err)
+		}
+		if err := loadModules(root, emptySide(root)); !errors.Is(err, errRevisionSymlink) {
+			t.Fatalf("loadModules(source symlink) error = %v", err)
 		}
 	})
 
@@ -263,6 +299,16 @@ func TestLoaderReportsFilesystemAndPackageFailures(t *testing.T) {
 			write(t, root, "go.mod", test.contents)
 			if err := loadModules(root, emptySide(root)); err == nil {
 				t.Fatalf("loadModules() accepted %s", test.name)
+			}
+		})
+	}
+
+	for _, replacement := range []string{"..", "../outside", "/outside"} {
+		t.Run("replacement "+replacement, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "go.mod", "module example.test/root\n\ngo 1.27\n\nreplace example.test/outside => "+replacement+"\n")
+			if err := loadModules(root, emptySide(root)); !errors.Is(err, errReplacementOutside) {
+				t.Fatalf("loadModules(outside replacement) error = %v", err)
 			}
 		})
 	}
@@ -379,11 +425,12 @@ func TestOwnershipHelpersRejectMissingOwners(t *testing.T) {
 	if _, ok := moduleForPackage("example.test/other", &side{modules: map[string]string{".": "example.test/root"}}); ok {
 		t.Fatal("moduleForPackage() found an unrelated module")
 	}
-	closure := reverseClosure("example.test/changed", map[string][]string{
+	selected := selection{packages: map[string]bool{"example.test/changed": true}}
+	selected.expandImporters([]*side{{imports: map[string][]string{
 		"example.test/importer": {"example.test/unrelated", "example.test/changed"},
-	})
-	if !closure["example.test/importer"] {
-		t.Fatal("reverseClosure() omitted an importer after an unrelated dependency")
+	}}})
+	if !selected.packages["example.test/importer"] {
+		t.Fatal("expandImporters() omitted an importer after an unrelated dependency")
 	}
 }
 

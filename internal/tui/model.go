@@ -16,6 +16,7 @@ import (
 
 const (
 	statusReady               = "Ready for confirmation"
+	statusApplyCompleted      = "Apply completed"
 	statusRefreshing          = "Refreshing review"
 	statusReviewLarger        = "Review again at a larger terminal"
 	keyEscape                 = "esc"
@@ -1409,7 +1410,7 @@ func (state *model) handleApplyResult(result applyResultMsg) tea.Cmd {
 
 		return command
 	}
-	state.mutationOutcome = "Apply completed"
+	state.mutationOutcome = statusApplyCompleted
 	if command != nil {
 		state.status = state.mutationOutcome
 
