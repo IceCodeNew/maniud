@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"testing"
+
+	"github.com/IceCodeNew/maniud/internal/application"
 )
 
 const gitOpsCycleTestCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -146,6 +149,144 @@ func TestGitOpsCycleCountTransitions(t *testing.T) {
 	if counts.applied != 1 || counts.unchanged != 2 || counts.skipped != 1 ||
 		counts.failed != 1 || counts.deferred != 3 {
 		t.Fatalf("gitOpsCycleCounts transitions = %#v", counts)
+	}
+}
+
+func TestGitOpsSourceBlockerEventsPublishOnlyTransitions(t *testing.T) {
+	t.Parallel()
+
+	var observed []application.Event
+	events := &gitOpsSourceBlockerEvents{sink: cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return true
+	})}
+	api := gitOpsSkippedSource{Path: "services/api.yaml", Code: gitOpsSkippedInvalidComposeSource}
+	worker := gitOpsSkippedSource{Path: "services/worker.yml", Code: gitOpsSkippedInvalidComposeSource}
+	web := gitOpsSkippedSource{Path: "services/web.yaml", Code: gitOpsSkippedInvalidComposeSource}
+
+	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
+	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
+	events.observe(gitOpsCyclePartial, observedGitOpsSources(worker, web))
+	events.observe(gitOpsCycleConverged, gitOpsCycleCounts{sourceBlockersObserved: true})
+
+	want := []application.Event{
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, api),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, worker),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, web),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceRecovered, api),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceRecovered, worker),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceRecovered, web),
+	}
+	if !slices.Equal(observed, want) {
+		t.Fatalf("source blocker transitions = %#v, want %#v", observed, want)
+	}
+
+	restarted := &gitOpsSourceBlockerEvents{sink: events.sink}
+	restarted.observe(gitOpsCyclePartial, observedGitOpsSources(api))
+	if len(observed) != len(want)+1 || observed[len(want)] != want[0] {
+		t.Fatalf("source blocker restart transition = %#v", observed)
+	}
+}
+
+func TestGitOpsSourceBlockerEventsSuppressRecoveryUnavailableDuplicates(t *testing.T) {
+	t.Parallel()
+
+	var observed []application.Event
+	events := &gitOpsSourceBlockerEvents{sink: cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return true
+	})}
+	recovery := gitOpsRecoverySourceBlocker()
+	events.observe(errGitOpsRecoverySourceBlocked.Error(), gitOpsCycleCounts{
+		recoveryBlockerObserved: true,
+	})
+	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
+		t.Fatal("recovery duplicate was not suppressed")
+	}
+	events.observe(errGitOpsRecoverySourceBlocked.Error(), gitOpsCycleCounts{
+		recoveryBlockerObserved: true,
+	})
+	events.observe(gitOpsCycleFailed, gitOpsCycleCounts{})
+	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
+		t.Fatal("unobserved recovery state was cleared")
+	}
+	events.observe(gitOpsCycleConverged, gitOpsCycleCounts{recoveryBlockerObserved: true})
+	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
+		t.Fatal("post-recovery daemon event was dropped")
+	}
+
+	want := []application.Event{
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, recovery),
+		gitOpsSourceBlockerEvent(application.EventGitOpsSourceRecovered, recovery),
+		{Kind: application.EventDaemonUnavailable},
+	}
+	if !slices.Equal(observed, want) {
+		t.Fatalf("recovery blocker transitions = %#v, want %#v", observed, want)
+	}
+}
+
+func TestFinishGitOpsCycleRejectsNotificationEvidenceWithInvalidSummary(t *testing.T) {
+	t.Parallel()
+
+	var observed []application.Event
+	events := &gitOpsSourceBlockerEvents{sink: cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return true
+	})}
+	err := finishGitOpsCycle(
+		io.Discard,
+		gitOpsCycleTestCommit,
+		gitOpsCyclePartial,
+		gitOpsCycleCounts{skipped: 1},
+		nil,
+		events,
+	)
+	if !errors.Is(err, errGitOpsRepositoryInvalid) || len(observed) != 0 {
+		t.Fatalf("finishGitOpsCycle(invalid summary) = %v, events %#v", err, observed)
+	}
+}
+
+func TestFinishGitOpsCyclePublishesValidatedSourceTransition(t *testing.T) {
+	t.Parallel()
+
+	var observed []application.Event
+	events := &gitOpsSourceBlockerEvents{sink: cliEventSinkFunc(func(event application.Event) bool {
+		observed = append(observed, event)
+
+		return true
+	})}
+	blocker := gitOpsSkippedSource{
+		Path: "services/api.yaml", Code: gitOpsSkippedInvalidComposeSource,
+	}
+	err := finishGitOpsCycle(
+		io.Discard,
+		gitOpsCycleTestCommit,
+		gitOpsCyclePartial,
+		observedGitOpsSources(blocker),
+		nil,
+		events,
+	)
+	want := gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, blocker)
+	if err != nil || len(observed) != 1 || observed[0] != want {
+		t.Fatalf("finishGitOpsCycle(valid summary) = %v, events %#v", err, observed)
+	}
+}
+
+func gitOpsSourceBlockerEvent(
+	kind application.EventKind,
+	blocker gitOpsSkippedSource,
+) application.Event {
+	return application.Event{
+		Kind: kind, Source: blocker.Path, Reason: application.EventReason(blocker.Code),
+	}
+}
+
+func observedGitOpsSources(sources ...gitOpsSkippedSource) gitOpsCycleCounts {
+	return gitOpsCycleCounts{
+		skipped: len(sources), skippedSources: sources, sourceBlockersObserved: true,
 	}
 }
 

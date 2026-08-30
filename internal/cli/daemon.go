@@ -73,6 +73,7 @@ func executeDaemonStart(
 		return errDaemonAlreadyRunning
 	}
 
+	events = &gitOpsSourceBlockerEvents{sink: events}
 	reconcile := func() error {
 		return reconcileRegisteredRepository(
 			ctx, output, environment, stderr, getWorkingDirectory, events, runtimes,
@@ -252,6 +253,7 @@ func reconcileRegisteredGitOpsCheckout(
 
 		return finishGitOpsCycle(
 			output, currentCommit, gitOpsCycleStatusFor(counts, err), counts, err,
+			dependencies.events,
 		)
 	}
 
@@ -264,11 +266,14 @@ func reconcileRegisteredGitOpsCheckout(
 	if err != nil {
 		counts.markFailed()
 
-		return finishGitOpsCycle(output, currentCommit, gitOpsCycleFailed, counts, err)
+		return finishGitOpsCycle(
+			output, currentCommit, gitOpsCycleFailed, counts, err, dependencies.events,
+		)
 	}
 	if selection.awaitingPush {
 		return finishGitOpsCycle(
 			output, selection.commit, gitOpsCycleAwaitingPush, counts, nil,
+			dependencies.events,
 		)
 	}
 
@@ -279,6 +284,7 @@ func reconcileRegisteredGitOpsCheckout(
 
 	return finishGitOpsCycle(
 		output, selection.commit, gitOpsCycleStatusFor(counts, runErr), counts, runErr,
+		dependencies.events,
 	)
 }
 

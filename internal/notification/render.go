@@ -1,6 +1,7 @@
 package notification
 
 import (
+	"path"
 	"strconv"
 	"strings"
 	"unicode"
@@ -21,7 +22,7 @@ type notificationMessage struct {
 
 func renderApplicationEvent(event application.Event) (notificationMessage, bool) {
 	title, supported, _ := notificationEventTitle(event.Kind)
-	if !supported {
+	if !supported || !validGitOpsSourceEvent(event) {
 		return notificationMessage{}, false
 	}
 
@@ -37,6 +38,8 @@ func renderApplicationEvent(event application.Event) (notificationMessage, bool)
 		{name: "transaction", value: event.Transaction},
 		{name: "action", value: event.Action},
 		{name: "evidence", value: event.Evidence},
+		{name: "source", value: event.Source},
+		{name: "reason", value: string(event.Reason)},
 	} {
 		if field.value == "" {
 			continue
@@ -86,6 +89,10 @@ func notificationEventTitle(kind application.EventKind) (string, bool, bool) {
 		return "maniud transaction failed", true, false
 	case application.EventGitOpsServiceApplyFailed:
 		return "maniud GitOps service apply failed", true, false
+	case application.EventGitOpsSourceBlocked:
+		return "maniud GitOps source blocked", true, false
+	case application.EventGitOpsSourceRecovered:
+		return "maniud GitOps source recovered", true, false
 	case application.EventDaemonUnavailable:
 		return "maniud daemon unavailable", true, false
 	case application.EventActionIntentRecorded,
@@ -96,6 +103,31 @@ func notificationEventTitle(kind application.EventKind) (string, bool, bool) {
 	default:
 		return "", false, false
 	}
+}
+
+func validGitOpsSourceEvent(event application.Event) bool {
+	if event.Kind != application.EventGitOpsSourceBlocked &&
+		event.Kind != application.EventGitOpsSourceRecovered {
+		return event.Source == "" && event.Reason == ""
+	}
+
+	switch event.Reason {
+	case application.EventReasonInvalidComposeSource:
+		return validGitOpsNotificationSource(event.Source)
+	case application.EventReasonRecoverySourceBlocked:
+		return event.Source == ""
+	default:
+		return false
+	}
+}
+
+func validGitOpsNotificationSource(source string) bool {
+	if !validNotificationField(source) || path.Clean(source) != source ||
+		path.Dir(source) != "services" {
+		return false
+	}
+
+	return strings.HasSuffix(source, ".yaml") || strings.HasSuffix(source, ".yml")
 }
 
 func validNotificationField(value string) bool {

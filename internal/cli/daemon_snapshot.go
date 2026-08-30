@@ -12,7 +12,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
-var errGitOpsRecoverySourceBlocked = errors.New("recovery_source_blocked")
+var errGitOpsRecoverySourceBlocked = errors.New(string(application.EventReasonRecoverySourceBlocked))
 
 type gitOpsServiceSnapshot struct {
 	arguments    applyInvocation
@@ -52,7 +52,10 @@ func reconcileGitOpsSnapshotResult(
 		return gitOpsCycleCounts{}, err
 	}
 
-	counts := gitOpsCycleCounts{skipped: len(snapshot.skipped), skippedSources: snapshot.skipped}
+	counts := gitOpsCycleCounts{
+		skipped: len(snapshot.skipped), skippedSources: snapshot.skipped,
+		sourceBlockersObserved: true,
+	}
 	for index, service := range snapshot.services {
 		if err = executeGitOpsMutation(ctx, service, output); err != nil {
 			counts.failed = 1
@@ -101,7 +104,7 @@ func recoverGitOpsSnapshotResult(
 		return gitOpsCycleCounts{}, fmt.Errorf("read repository recovery inventory: %w", err)
 	}
 	if len(inventory) == 0 {
-		return gitOpsCycleCounts{}, nil
+		return gitOpsCycleCounts{recoveryBlockerObserved: true}, nil
 	}
 	sources, err := captureGitOpsSources(ctx, root, selectedCommit, dependencies)
 	if err != nil {
@@ -109,13 +112,20 @@ func recoverGitOpsSnapshotResult(
 	}
 	recoveries, err := prepareRepositoryRecoveries(ctx, sources, inventory, dependencies)
 	if err != nil {
+		if errors.Is(err, errGitOpsRecoverySourceBlocked) {
+			return gitOpsCycleCounts{recoveryBlockerObserved: true}, err
+		}
+
 		return gitOpsCycleCounts{}, err
 	}
 	if err = verifyGitOpsCheckout(ctx, root, selectedCommit); err != nil {
 		return gitOpsCycleCounts{}, errGitOpsRepositoryInvalid
 	}
 
-	return recoverGitOpsServicesResult(ctx, recoveries, output)
+	counts, err := recoverGitOpsServicesResult(ctx, recoveries, output)
+	counts.recoveryBlockerObserved = true
+
+	return counts, err
 }
 
 func verifyGitOpsCheckout(ctx context.Context, root string, selectedCommit string) error {

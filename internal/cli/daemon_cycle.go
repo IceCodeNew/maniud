@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+
+	"github.com/IceCodeNew/maniud/internal/application"
 )
 
 const (
@@ -13,7 +16,7 @@ const (
 	gitOpsCyclePartial                = "partial"
 	gitOpsCycleAwaitingPush           = "awaiting_push"
 	gitOpsCycleFailed                 = "failed"
-	gitOpsSkippedInvalidComposeSource = "invalid_compose_source"
+	gitOpsSkippedInvalidComposeSource = string(application.EventReasonInvalidComposeSource)
 	shortGitCommitLength              = 12
 )
 
@@ -28,12 +31,14 @@ type gitOpsPreparedSnapshot struct {
 }
 
 type gitOpsCycleCounts struct {
-	applied        int
-	unchanged      int
-	skipped        int
-	failed         int
-	deferred       int
-	skippedSources []gitOpsSkippedSource
+	applied                 int
+	unchanged               int
+	skipped                 int
+	failed                  int
+	deferred                int
+	skippedSources          []gitOpsSkippedSource
+	sourceBlockersObserved  bool
+	recoveryBlockerObserved bool
 }
 
 type gitOpsCycleSummary struct {
@@ -47,6 +52,80 @@ type gitOpsCycleSummary struct {
 	SkippedSources []gitOpsSkippedSource `json:"skipped_sources,omitempty"`
 }
 
+type gitOpsSourceBlockerEvents struct {
+	sink            application.EventSink
+	activeSources   []gitOpsSkippedSource
+	recoveryBlocked bool
+}
+
+func (events *gitOpsSourceBlockerEvents) TryPublish(event application.Event) bool {
+	if events == nil {
+		return false
+	}
+	if event.Kind == application.EventDaemonUnavailable && events.recoveryBlocked {
+		return true
+	}
+	if events.sink == nil {
+		return false
+	}
+
+	return events.sink.TryPublish(event)
+}
+
+func (events *gitOpsSourceBlockerEvents) observe(
+	status string,
+	counts gitOpsCycleCounts,
+) {
+	if events == nil {
+		return
+	}
+	if counts.sourceBlockersObserved {
+		events.observeSources(counts.skippedSources)
+	}
+	if counts.recoveryBlockerObserved {
+		events.observeRecovery(status == errGitOpsRecoverySourceBlocked.Error())
+	}
+}
+
+func (events *gitOpsSourceBlockerEvents) observeSources(current []gitOpsSkippedSource) {
+	for _, blocker := range current {
+		if !slices.Contains(events.activeSources, blocker) {
+			events.publish(application.EventGitOpsSourceBlocked, blocker)
+		}
+	}
+	for _, blocker := range events.activeSources {
+		if !slices.Contains(current, blocker) {
+			events.publish(application.EventGitOpsSourceRecovered, blocker)
+		}
+	}
+	events.activeSources = slices.Clone(current)
+}
+
+func (events *gitOpsSourceBlockerEvents) observeRecovery(blocked bool) {
+	if blocked == events.recoveryBlocked {
+		return
+	}
+	kind := application.EventGitOpsSourceRecovered
+	if blocked {
+		kind = application.EventGitOpsSourceBlocked
+	}
+	events.publish(kind, gitOpsRecoverySourceBlocker())
+	events.recoveryBlocked = blocked
+}
+
+func (events *gitOpsSourceBlockerEvents) publish(
+	kind application.EventKind,
+	blocker gitOpsSkippedSource,
+) {
+	publishCLIEvent(events, application.Event{
+		Kind: kind, Source: blocker.Path, Reason: application.EventReason(blocker.Code),
+	})
+}
+
+func gitOpsRecoverySourceBlocker() gitOpsSkippedSource {
+	return gitOpsSkippedSource{Code: errGitOpsRecoverySourceBlocked.Error()}
+}
+
 func (counts *gitOpsCycleCounts) add(other gitOpsCycleCounts) {
 	counts.applied += other.applied
 	counts.unchanged += other.unchanged
@@ -54,6 +133,8 @@ func (counts *gitOpsCycleCounts) add(other gitOpsCycleCounts) {
 	counts.failed += other.failed
 	counts.deferred += other.deferred
 	counts.skippedSources = append(counts.skippedSources, other.skippedSources...)
+	counts.sourceBlockersObserved = counts.sourceBlockersObserved || other.sourceBlockersObserved
+	counts.recoveryBlockerObserved = counts.recoveryBlockerObserved || other.recoveryBlockerObserved
 }
 
 func (counts *gitOpsCycleCounts) markFailed() {
@@ -124,8 +205,16 @@ func finishGitOpsCycle(
 	status string,
 	counts gitOpsCycleCounts,
 	runErr error,
+	events application.EventSink,
 ) error {
-	return errors.Join(runErr, writeGitOpsCycleSummary(output, commit, status, counts))
+	summaryErr := writeGitOpsCycleSummary(output, commit, status, counts)
+	if summaryErr == nil {
+		if blockerEvents, valid := events.(*gitOpsSourceBlockerEvents); valid {
+			blockerEvents.observe(status, counts)
+		}
+	}
+
+	return errors.Join(runErr, summaryErr)
 }
 
 func validGitOpsCycleStatus(status string) bool {
