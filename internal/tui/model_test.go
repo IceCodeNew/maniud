@@ -273,6 +273,84 @@ func TestModelContainsCatalogBlockersAndUnsafeDisplayValues(t *testing.T) {
 	}
 }
 
+func TestModelShowsSafeComposeSourceDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	state.page = openPathPage{value: testServicePath}
+	state.handleOpenResult(openResultMsg{sequence: state.sequence, result: OpenResult{
+		Blocker: BlockerInvalid,
+		Diagnostic: SourceDiagnostic{
+			File: testServicePath, Reason: DiagnosticYAMLStructure, Line: 4, Column: 5,
+		},
+	}})
+	if _, valid := state.page.(sourceDiagnosticPage); !valid {
+		t.Fatalf("diagnostic page = %#v", state.page)
+	}
+	content := state.View().Content
+	for _, value := range []string{
+		testServicePath, "line 4, column 5", "YAML mapping is invalid", "Remove duplicate keys",
+	} {
+		if !strings.Contains(content, value) {
+			t.Fatalf("diagnostic view misses %q: %q", value, content)
+		}
+	}
+	state.handleKey(key("esc"))
+	if _, valid := state.page.(openPathPage); !valid {
+		t.Fatalf("diagnostic back page = %#v", state.page)
+	}
+
+	diagnostic := sourceDiagnosticPage{previous: openPathPage{}, scroll: 1}
+	state.page = diagnostic
+	state.handleKey(key("up"))
+	state.handleKey(key("down"))
+	if current, valid := state.page.(sourceDiagnosticPage); !valid || current.scroll != 1 {
+		t.Fatalf("diagnostic scroll page = %#v", state.page)
+	}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("diagnostic q command is nil")
+	}
+}
+
+func TestModelRejectsUnsafeComposeSourceDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	state.page = openPathPage{value: testServicePath}
+	state.handleOpenResult(openResultMsg{sequence: state.sequence, result: OpenResult{
+		Blocker: BlockerInvalid,
+		Diagnostic: SourceDiagnostic{
+			File: "/private/secret.yaml", Reason: DiagnosticYAMLSyntax, Line: 1, Column: 1,
+		},
+	}})
+	if _, valid := state.page.(sourceDiagnosticPage); valid ||
+		strings.Contains(state.View().Content, "/private/secret.yaml") {
+		t.Fatalf("unsafe diagnostic page = %#v, view %q", state.page, state.View().Content)
+	}
+
+	for _, diagnostic := range []SourceDiagnostic{
+		{File: "", Reason: DiagnosticYAMLSyntax},
+		{File: "../secret.yaml", Reason: DiagnosticYAMLSyntax, Line: 1, Column: 1},
+		{File: "services/../secret.yaml", Reason: DiagnosticYAMLSyntax, Line: 1, Column: 1},
+		{File: "services/\xff.yaml", Reason: DiagnosticYAMLSyntax, Line: 1, Column: 1},
+		{File: testServicePath, Reason: "vendor_message", Line: 1, Column: 1},
+		{File: testServicePath, Reason: DiagnosticYAMLSyntax, Line: 0, Column: 1},
+		{File: testServicePath, Reason: DiagnosticYAMLSyntax, Line: -1, Column: 0},
+		{File: testServicePath, Reason: DiagnosticYAMLSyntax, Line: 1, Column: -1},
+	} {
+		if _, valid := canonicalSourceDiagnostic(diagnostic); valid {
+			t.Fatalf("canonicalSourceDiagnostic(%#v) accepted", diagnostic)
+		}
+	}
+	for _, reason := range []SourceDiagnosticReason{
+		DiagnosticYAMLSyntax, DiagnosticYAMLStructure, DiagnosticYAMLUnsupported, DiagnosticComposeValidation,
+	} {
+		if _, valid := canonicalSourceDiagnostic(SourceDiagnostic{File: testServicePath, Reason: reason}); !valid {
+			t.Fatalf("canonicalSourceDiagnostic(%q) rejected", reason)
+		}
+	}
+}
+
 //nolint:cyclop // One test covers both explicit cancellation paths through the same in-flight operation.
 func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
 	t.Parallel()

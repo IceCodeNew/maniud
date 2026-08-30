@@ -23,6 +23,12 @@ The default result omits private paths, endpoint details, credentials, and upstr
 `retryable: true` means the same input may succeed after the runtime, registry, rate limit, or state store becomes available again.
 When `retryable` is false, correct the input or resolve the conflicting evidence before repeating the command.
 
+## Compose source diagnostics in the TUI
+
+When a committed Compose source fails validation, `maniud tui` shows its repository-relative path and a stable reason. It also shows the line and column when the YAML parser provides a safe location. The detail page gives one repair action and supports scrolling when the path does not fit on screen.
+
+The TUI does not show source values, raw YAML, parser messages, vendor errors, or absolute paths. `Position: Unavailable` means Compose validation found the problem after YAML parsing, so maniud cannot identify one trustworthy source location.
+
 ## Notification failures
 
 Bark requires `BARK_DEVICE_KEY`. To encrypt messages, also set `BARK_ENCRYPTION_KEY` to the 16-, 24-, or 32-character ASCII key configured in the Bark app. Telegram requires both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.

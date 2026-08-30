@@ -44,14 +44,37 @@ const (
 	BlockerUnavailable SourceBlocker = "compose_source_unavailable"
 )
 
+// SourceDiagnosticReason is a stable Compose validation category rendered by the TUI.
+type SourceDiagnosticReason string
+
+const (
+	// DiagnosticYAMLSyntax identifies unreadable YAML syntax.
+	DiagnosticYAMLSyntax SourceDiagnosticReason = "yaml_syntax_invalid"
+	// DiagnosticYAMLStructure identifies an invalid YAML mapping or value shape.
+	DiagnosticYAMLStructure SourceDiagnosticReason = "yaml_structure_invalid"
+	// DiagnosticYAMLUnsupported identifies unsupported YAML features.
+	DiagnosticYAMLUnsupported SourceDiagnosticReason = "yaml_feature_unsupported"
+	// DiagnosticComposeValidation identifies input rejected by Compose validation.
+	DiagnosticComposeValidation SourceDiagnosticReason = "compose_validation_failed"
+)
+
+// SourceDiagnostic is a privacy-safe projection of a Compose validation failure.
+type SourceDiagnostic struct {
+	File   string
+	Reason SourceDiagnosticReason
+	Line   int
+	Column int
+}
+
 // Service is one registered inventory row. ID is opaque outside Catalog.
 type Service struct {
-	ID       string
-	Location string
-	Project  string
-	Name     string
-	Runtime  string
-	Blocker  SourceBlocker
+	ID         string
+	Location   string
+	Project    string
+	Name       string
+	Runtime    string
+	Blocker    SourceBlocker
+	Diagnostic SourceDiagnostic
 }
 
 // CatalogSnapshot is one fresh registered-service inventory.
@@ -102,8 +125,9 @@ type Target struct {
 
 // OpenResult is a typed, privacy-safe source lookup result.
 type OpenResult struct {
-	Targets []Target
-	Blocker SourceBlocker
+	Targets    []Target
+	Blocker    SourceBlocker
+	Diagnostic SourceDiagnostic
 }
 
 // Catalog owns registered inventory and Compose source lookup for the TUI.

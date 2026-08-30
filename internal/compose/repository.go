@@ -210,9 +210,9 @@ func CaptureRepositorySource(
 		if !item.compose {
 			continue
 		}
-		references, runtimePaths, valid := repositoryDocumentReferences(file.Content, item.base)
-		if !valid {
-			return Source{}, ErrInvalidSource
+		references, runtimePaths, diagnostic := repositoryDocumentReferencesDetailed(file.Content, item.base)
+		if diagnostic != nil {
+			return Source{}, sourceDiagnosticAtFile(diagnostic, item.path)
 		}
 		queue = append(queue, references...)
 		for _, path := range runtimePaths {
@@ -301,14 +301,25 @@ type repositoryDocument struct {
 }
 
 //nolint:cyclop // One Compose document may reference each supported local source family.
-func repositoryDocumentReferences(content []byte, base string) ([]repositoryDocument, []string, bool) {
+func repositoryDocumentReferencesDetailed(content []byte, base string) (
+	[]repositoryDocument,
+	[]string,
+	*SourceDiagnosticError,
+) {
 	var node yaml.Node
-	if err := yaml.Load(content, &node, yaml.WithUniqueKeys()); err != nil || hasUnsupportedYAML(&node) {
-		return nil, nil, false
+	if err := yaml.Load(content, &node, yaml.WithUniqueKeys()); err != nil {
+		return nil, nil, sourceYAMLError(DiagnosticYAMLSyntax, err)
+	}
+	if unsupported := unsupportedYAMLNode(&node); unsupported != nil {
+		return nil, nil, newSourceDiagnostic(
+			DiagnosticYAMLUnsupported,
+			unsupported.Line,
+			unsupported.Column,
+		)
 	}
 	var document map[string]any
 	if err := node.Load(&document, yaml.WithUniqueKeys()); err != nil {
-		return nil, nil, false
+		return nil, nil, sourceYAMLError(DiagnosticYAMLStructure, err)
 	}
 
 	var references []repositoryDocument
@@ -318,7 +329,7 @@ func repositoryDocumentReferences(content []byte, base string) ([]repositoryDocu
 		collectIncludes(document["include"], base, &references)
 	services, servicesValid := document["services"].(map[string]any)
 	if !servicesValid && document["services"] != nil {
-		return nil, nil, false
+		return nil, nil, newSourceDiagnostic(DiagnosticComposeValidation, 0, 0)
 	}
 	for _, raw := range services {
 		service, mapping := raw.(map[string]any)
@@ -327,11 +338,21 @@ func repositoryDocumentReferences(content []byte, base string) ([]repositoryDocu
 			!collectPathList(service["label_file"], base, &references) ||
 			!collectExtends(service["extends"], base, &references) ||
 			!collectBindMounts(service["volumes"], base, &runtimePaths) {
-			return nil, nil, false
+			return nil, nil, newSourceDiagnostic(DiagnosticComposeValidation, 0, 0)
 		}
 	}
+	if !valid {
+		return nil, nil, newSourceDiagnostic(DiagnosticComposeValidation, 0, 0)
+	}
 
-	return references, runtimePaths, valid
+	return references, runtimePaths, nil
+}
+
+func sourceDiagnosticAtFile(diagnostic *SourceDiagnosticError, file string) *SourceDiagnosticError {
+	result := *diagnostic
+	result.File = file
+
+	return &result
 }
 
 func collectResourceFiles(raw any, base string, result *[]repositoryDocument) bool {

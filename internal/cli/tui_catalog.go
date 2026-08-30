@@ -69,6 +69,8 @@ func (catalog *tuiCatalog) Snapshot(ctx context.Context) tui.CatalogSnapshot {
 			service.Name = target.Service
 			service.Runtime = target.Runtime
 			service.Blocker = tui.BlockerNone
+		} else {
+			service.Diagnostic = result.Diagnostic
 		}
 		services = append(services, service)
 	}
@@ -92,6 +94,9 @@ func (catalog *tuiCatalog) OpenRegistered(ctx context.Context, id string) tui.Op
 		candidate, valid := registeredTUIServiceID(registration.Repository, path)
 		if valid && candidate == id {
 			result := catalog.openSource(ctx, path)
+			if result.Blocker != tui.BlockerNone {
+				return result
+			}
 			if len(result.Targets) != 1 {
 				return tui.OpenResult{Blocker: tui.BlockerInvalid}
 			}
@@ -154,11 +159,15 @@ func (catalog *tuiCatalog) openSource(ctx context.Context, path string) tui.Open
 
 	source, err := catalog.loadSource(ctx, path)
 	if err != nil {
-		return tui.OpenResult{Blocker: tui.BlockerInvalid}
+		return tui.OpenResult{
+			Blocker: tui.BlockerInvalid, Diagnostic: tuiSourceDiagnostic(source, err),
+		}
 	}
 	project, err := compose.Load(ctx, source)
 	if err != nil {
-		return tui.OpenResult{Blocker: tui.BlockerInvalid}
+		return tui.OpenResult{
+			Blocker: tui.BlockerInvalid, Diagnostic: tuiSourceDiagnostic(source, err),
+		}
 	}
 
 	names := project.ServiceNames()
@@ -180,6 +189,37 @@ func (catalog *tuiCatalog) openSource(ctx context.Context, path string) tui.Open
 	}
 
 	return tui.OpenResult{Targets: targets}
+}
+
+func tuiSourceDiagnostic(source compose.Source, err error) tui.SourceDiagnostic {
+	diagnostic, ok := errors.AsType[*compose.SourceDiagnosticError](err)
+	if !ok {
+		return tui.SourceDiagnostic{}
+	}
+	var reason tui.SourceDiagnosticReason
+	switch diagnostic.Reason {
+	case compose.DiagnosticYAMLSyntax:
+		reason = tui.DiagnosticYAMLSyntax
+	case compose.DiagnosticYAMLStructure:
+		reason = tui.DiagnosticYAMLStructure
+	case compose.DiagnosticYAMLUnsupported:
+		reason = tui.DiagnosticYAMLUnsupported
+	case compose.DiagnosticComposeValidation:
+		reason = tui.DiagnosticComposeValidation
+	default:
+		return tui.SourceDiagnostic{}
+	}
+	file := diagnostic.File
+	if file == "" && source.Repository != nil {
+		file = source.Repository.Entry
+	}
+	if file == "" {
+		return tui.SourceDiagnostic{}
+	}
+
+	return tui.SourceDiagnostic{
+		File: file, Reason: reason, Line: diagnostic.Line, Column: diagnostic.Column,
+	}
 }
 
 func registeredTUIServiceID(root, path string) (string, bool) {

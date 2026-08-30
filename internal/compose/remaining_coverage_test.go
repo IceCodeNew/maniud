@@ -524,10 +524,10 @@ services:
 func TestRepositoryCollectorRemainingMalformedForms(t *testing.T) {
 	t.Parallel()
 
-	if _, _, valid := repositoryDocumentReferences([]byte("services: [\n"), "."); valid {
+	if _, _, diagnostic := repositoryDocumentReferencesDetailed([]byte("services: [\n"), "."); diagnostic == nil {
 		t.Fatal("malformed YAML accepted")
 	}
-	if _, _, valid := repositoryDocumentReferences([]byte("[]\n"), "."); valid {
+	if _, _, diagnostic := repositoryDocumentReferencesDetailed([]byte("[]\n"), "."); diagnostic == nil {
 		t.Fatal("sequence document accepted")
 	}
 	var documents []repositoryDocument

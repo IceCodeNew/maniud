@@ -278,6 +278,36 @@ func TestCaptureRepositorySourceRejectsUntrackedOrEscapingReferences(t *testing.
 	}
 }
 
+func TestCaptureRepositorySourcePreservesSafeParseDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	_, err := CaptureRepositorySource(
+		t.TempDir(),
+		testRootRepositoryEntry,
+		nil,
+		repositoryFixtureReader(map[string][]byte{
+			testRootRepositoryEntry: []byte("services:\n  api:\n    image: [\n"),
+		}),
+		func(string) (RepositoryPathSnapshot, error) {
+			return RepositoryPathSnapshot{}, errRepositoryFixture
+		},
+	)
+	diagnostic, ok := errors.AsType[*SourceDiagnosticError](err)
+	if !ok || diagnostic.File != testRootRepositoryEntry || diagnostic.Reason != DiagnosticYAMLSyntax ||
+		diagnostic.Line != 4 || diagnostic.Column != 1 {
+		t.Fatalf("CaptureRepositorySource() diagnostic = %#v, error %v", diagnostic, err)
+	}
+	_, _, diagnostic = repositoryDocumentReferencesDetailed([]byte(`services:
+  base: &base
+    image: busybox
+  api: *base
+`), ".")
+	if diagnostic == nil || diagnostic.Reason != DiagnosticYAMLUnsupported ||
+		diagnostic.Line != 4 || diagnostic.Column != 8 {
+		t.Fatalf("unsupported YAML diagnostic = %#v", diagnostic)
+	}
+}
+
 func TestCaptureRepositorySourceHonorsOptionalEnvironmentFiles(t *testing.T) {
 	t.Parallel()
 

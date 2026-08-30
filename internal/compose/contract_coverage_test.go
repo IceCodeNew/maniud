@@ -71,7 +71,7 @@ func TestRepositoryDocumentCollectorContractMatrix(t *testing.T) {
 		[]byte("services:\n  api:\n    develop: {}\n"),
 		[]byte("configs:\n  x:\n    file: /absolute\nservices: {}\n"),
 	} {
-		if _, _, valid := repositoryDocumentReferences(content, "."); valid {
+		if _, _, diagnostic := repositoryDocumentReferencesDetailed(content, "."); diagnostic == nil {
 			t.Fatalf("repository document accepted %q", content)
 		}
 	}

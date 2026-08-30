@@ -29,6 +29,7 @@ const (
 	railExtraLines     = 6
 	selectionBaseRows  = 3
 	detailsBaseRows    = 12
+	diagnosticBaseRows = 16
 	commitBaseRows     = 10
 	stagedDiffBaseRows = 6
 	colorAmber         = "\x1b[38;5;214m"
@@ -142,6 +143,8 @@ func (state *model) hardFloorView(width int) []string {
 		next = "Enter Open   q Quit"
 	case openPathPage:
 		next = "Esc Back   q Quit"
+	case sourceDiagnosticPage:
+		next = "Up/Down Scroll   Enter Back"
 	case addServicePage, servicePreviewPage, stageServiceConfirmationPage,
 		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
 		next = "Esc Back   q Quit"
@@ -181,6 +184,8 @@ func (state *model) locationLine() string {
 		return "Home / Select service"
 	case openPathPage:
 		return "Home / Open Compose file"
+	case sourceDiagnosticPage:
+		return "Home / Compose source issue"
 	case registrationPage, registrationConfirmationPage:
 		return "Home / Repository setup"
 	default:
@@ -273,6 +278,8 @@ func (state *model) body(width int, compact bool) []string {
 			lines = state.homeBody(current, width)
 		case openPathPage:
 			lines = state.openPathBody(current, width)
+		case sourceDiagnosticPage:
+			lines = state.sourceDiagnosticBody(current, width)
 		case selectServicePage:
 			lines = state.selectServiceBody(current, width)
 		case reviewPage:
@@ -293,6 +300,54 @@ func (state *model) body(width int, compact bool) []string {
 	}
 
 	return lines
+}
+
+func (state *model) sourceDiagnosticBody(current sourceDiagnosticPage, width int) []string {
+	diagnostic := current.diagnostic
+	position := "Unavailable"
+	if diagnostic.Line > 0 {
+		position = fmt.Sprintf("line %d", diagnostic.Line)
+		if diagnostic.Column > 0 {
+			position += fmt.Sprintf(", column %d", diagnostic.Column)
+		}
+	}
+	reason, action := sourceDiagnosticText(diagnostic.Reason)
+	lines := make([]string, 0, diagnosticBaseRows)
+	lines = append(lines,
+		state.title("Compose source needs attention"),
+		"",
+		state.muted("FILE"),
+	)
+	lines = append(lines, terminaltext.Wrap(diagnostic.File, max(width-detailsPadding, 1))...)
+	lines = append(lines,
+		"",
+		state.muted("POSITION"),
+		position,
+		"",
+		state.muted("REASON"),
+	)
+	lines = append(lines, terminaltext.Wrap(reason, max(width-detailsPadding, 1))...)
+	lines = append(lines, "", state.muted("ACTION"))
+	lines = append(lines, terminaltext.Wrap(action, max(width-detailsPadding, 1))...)
+	lines = append(lines, "", state.muted("Up/Down Scroll   Enter Back   q Quit"))
+	current.scroll = min(current.scroll, max(len(lines)-1, 0))
+
+	return lines[current.scroll:]
+}
+
+func sourceDiagnosticText(reason SourceDiagnosticReason) (string, string) {
+	switch reason {
+	case DiagnosticYAMLSyntax:
+		return "YAML syntax is invalid", "Fix the YAML syntax, then retry."
+	case DiagnosticYAMLStructure:
+		return "YAML mapping is invalid", "Remove duplicate keys or invalid YAML values, then retry."
+	case DiagnosticYAMLUnsupported:
+		return "YAML feature is not supported", "Replace the unsupported YAML feature with explicit values, then retry."
+	case DiagnosticComposeValidation:
+		return "Compose validation failed", "Fix the Compose fields or required variables, then retry."
+	default:
+		return "Compose validation failed", "Fix the Compose file, then retry."
+	}
 }
 
 func (state *model) auxiliaryPageBody(width int) ([]string, bool) {

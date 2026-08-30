@@ -23,6 +23,12 @@
 `retryable: true` 表示运行时、镜像仓库、速率限制或状态存储恢复后，相同输入可能成功。
 `retryable` 为 false 时，应先修正输入或解决互相矛盾的证据，再重复执行命令。
 
+## TUI 中的 Compose 来源诊断
+
+已提交的 Compose 来源未通过验证时，`maniud tui` 会显示仓库相对路径和稳定的原因类别。YAML 解析器能安全确定位置时，界面也会显示行号和列号。路径超出屏幕范围时，你可以在详情页滚动查看；详情页只提供一项修复操作。
+
+TUI 不会显示配置值、原始 YAML、解析器消息、依赖库错误或绝对路径。`Position: Unavailable` 表示 Compose 验证在 YAML 解析之后发现问题，此时 maniud 无法确定可信的来源位置。
+
 ## 通知失败
 
 Bark 通知需要设置 `BARK_DEVICE_KEY`。需要加密时，再设置 `BARK_ENCRYPTION_KEY`，它要与 Bark app 中的 16、24 或 32 字符 ASCII 密钥一致。Telegram 需要同时设置 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`。

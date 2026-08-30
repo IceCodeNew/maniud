@@ -174,6 +174,88 @@ func TestTUICatalogContainsInvalidAndUnavailableSources(t *testing.T) {
 	}
 }
 
+func TestTUICatalogProjectsSafeComposeDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("services:\n  api:\n    unexpected: true\n")
+	catalog := &tuiCatalog{loadSource: func(context.Context, string) (compose.Source, error) {
+		return committedTUIComposeSource(t, content), nil
+	}}
+	result := catalog.OpenPath(t.Context(), composeFileValue)
+	if result.Blocker != tui.BlockerInvalid || result.Diagnostic != (tui.SourceDiagnostic{
+		File: composeFileValue, Reason: tui.DiagnosticComposeValidation,
+	}) {
+		t.Fatalf("OpenPath(invalid Compose) = %#v", result)
+	}
+
+	malformed := &tuiCatalog{loadSource: func(context.Context, string) (compose.Source, error) {
+		return compose.CaptureRepositorySource(
+			t.TempDir(),
+			composeFileValue,
+			nil,
+			func(string) (compose.RepositoryFile, bool, error) {
+				return compose.RepositoryFile{Content: []byte("services:\n  api:\n    image: [\n")}, true, nil
+			},
+			func(string) (compose.RepositoryPathSnapshot, error) {
+				return compose.RepositoryPathSnapshot{}, nil
+			},
+		)
+	}}
+	result = malformed.OpenPath(t.Context(), composeFileValue)
+	if result.Blocker != tui.BlockerInvalid || result.Diagnostic != (tui.SourceDiagnostic{
+		File: composeFileValue, Reason: tui.DiagnosticYAMLSyntax, Line: 4, Column: 1,
+	}) {
+		t.Fatalf("OpenPath(malformed YAML) = %#v", result)
+	}
+}
+
+func TestTUISourceDiagnosticMapsOnlyStableReasons(t *testing.T) {
+	t.Parallel()
+
+	source := committedTUIComposeSource(t, []byte("services: {}\n"))
+	tests := []struct {
+		name   string
+		source compose.Source
+		err    error
+		want   tui.SourceDiagnostic
+	}{
+		{
+			name: "syntax with source fallback", source: source,
+			err: &compose.SourceDiagnosticError{Reason: compose.DiagnosticYAMLSyntax, Line: 4, Column: 1},
+			want: tui.SourceDiagnostic{
+				File: composeFileValue, Reason: tui.DiagnosticYAMLSyntax, Line: 4, Column: 1,
+			},
+		},
+		{
+			name: "structure with diagnostic file",
+			err: &compose.SourceDiagnosticError{
+				File: "included.yaml", Reason: compose.DiagnosticYAMLStructure, Line: 2, Column: 3,
+			},
+			want: tui.SourceDiagnostic{
+				File: "included.yaml", Reason: tui.DiagnosticYAMLStructure, Line: 2, Column: 3,
+			},
+		},
+		{
+			name: "unsupported YAML", source: source,
+			err:  &compose.SourceDiagnosticError{Reason: compose.DiagnosticYAMLUnsupported},
+			want: tui.SourceDiagnostic{File: composeFileValue, Reason: tui.DiagnosticYAMLUnsupported},
+		},
+		{
+			name: "Compose validation", source: source,
+			err:  &compose.SourceDiagnosticError{Reason: compose.DiagnosticComposeValidation},
+			want: tui.SourceDiagnostic{File: composeFileValue, Reason: tui.DiagnosticComposeValidation},
+		},
+		{name: "unknown reason", source: source, err: &compose.SourceDiagnosticError{Reason: "vendor"}},
+		{name: "generic error", source: source, err: compose.ErrInvalidSource},
+		{name: "missing file", err: &compose.SourceDiagnosticError{Reason: compose.DiagnosticYAMLSyntax}},
+	}
+	for _, test := range tests {
+		if got := tuiSourceDiagnostic(test.source, test.err); got != test.want {
+			t.Fatalf("tuiSourceDiagnostic(%s) = %#v, want %#v", test.name, got, test.want)
+		}
+	}
+}
+
 func TestTUICatalogRejectsMultiServiceRegisteredFileAndCancellation(t *testing.T) {
 	t.Parallel()
 

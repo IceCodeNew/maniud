@@ -85,6 +85,12 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 	}{
 		{page: homePage{catalog: CatalogSnapshot{State: CatalogMissing}}, contains: "Services"},
 		{page: openPathPage{value: strings.Repeat("path/", 40)}, contains: "Open Compose file"},
+		{page: sourceDiagnosticPage{
+			previous: openPathPage{},
+			diagnostic: SourceDiagnostic{
+				File: testServicePath, Reason: DiagnosticComposeValidation,
+			},
+		}, contains: "Compose validation failed"},
 		{page: registrationPage{value: "/home/user/maniud-desired-state"}, contains: "Set up repository"},
 		{page: registrationConfirmationPage{
 			registration: registrationPage{value: "/home/user/maniud-desired-state"}, focus: confirmationBack,
@@ -141,6 +147,42 @@ func TestRenderHelpersRespectCellsAndLayoutBoundaries(t *testing.T) {
 	comparison := imageComparison("current", "proposed", 3)
 	if len(comparison) != 2 {
 		t.Fatalf("imageComparison() = %q", comparison)
+	}
+}
+
+func TestSourceDiagnosticWrapsPathWithoutEllipsis(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	path := "services/" + strings.Repeat("long-directory/", 8) + "api.yaml"
+	state.page = sourceDiagnosticPage{
+		previous: openPathPage{},
+		diagnostic: SourceDiagnostic{
+			File: path, Reason: DiagnosticYAMLSyntax, Line: 12, Column: 7,
+		},
+	}
+	state.resize(compactMinimum, compactMinHeight)
+	content := state.View().Content
+	if strings.Contains(content, "…") || !strings.Contains(content, "services/") ||
+		!strings.Contains(content, "api.yaml") {
+		t.Fatalf("wrapped diagnostic path = %q", content)
+	}
+}
+
+func TestSourceDiagnosticTextUsesFixedCopy(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []SourceDiagnosticReason{
+		DiagnosticYAMLSyntax,
+		DiagnosticYAMLStructure,
+		DiagnosticYAMLUnsupported,
+		DiagnosticComposeValidation,
+		"unknown",
+	} {
+		message, action := sourceDiagnosticText(reason)
+		if message == "" || action == "" {
+			t.Fatalf("sourceDiagnosticText(%q) = %q, %q", reason, message, action)
+		}
 	}
 }
 

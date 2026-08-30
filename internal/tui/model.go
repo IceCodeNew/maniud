@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"unicode"
@@ -120,6 +121,14 @@ type openPathPage struct {
 }
 
 func (openPathPage) isPage() {}
+
+type sourceDiagnosticPage struct {
+	previous   page
+	diagnostic SourceDiagnostic
+	scroll     int
+}
+
+func (sourceDiagnosticPage) isPage() {}
 
 type registrationPage struct {
 	value string
@@ -384,6 +393,8 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 		return state.handleHomeKey(current, key)
 	case openPathPage:
 		return state.handleOpenPathKey(current, message)
+	case sourceDiagnosticPage:
+		return state.handleSourceDiagnosticKey(current, key)
 	case selectServicePage:
 		return state.handleServiceChoiceKey(current, key)
 	case reviewPage:
@@ -493,12 +504,37 @@ func (state *model) activateHomeItem(current homePage, setupIndex int) tea.Cmd {
 	}
 	service := current.catalog.Services[current.cursor]
 	if service.Blocker != BlockerNone {
+		if diagnostic, valid := canonicalSourceDiagnostic(service.Diagnostic); valid {
+			state.page = sourceDiagnosticPage{previous: current, diagnostic: diagnostic}
+			state.status = "Review the Compose source issue"
+
+			return nil
+		}
 		state.status = blockerMessage(service.Blocker)
 
 		return nil
 	}
 
 	return state.startOpenRegistered(service.ID)
+}
+
+func (state *model) handleSourceDiagnosticKey(current sourceDiagnosticPage, key string) tea.Cmd {
+	switch key {
+	case "up", "k":
+		current.scroll = max(current.scroll-1, 0)
+	case keyDown, "j":
+		current.scroll++
+	case keyEnter, keyEscape:
+		state.page = current.previous
+		state.status = "Fix the Compose source and refresh"
+
+		return nil
+	case keyQuit:
+		return tea.Quit
+	}
+	state.page = current
+
+	return nil
 }
 
 func (state *model) activateAddService(catalog CatalogSnapshot) tea.Cmd {
@@ -1248,6 +1284,12 @@ func (state *model) handleOpenResult(result openResultMsg) tea.Cmd {
 		return command
 	}
 	if result.result.Blocker != BlockerNone {
+		if diagnostic, valid := canonicalSourceDiagnostic(result.result.Diagnostic); valid {
+			state.page = sourceDiagnosticPage{previous: state.page, diagnostic: diagnostic}
+			state.status = "Review the Compose source issue"
+
+			return command
+		}
 		state.status = blockerMessage(result.result.Blocker)
 
 		return command
@@ -1395,10 +1437,48 @@ func canonicalCatalog(snapshot CatalogSnapshot) CatalogSnapshot {
 			ID: service.ID, Location: location, Project: project, Name: name,
 			Runtime: runtimeName, Blocker: service.Blocker,
 		})
+		if diagnostic, valid := canonicalSourceDiagnostic(service.Diagnostic); valid && service.Blocker == BlockerInvalid {
+			services[len(services)-1].Diagnostic = diagnostic
+		}
 	}
 	snapshot.Services = services
 
 	return snapshot
+}
+
+func canonicalSourceDiagnostic(diagnostic SourceDiagnostic) (SourceDiagnostic, bool) {
+	file, valid := canonicalSourceDiagnosticFile(diagnostic.File)
+	if !valid || !validSourceDiagnosticPosition(diagnostic.Line, diagnostic.Column) ||
+		!validSourceDiagnosticReason(diagnostic.Reason) {
+		return SourceDiagnostic{}, false
+	}
+	diagnostic.File = file
+
+	return diagnostic, true
+}
+
+func canonicalSourceDiagnosticFile(file string) (string, bool) {
+	canonical, err := canonicalDisplay(file)
+	native := filepath.FromSlash(canonical)
+	if err != nil || canonical == "" || filepath.IsAbs(native) || !filepath.IsLocal(native) ||
+		filepath.ToSlash(filepath.Clean(native)) != canonical {
+		return "", false
+	}
+
+	return canonical, true
+}
+
+func validSourceDiagnosticPosition(line, column int) bool {
+	return line >= 0 && column >= 0 && (line != 0 || column == 0)
+}
+
+func validSourceDiagnosticReason(reason SourceDiagnosticReason) bool {
+	switch reason {
+	case DiagnosticYAMLSyntax, DiagnosticYAMLStructure, DiagnosticYAMLUnsupported, DiagnosticComposeValidation:
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalServiceDraft(draft ServiceDraft) (ServiceDraft, error) {
