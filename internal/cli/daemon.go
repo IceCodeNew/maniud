@@ -220,6 +220,16 @@ func reconcileRegisteredRepository(
 	if err != nil {
 		return err
 	}
+	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	if err != nil {
+		return errGitOpsRepositoryInvalid
+	}
+	scope, err := compose.NewRepositoryScope(root, remote, registration.Branch)
+	if err != nil {
+		return errGitOpsRepositoryInvalid
+	}
+	dependencies.repositoryRoot = root
+	dependencies.repository = scope
 	if err = recoverGitOpsSnapshot(ctx, root, currentCommit, output, dependencies); err != nil {
 		return err
 	}

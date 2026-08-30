@@ -159,6 +159,78 @@ func (*applyOperationsFixture) Evidence(
 	return application.EvidenceBundle{}, nil
 }
 
+func (*applyOperationsFixture) RepositoryInventory(
+	context.Context,
+	compose.RepositoryScope,
+) ([]application.RepositoryTransaction, error) {
+	return nil, nil
+}
+
+func TestLoadApplyRequestBindsRepositorySource(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	path := filepath.Join(root, "services", "api.yaml")
+	scope, err := compose.NewRepositoryScope(root, "https://example.com/team/desired.git", gitOpsTestBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	digest := domain.Hash([]byte("committed source"))
+	source := testComposeSource(t)
+	source.Repository = &compose.RepositorySnapshot{
+		Root: root, Entry: tuiTestServicePath, Digest: digest,
+	}
+	dependencies := applyDependencies{
+		loadSource:     func(context.Context, string) (compose.Source, error) { return source, nil },
+		repositoryRoot: root,
+		repository:     scope,
+	}
+
+	request, err := loadApplyRequest(
+		t.Context(), applyInvocation{compose: path, service: applyServiceValue}, dependencies,
+	)
+	if err != nil || !request.Repository.ValidFor(digest) ||
+		request.Repository.Scope != scope.Digest {
+		t.Fatalf("loadApplyRequest() = %#v, %v", request.Repository, err)
+	}
+}
+
+func TestBindApplyRepositorySourceRejectsMismatchedEvidence(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "repo")
+	scope, err := compose.NewRepositoryScope(root, "https://example.com/team/desired.git", gitOpsTestBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	digest := domain.Hash([]byte("committed source"))
+	valid := compose.Source{Repository: &compose.RepositorySnapshot{
+		Root: root, Entry: tuiTestServicePath, Digest: digest,
+	}}
+	path := filepath.Join(root, "services", "api.yaml")
+	for _, source := range []compose.Source{
+		{},
+		{Repository: &compose.RepositorySnapshot{
+			Root: filepath.Join(root, "other"), Entry: tuiTestServicePath, Digest: digest,
+		}},
+		{Repository: &compose.RepositorySnapshot{
+			Root: root, Entry: "services/other.yaml", Digest: digest,
+		}},
+	} {
+		if _, bindErr := bindApplyRepositorySource(root, path, scope, source); !errors.Is(bindErr, compose.ErrInvalidSource) {
+			t.Fatalf("bindApplyRepositorySource(%#v) error = %v", source.Repository, bindErr)
+		}
+	}
+	provenance, bindErr := bindApplyRepositorySource(root, path, compose.RepositoryScope{}, valid)
+	if !errors.Is(bindErr, compose.ErrInvalidSource) ||
+		provenance != (compose.RepositoryProvenance{}) {
+		t.Fatalf("bindApplyRepositorySource(invalid scope) = %#v, %v", provenance, bindErr)
+	}
+}
+
 type applyBoundaryTest struct {
 	name       string
 	mutate     func(*applyDependencies, *applyOperationsFixture)

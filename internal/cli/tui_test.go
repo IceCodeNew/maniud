@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/tui"
 )
@@ -175,6 +176,13 @@ func (*tuiOperationsFixture) Apply(
 	application.Request,
 ) (application.Plan, error) {
 	return application.Plan{}, nil
+}
+
+func (*tuiOperationsFixture) RepositoryInventory(
+	context.Context,
+	compose.RepositoryScope,
+) ([]application.RepositoryTransaction, error) {
+	return nil, nil
 }
 
 func (*tuiOperationsFixture) Snapshot(
