@@ -109,15 +109,18 @@ func (runtime *applyRuntimeFixture) CloseIdleConnections() {
 }
 
 type applyOperationsFixture struct {
-	events        *[]string
-	dryRun        func(application.Request) (application.Plan, error)
-	apply         func(application.Request) (application.Plan, error)
-	dryRunPlan    application.Plan
-	applyPlan     application.Plan
-	dryRunErr     error
-	applyErr      error
-	dryRunRequest application.Request
-	applyRequest  application.Request
+	events         *[]string
+	dryRun         func(application.Request) (application.Plan, error)
+	apply          func(application.Request) (application.Plan, error)
+	dryRunPlan     application.Plan
+	applyPlan      application.Plan
+	dryRunErr      error
+	applyErr       error
+	dryRunRequest  application.Request
+	applyRequest   application.Request
+	inventory      []application.RepositoryTransaction
+	inventoryErr   error
+	inventoryScope compose.RepositoryScope
 }
 
 func (operations *applyOperationsFixture) DryRun(
@@ -159,11 +162,13 @@ func (*applyOperationsFixture) Evidence(
 	return application.EvidenceBundle{}, nil
 }
 
-func (*applyOperationsFixture) RepositoryInventory(
-	context.Context,
-	compose.RepositoryScope,
+func (operations *applyOperationsFixture) RepositoryInventory(
+	_ context.Context,
+	scope compose.RepositoryScope,
 ) ([]application.RepositoryTransaction, error) {
-	return nil, nil
+	operations.inventoryScope = scope
+
+	return operations.inventory, operations.inventoryErr
 }
 
 func TestLoadApplyRequestBindsRepositorySource(t *testing.T) {

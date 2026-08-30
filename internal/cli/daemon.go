@@ -211,6 +211,22 @@ func reconcileRegisteredRepository(
 		return err
 	}
 
+	return reconcileRegisteredGitOpsCheckout(
+		ctx,
+		output,
+		registration,
+		dependencies,
+		fastForwardGitOpsCheckout,
+	)
+}
+
+func reconcileRegisteredGitOpsCheckout(
+	ctx context.Context,
+	output io.Writer,
+	registration gitOpsRegistration,
+	dependencies applyDependencies,
+	fastForward func(context.Context, string, string, string) (string, string, error),
+) error {
 	root, currentCommit, err := registeredGitOpsCheckout(
 		ctx,
 		registration.Repository,
@@ -234,7 +250,7 @@ func reconcileRegisteredRepository(
 		return err
 	}
 
-	root, selectedCommit, err := fastForwardGitOpsCheckout(
+	root, selectedCommit, err := fastForward(
 		ctx,
 		registration.Repository,
 		registration.Branch,
@@ -289,6 +305,8 @@ func classifyDaemonCommandFailure(err error) *domain.FailureError {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return domain.OperationCancelled()
+	case errors.Is(err, errGitOpsRecoverySourceBlocked):
+		return domain.ApplyFailed(true)
 	case errors.Is(err, errGitOpsRegistrationExists),
 		errors.Is(err, errGitOpsRepositoryInvalid),
 		errors.Is(err, compose.ErrInvalidSource),

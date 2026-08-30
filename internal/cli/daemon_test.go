@@ -360,7 +360,7 @@ func TestReconcileRegisteredRepositoryRejectsStateAndCheckoutFailures(t *testing
 	}
 }
 
-func TestReconcileRegisteredRepositoryRejectsRecoveryAndFetchFailures(t *testing.T) {
+func TestReconcileRegisteredRepositoryContinuesPastInvalidSourceAndRejectsFetchFailure(t *testing.T) {
 	t.Parallel()
 	runtimes := testRuntimePlugins(t)
 
@@ -371,8 +371,8 @@ func TestReconcileRegisteredRepositoryRejectsRecoveryAndFetchFailures(t *testing
 		func() (string, error) { return root, nil },
 		nil,
 		runtimes,
-	); err == nil {
-		t.Fatal("reconcileRegisteredRepository(recovery failure) succeeded")
+	); err != nil {
+		t.Fatalf("reconcileRegisteredRepository(invalid source) error = %v", err)
 	}
 
 	root = initGitOpsTestRepository(t)
@@ -388,6 +388,60 @@ func TestReconcileRegisteredRepositoryRejectsRecoveryAndFetchFailures(t *testing
 		runtimes,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("reconcileRegisteredRepository(fetch failure) = %v", err)
+	}
+}
+
+func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+	scope, err := compose.NewRepositoryScope(root, root, gitOpsTestBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	path := filepath.Join(root, gitOpsServicesDirectory, "api.yaml")
+	source := repositoryRecoverySource(t, root, path)
+	location, err := scope.Location(source.Repository.Entry)
+	if err != nil {
+		t.Fatalf("RepositoryScope.Location() error = %v", err)
+	}
+	events := make([]string, 0, 4)
+	operations := &applyOperationsFixture{
+		events: &events,
+		inventory: []application.RepositoryTransaction{{
+			Source: source.Repository.Digest, Location: location,
+		}},
+	}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	dependencies.loadSource = func(_ context.Context, requested string) (compose.Source, error) {
+		if requested == path {
+			return compose.Source{}, compose.ErrInvalidSource
+		}
+
+		return repositoryRecoverySource(t, root, requested), nil
+	}
+	registration := gitOpsRegistration{
+		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
+		Remote: gitOpsRemoteName, BaselineCommit: state.head,
+	}
+	fetched := false
+	err = reconcileRegisteredGitOpsCheckout(
+		t.Context(),
+		io.Discard,
+		registration,
+		dependencies,
+		func(context.Context, string, string, string) (string, string, error) {
+			fetched = true
+
+			return "", "", nil
+		},
+	)
+	if !errors.Is(err, errGitOpsRecoverySourceBlocked) || fetched {
+		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, fetched = %t", err, fetched)
 	}
 }
 

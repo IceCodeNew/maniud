@@ -16,7 +16,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
-func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T) {
+func TestReconcileGitOpsSnapshotSkipsInvalidSourceAndMutatesValidService(t *testing.T) {
 	t.Parallel()
 
 	root := initGitOpsSnapshotTestRepository(t)
@@ -45,7 +45,48 @@ func TestReconcileGitOpsSnapshotValidatesEveryServiceBeforeMutation(t *testing.T
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
-	if mutations := countEvent(events, string(commandApply)); err == nil || mutations != 0 {
+	if mutations := countEvent(events, string(commandApply)); err != nil || mutations != 1 {
+		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+	}
+}
+
+func TestReconcileGitOpsSnapshotCompletesPreflightBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 16)
+	operations := &applyOperationsFixture{events: &events}
+	operations.dryRun = func(request application.Request) (application.Plan, error) {
+		if request.Service == "worker" {
+			return application.Plan{}, errApplyTest
+		}
+
+		return application.Plan{Kind: application.PlanBootstrap}, nil
+	}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	dependencies.loadSource = func(_ context.Context, path string) (compose.Source, error) {
+		if filepath.Base(path) != "broken.yaml" {
+			return testComposeSource(t), nil
+		}
+
+		return compose.Source{
+			Content: []byte(`name: example
+services:
+  worker:
+    container_name: example-worker
+    image: example.com/team/worker:1
+    network_mode: bridge
+`),
+			WorkingDir: root,
+		}, nil
+	}
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+
+	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	if mutations := countEvent(events, string(commandApply)); !errors.Is(err, errApplyTest) || mutations != 0 {
 		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
 	}
 }
@@ -219,10 +260,9 @@ func TestCaptureGitOpsSnapshotRejectsSourceAndCheckoutDrift(t *testing.T) {
 	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
 		return compose.Source{}, compose.ErrInvalidSource
 	}
-	if _, err = captureGitOpsSnapshot(
-		t.Context(), root, state.head, dependencies,
-	); !errors.Is(err, compose.ErrInvalidSource) {
-		t.Fatalf("captureGitOpsSnapshot(load failure) = %v", err)
+	services, err := captureGitOpsSnapshot(t.Context(), root, state.head, dependencies)
+	if err != nil || len(services) != 0 {
+		t.Fatalf("captureGitOpsSnapshot(load failure) = %#v, %v", services, err)
 	}
 
 	modified := false
@@ -289,6 +329,24 @@ func TestDependenciesWithApplySourceRejectsAnotherPath(t *testing.T) {
 	dependencies := dependenciesWithApplySource(applyDependencies{}, "/repo/api.yaml", testComposeSource(t))
 	if _, err := dependencies.loadSource(t.Context(), "/repo/other.yaml"); !errors.Is(err, compose.ErrInvalidSource) {
 		t.Fatalf("loadSource(other path) = %v", err)
+	}
+}
+
+func TestGitOpsSourceBlockerRecognizesOnlyComposeValidationFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{
+		compose.ErrInvalidSource,
+		fmt.Errorf("wrapped: %w", compose.ErrExternalSource),
+	} {
+		if !gitOpsSourceBlocker(err) {
+			t.Fatalf("gitOpsSourceBlocker(%v) = false", err)
+		}
+	}
+	for _, err := range []error{nil, errApplyTest} {
+		if gitOpsSourceBlocker(err) {
+			t.Fatalf("gitOpsSourceBlocker(%v) = true", err)
+		}
 	}
 }
 
