@@ -29,7 +29,15 @@ fi
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 temporary_dir="$(cd "$(mktemp -d)" && pwd -P)"
-trap 'rm -rf "$temporary_dir"' EXIT
+engine_pid=
+cleanup() {
+	if [[ -n "$engine_pid" ]]; then
+		kill "$engine_pid" >/dev/null 2>&1 || true
+		wait "$engine_pid" 2>/dev/null || true
+	fi
+	rm -rf "$temporary_dir"
+}
+trap cleanup EXIT
 
 binary="${1:-$temporary_dir/maniud}"
 if (($# == 0)); then
@@ -44,6 +52,247 @@ if [[ ! "$version" =~ ^maniud\ ((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*
 	printf 'unexpected maniud version: %s\n' "$version" >&2
 	exit 1
 fi
+
+quickstart_repository="$temporary_dir/quickstart"
+quickstart_state="$temporary_dir/quickstart-state"
+quickstart_docker_config="$temporary_dir/quickstart-docker-config"
+quickstart_socket="$temporary_dir/qs.sock"
+quickstart_ready="$temporary_dir/qs.ready"
+quickstart_engine_log="$temporary_dir/qs-engine.log"
+mkdir -p "$quickstart_repository/services" "$quickstart_docker_config"
+mkdir -m 0700 "$quickstart_state"
+
+case "$(uname -m)" in
+x86_64 | amd64)
+	quickstart_architecture=amd64
+	quickstart_variant=
+	quickstart_manifest=sha256:40bc662f062f4b8bd2c565f33afd213abcadb0afd138dfc45c5c1c19edd8d319
+	quickstart_config=sha256:3f62c8d50142dbc9d3a53643b53faae8ea5bef43c2e1f7a669f76652cca2e87c
+	;;
+aarch64 | arm64)
+	quickstart_architecture=arm64
+	quickstart_variant=v8
+	quickstart_manifest=sha256:9f5b47e91c32055c5ccc860c1de27a21117936e84c44543a750482d51d541134
+	quickstart_config=sha256:15018ca4eb9f691fe2784cf3171220a1a107c7dca6cbec04bf1add309d3853f6
+	;;
+*)
+	printf 'unsupported quickstart test architecture: %s\n' "$(uname -m)" >&2
+	exit 1
+	;;
+esac
+
+quickstart_digest=sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15
+quickstart_image="registry.access.redhat.com/ubi9/ubi-micro@$quickstart_digest"
+python3 - \
+	"$quickstart_socket" \
+	"$quickstart_ready" \
+	"$quickstart_architecture" \
+	"$quickstart_variant" \
+	"$quickstart_manifest" \
+	"$quickstart_config" \
+	"$quickstart_image" >"$quickstart_engine_log" 2>&1 <<'PY' &
+import http.server
+import json
+import os
+import socketserver
+import sys
+import urllib.parse
+
+socket_path, ready_path, architecture, variant, manifest, config, image = sys.argv[1:]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *arguments):
+        print(format % arguments, file=sys.stderr)
+
+    def respond(self, status, body=b"", content_type=None, headers=None):
+        self.send_response(status)
+        if content_type is not None:
+            self.send_header("Content-Type", content_type)
+        if headers is not None:
+            for name, value in headers.items():
+                self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        if self.path == "/_ping":
+            self.respond(200, headers={"Api-Version": "1.55"})
+            return
+        self.respond(404, b'{"message":"missing"}', "application/json")
+
+    def do_GET(self):
+        request = urllib.parse.urlsplit(self.path)
+        path = request.path
+        if path == "/_ping":
+            self.respond(200, b"OK", "text/plain", {"Api-Version": "1.55"})
+            return
+        if path == "/v1.55/version":
+            self.json_response({
+                "Version": "29.7.2",
+                "ApiVersion": "1.55",
+                "MinAPIVersion": "1.40",
+                "Os": "linux",
+                "Arch": architecture,
+            })
+            return
+        if path == "/v1.55/info":
+            self.json_response({
+                "ID": "quickstart-engine",
+                "Driver": "overlay2",
+                "OSType": "linux",
+                "Architecture": architecture,
+                "ServerVersion": "29.7.2",
+                "SecurityOptions": [],
+            })
+            return
+        expected_image_path = "/v1.55/images/" + image + "/json"
+        platform_values = urllib.parse.parse_qs(request.query).get("platform", [])
+        expected_platform = {"architecture": architecture, "os": "linux"}
+        if variant:
+            expected_platform["variant"] = variant
+        try:
+            platform_matches = (
+                len(platform_values) == 1
+                and json.loads(platform_values[0]) == expected_platform
+            )
+        except json.JSONDecodeError:
+            platform_matches = False
+        if path == expected_image_path and platform_matches:
+            self.json_response({
+                "Id": config,
+                "RepoDigests": [image],
+                "Config": {},
+                "Architecture": architecture,
+                "Variant": variant,
+                "Os": "linux",
+                "Size": 0,
+                "Descriptor": {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": manifest,
+                    "size": 1,
+                },
+            })
+            return
+        if path == "/v1.55/containers/maniud-hello/json":
+            self.respond(404, b'{"message":"No such container"}', "application/json")
+            return
+        self.respond(404, b'{"message":"missing"}', "application/json")
+
+    def json_response(self, document):
+        self.respond(
+            200,
+            json.dumps(document, separators=(",", ":")).encode(),
+            "application/json",
+        )
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+try:
+    os.unlink(socket_path)
+except FileNotFoundError:
+    pass
+
+with Server(socket_path, Handler) as server:
+    with open(ready_path, "w", encoding="utf-8") as stream:
+        stream.write("ready\n")
+    server.serve_forever()
+PY
+engine_pid=$!
+
+for _ in {1..100}; do
+	if [[ -f "$quickstart_ready" ]]; then
+		break
+	fi
+	sleep 0.05
+done
+if [[ ! -f "$quickstart_ready" ]]; then
+	cat "$quickstart_engine_log" >&2
+	printf '%s\n' 'quickstart Docker fixture did not start' >&2
+	exit 1
+fi
+
+git -C "$quickstart_repository" init --quiet --initial-branch=master
+quickstart_gen_output="$temporary_dir/quickstart-gen.json"
+quickstart_compose="$quickstart_repository/services/maniud-hello.yaml"
+if ! env \
+	DOCKER_CONFIG="$quickstart_docker_config" \
+	DOCKER_HOST="unix://$quickstart_socket" \
+	HOME="$temporary_dir/home" \
+	XDG_STATE_HOME="$quickstart_state" \
+	"$binary" gen \
+	--name maniud-hello \
+	--output "$quickstart_compose" \
+	--json \
+	-- docker run --name maniud-hello --restart unless-stopped \
+	"$quickstart_image" /usr/bin/sleep infinity >"$quickstart_gen_output"; then
+	cat "$quickstart_gen_output" >&2
+	cat "$quickstart_engine_log" >&2
+	exit 1
+fi
+python3 - "$quickstart_gen_output" "$quickstart_compose" "$quickstart_image" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+if result != {"path": sys.argv[2], "status": "generated"}:
+    raise SystemExit(f"unexpected quickstart gen result: {result!r}")
+with open(sys.argv[2], encoding="utf-8") as stream:
+    compose = stream.read()
+required = (
+    f"        image: {sys.argv[3]}\n",
+    "        container_name: maniud-hello\n",
+    "            - /usr/bin/sleep\n",
+    "            - infinity\n",
+)
+if any(value not in compose for value in required):
+    raise SystemExit("quickstart Compose content does not match the documented input")
+PY
+
+git -C "$quickstart_repository" add -- services/maniud-hello.yaml
+git -C "$quickstart_repository" \
+	-c user.name='maniud e2e' \
+	-c user.email='maniud-e2e@example.invalid' \
+	-c commit.gpgsign=false \
+	commit --quiet -m 'add quickstart service'
+
+quickstart_apply_output="$temporary_dir/quickstart-apply.txt"
+if ! env \
+	DOCKER_CONFIG="$quickstart_docker_config" \
+	DOCKER_HOST="unix://$quickstart_socket" \
+	HOME="$temporary_dir/home" \
+	XDG_STATE_HOME="$quickstart_state" \
+	"$binary" apply --dry-run "$quickstart_compose" >"$quickstart_apply_output"; then
+	cat "$quickstart_apply_output" >&2
+	cat "$quickstart_engine_log" >&2
+	exit 1
+fi
+python3 - "$quickstart_apply_output" "$quickstart_image" "$quickstart_architecture" "$quickstart_variant" <<'PY'
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    output = stream.read()
+platform = "linux/" + sys.argv[3]
+if sys.argv[4]:
+    platform += "/" + sys.argv[4]
+required = (
+    "Dry run passed for maniud-hello/maniud-hello.\n",
+    "Action: create a new workload (bootstrap).\n",
+    f"Runtime: docker on {platform}.\n",
+    f"Image: {sys.argv[2]}.\n",
+    "Ready to apply. No changes were made.\n",
+)
+if output != "".join(required):
+    raise SystemExit(f"unexpected quickstart dry-run output: {output!r}")
+PY
 
 archive="$temporary_dir/hello.tar"
 python3 - "$archive" <<'PY'

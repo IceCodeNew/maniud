@@ -9,6 +9,28 @@
 
 maniud turns a container image or a published `docker run` command into a reviewable Compose file. It prepares required host paths, previews changes, applies upgrades, and resumes interrupted operations. Docker, Podman, and containerd are supported.
 
+## Two-minute start
+
+You need [maniud installed](docs/release-verification.md#install-a-verified-release-with-github-cli), Git, and a running Docker Engine. The example uses a public image pinned to a multi-platform digest, so the image identity stays fixed on Linux AMD64 and ARM64 hosts.
+
+```sh
+image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
+docker pull "$image"
+maniud tui
+```
+
+On the first screen, accept or edit the desired-state repository path, then confirm its creation. Choose **Add service** and paste this command:
+
+```text
+docker run --name maniud-hello --restart unless-stopped registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15 /usr/bin/sleep infinity
+```
+
+`maniud` parses the command without running it. Review the generated Compose file and staged diff. Every confirmation starts on **Back**; use Tab to select the effect before pressing Enter. After the commit, `maniud` reloads the committed file and performs a dry run before it offers **Apply**.
+
+![maniud TUI Review screen](docs/images/tui-review.svg)
+
+The [TUI guide](docs/tui.md) covers the complete flow, keyboard controls, terminal requirements, and recovery behavior. The [release verification guide](docs/release-verification.md) covers provenance-checked installation.
+
 ## Install
 
 An agent that can operate the target machine can install the latest release with this prompt:
@@ -27,7 +49,7 @@ mise use --global 'github:IceCodeNew/maniud[asset_pattern=maniud_{{ version }}_{
 maniud --version
 ```
 
-## Start a service
+## Use non-interactive commands
 
 Create a Git-backed service directory:
 

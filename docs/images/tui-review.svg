@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="996" height="492" viewBox="0 0 996 492">
+<!-- Captured from the production maniud binary in a 100x24 PTY. -->
+<rect width="100%" height="100%" fill="#f6f8fa"/>
+<rect x="24" y="24" width="948" height="444" rx="10" fill="#0d1117"/>
+<g transform="translate(24 24)" font-family="SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="14" xml:space="preserve">
+<text x="24.0" y="39.2" fill="#ffaf00">maniud</text>
+<text x="96.0" y="39.2" fill="#8a8a8a">maniud-hello / maniud-hello / docker</text>
+<text x="24.0" y="59.2" fill="#d8dee9">────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="24.0" y="79.2" fill="#8a8a8a">FLOW</text>
+<text x="60.0" y="79.2" fill="#d8dee9">               │ </text>
+<text x="213.0" y="79.2" fill="#ffaf00">Review image change</text>
+<text x="24.0" y="99.2" fill="#d8dee9">                   │ Compare the current and proposed image identities before continuing.           </text>
+<text x="24.0" y="119.2" fill="#00d787">✓</text>
+<text x="33.0" y="119.2" fill="#d8dee9"> Select           │                                                                                </text>
+<text x="24.0" y="139.2" fill="#ffaf00">◆</text>
+<text x="33.0" y="139.2" fill="#d8dee9"> Review           │ Service   maniud-hello / maniud-hello                                          </text>
+<text x="24.0" y="159.2" fill="#d8dee9">  Confirm          │ Runtime   docker on linux/arm64/v8                                             </text>
+<text x="24.0" y="179.2" fill="#d8dee9">  Apply            │ Action    bootstrap                                                            </text>
+<text x="24.0" y="199.2" fill="#d8dee9">                   │                                                                                </text>
+<text x="24.0" y="219.2" fill="#8a8a8a">RETURN</text>
+<text x="78.0" y="219.2" fill="#d8dee9">             │ CURRENT                                  PROPOSED                              </text>
+<text x="24.0" y="239.2" fill="#d8dee9">Esc  Back          │ Not deployed                             registry.access.redhat.c…c17fbc40edc15</text>
+<text x="24.0" y="259.2" fill="#d8dee9">q    Quit          │                                                                                </text>
+<text x="24.0" y="279.2" fill="#d8dee9">                   │ </text>
+<text x="213.0" y="279.2" fill="#00d787">◆ Ready for confirmation</text>
+<text x="24.0" y="299.2" fill="#d8dee9">                   │ Compose validation and read-only runtime checks passed.                        </text>
+<text x="24.0" y="319.2" fill="#d8dee9">                   │ No runtime change has started.                                                 </text>
+<text x="24.0" y="339.2" fill="#d8dee9">                   │                                                                                </text>
+<text x="24.0" y="359.2" fill="#d8dee9">                   │ </text>
+<text x="213.0" y="359.2" fill="#ffaf00">› </text>
+<text x="231.0" y="359.2" fill="#d8dee9">Continue to confirmation                                                     </text>
+<text x="24.0" y="379.2" fill="#d8dee9">                   │ </text>
+<text x="213.0" y="379.2" fill="#8a8a8a">d Details   r Refresh   Esc Back</text>
+<text x="24.0" y="399.2" fill="#d8dee9">────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="24.0" y="419.2" fill="#8a8a8a">Enter Continue   d Details   r Refresh   Esc Back   q Quit</text>
+</g>
+</svg>

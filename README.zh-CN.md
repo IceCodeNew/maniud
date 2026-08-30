@@ -9,6 +9,28 @@
 
 maniud 可以把容器镜像或项目提供的 `docker run` 命令转换成便于审阅的 Compose 文件。maniud 会准备宿主机路径、预览改动、执行升级，并恢复中断的操作。支持 Docker、Podman 和 containerd。
 
+## 两分钟上手
+
+你需要先[安装 maniud](docs/release-verification.zh-CN.md#使用-github-cli-安装已验证的-release)，准备 Git，并启动 Docker Engine。示例镜像来自公共仓库，固定的多平台 digest 同时支持 Linux AMD64 和 ARM64。
+
+```sh
+image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
+docker pull "$image"
+maniud tui
+```
+
+首次进入时，确认或修改期望状态仓库路径，再确认创建仓库。选择 **Add service**，粘贴下面的命令：
+
+```text
+docker run --name maniud-hello --restart unless-stopped registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15 /usr/bin/sleep infinity
+```
+
+`maniud` 只解析这条命令，不会直接执行。检查生成的 Compose 文件和暂存区 diff。确认页默认选中 **Back**，按 Tab 选择要执行的操作，再按 Enter。提交完成后，`maniud` 会重新读取已经提交的文件并执行 dry-run，随后才提供 **Apply**。
+
+![maniud TUI Review 页面](docs/images/tui-review.svg)
+
+[TUI 使用指南](docs/tui.zh-CN.md)记录了完整流程、快捷键、终端要求和恢复方式。[Release 验证指南](docs/release-verification.zh-CN.md)提供带来源验证的安装步骤。
+
 ## 安装
 
 可以把下面的提示词交给能够操作目标机器的 agent：
@@ -27,7 +49,7 @@ mise use --global 'github:IceCodeNew/maniud[asset_pattern=maniud_{{ version }}_{
 maniud --version
 ```
 
-## 启动服务
+## 使用非交互命令
 
 先创建由 Git 管理的服务目录：
 
