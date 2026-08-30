@@ -246,8 +246,13 @@ func reconcileRegisteredGitOpsCheckout(
 	}
 	dependencies.repositoryRoot = root
 	dependencies.repository = scope
-	if err = recoverGitOpsSnapshot(ctx, root, currentCommit, output, dependencies); err != nil {
-		return err
+	counts, err := recoverGitOpsSnapshotResult(ctx, root, currentCommit, output, dependencies)
+	if err != nil {
+		counts.markFailed()
+
+		return finishGitOpsCycle(
+			output, currentCommit, gitOpsCycleStatusFor(counts, err), counts, err,
+		)
 	}
 
 	selection, err := fastForward(
@@ -257,13 +262,24 @@ func reconcileRegisteredGitOpsCheckout(
 		registration.BaselineCommit,
 	)
 	if err != nil {
-		return err
+		counts.markFailed()
+
+		return finishGitOpsCycle(output, currentCommit, gitOpsCycleFailed, counts, err)
 	}
 	if selection.awaitingPush {
-		return nil
+		return finishGitOpsCycle(
+			output, selection.commit, gitOpsCycleAwaitingPush, counts, nil,
+		)
 	}
 
-	return reconcileGitOpsSnapshot(ctx, selection.root, selection.commit, output, dependencies)
+	reconciled, runErr := reconcileGitOpsSnapshotResult(
+		ctx, selection.root, selection.commit, output, dependencies,
+	)
+	counts.add(reconciled)
+
+	return finishGitOpsCycle(
+		output, selection.commit, gitOpsCycleStatusFor(counts, runErr), counts, runErr,
+	)
 }
 
 func listGitOpsServiceFiles(root string) ([]string, error) {

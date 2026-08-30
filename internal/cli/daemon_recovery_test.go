@@ -86,11 +86,15 @@ func TestRecoverGitOpsSnapshotMatchesEveryRepositoryTransaction(t *testing.T) {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
 
-	err = recoverGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
+	counts, err := recoverGitOpsSnapshotResult(
+		t.Context(), root, state.head, io.Discard, dependencies,
+	)
 	if mutations := countEvent(events, string(commandApply)); err != nil || mutations != 1 ||
+		counts.applied != 1 || counts.failed != 0 ||
 		operations.inventoryScope != dependencies.repository {
 		t.Fatalf(
-			"recoverGitOpsSnapshot() error = %v, mutations = %d, scope = %#v",
+			"recoverGitOpsSnapshotResult() counts = %#v, error = %v, mutations = %d, scope = %#v",
+			counts,
 			err,
 			mutations,
 			operations.inventoryScope,

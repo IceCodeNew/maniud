@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"os"
@@ -366,13 +367,19 @@ func TestReconcileRegisteredRepositoryContinuesPastInvalidSourceAndRejectsFetchF
 
 	root := initGitOpsSnapshotTestRepository(t)
 	environment := registerGitOpsTestRepository(t, root)
+	output := new(bytes.Buffer)
 	if err := reconcileRegisteredRepository(
-		t.Context(), io.Discard, environment, io.Discard,
+		t.Context(), output, environment, io.Discard,
 		func() (string, error) { return root, nil },
 		nil,
 		runtimes,
 	); err != nil {
 		t.Fatalf("reconcileRegisteredRepository(invalid source) error = %v", err)
+	}
+	summary := decodeGitOpsCycleSummary(t, output)
+	if summary.Status != gitOpsCyclePartial || summary.Skipped != 2 ||
+		len(summary.SkippedSources) != 2 {
+		t.Fatalf("invalid-source cycle summary = %#v", summary)
 	}
 
 	root = initGitOpsTestRepository(t)
@@ -429,9 +436,10 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *t
 		Remote: gitOpsRemoteName, BaselineCommit: state.head,
 	}
 	fetched := false
+	output := new(bytes.Buffer)
 	err = reconcileRegisteredGitOpsCheckout(
 		t.Context(),
-		io.Discard,
+		output,
 		registration,
 		dependencies,
 		func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
@@ -442,6 +450,10 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBlockedRecoverySource(t *t
 	)
 	if !errors.Is(err, errGitOpsRecoverySourceBlocked) || fetched {
 		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, fetched = %t", err, fetched)
+	}
+	summary := decodeGitOpsCycleSummary(t, output)
+	if summary.Status != errGitOpsRecoverySourceBlocked.Error() || summary.Failed != 1 {
+		t.Fatalf("blocked-recovery cycle summary = %#v", summary)
 	}
 }
 
@@ -458,13 +470,30 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotMutateLocalAheadCommit(t *testi
 		Remote: gitOpsRemoteName, BaselineCommit: registered,
 	}
 
+	output := new(bytes.Buffer)
 	err := reconcileRegisteredGitOpsCheckout(
-		t.Context(), io.Discard, registration, dependencies, fastForwardGitOpsCheckout,
+		t.Context(), output, registration, dependencies, fastForwardGitOpsCheckout,
 	)
 	if err != nil || countEvent(events, dryRunEvent) != 0 ||
 		countEvent(events, string(commandApply)) != 0 {
 		t.Fatalf("reconcileRegisteredGitOpsCheckout() error = %v, events = %q", err, events)
 	}
+	summary := decodeGitOpsCycleSummary(t, output)
+	if summary.Status != gitOpsCycleAwaitingPush || summary.Commit == "" ||
+		summary.Applied != 0 || summary.Failed != 0 {
+		t.Fatalf("awaiting-push cycle summary = %#v", summary)
+	}
+}
+
+func decodeGitOpsCycleSummary(t *testing.T, output *bytes.Buffer) gitOpsCycleSummary {
+	t.Helper()
+
+	var summary gitOpsCycleSummary
+	if err := json.Unmarshal(output.Bytes(), &summary); err != nil {
+		t.Fatalf("decode GitOps cycle summary: %v; output = %q", err, output.String())
+	}
+
+	return summary
 }
 
 func registerGitOpsTestRepository(t *testing.T, root string) map[string]string {

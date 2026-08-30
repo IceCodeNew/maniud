@@ -44,9 +44,18 @@ func TestReconcileGitOpsSnapshotSkipsInvalidSourceAndMutatesValidService(t *test
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	err = reconcileGitOpsSnapshot(t.Context(), root, state.head, io.Discard, dependencies)
-	if mutations := countEvent(events, string(commandApply)); err != nil || mutations != 1 {
-		t.Fatalf("reconcileGitOpsSnapshot() error = %v, mutations = %d", err, mutations)
+	counts, err := reconcileGitOpsSnapshotResult(
+		t.Context(), root, state.head, io.Discard, dependencies,
+	)
+	if mutations := countEvent(events, string(commandApply)); err != nil || mutations != 1 ||
+		counts.applied != 1 || counts.skipped != 1 ||
+		len(counts.skippedSources) != 1 || counts.skippedSources[0].Path != "services/broken.yaml" {
+		t.Fatalf(
+			"reconcileGitOpsSnapshotResult() counts = %#v, error = %v, mutations = %d",
+			counts,
+			err,
+			mutations,
+		)
 	}
 }
 
@@ -128,6 +137,30 @@ func TestReconcileGitOpsSnapshotEmitsValidatedServiceResults(t *testing.T) {
 	}
 }
 
+func TestReconcileGitOpsSnapshotCountsUnchangedServices(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 16)
+	plan := application.Plan{Kind: application.PlanUnchanged}
+	operations := &applyOperationsFixture{events: &events, dryRunPlan: plan, applyPlan: plan}
+	dependencies := operationApplyDependencies(t, &events, operations)
+	dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
+		return testComposeSource(t), nil
+	}
+	state, err := cleanGitTree(t.Context(), root)
+	if err != nil {
+		t.Fatalf("cleanGitTree() error = %v", err)
+	}
+
+	counts, err := reconcileGitOpsSnapshotResult(
+		t.Context(), root, state.head, io.Discard, dependencies,
+	)
+	if err != nil || counts.unchanged != 2 || counts.applied != 0 || counts.failed != 0 {
+		t.Fatalf("reconcileGitOpsSnapshotResult() counts = %#v, error = %v", counts, err)
+	}
+}
+
 func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 	t.Parallel()
 
@@ -155,10 +188,11 @@ func TestReconcileGitOpsSnapshotReturnsMutationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	if err = reconcileGitOpsSnapshot(
+	counts, err := reconcileGitOpsSnapshotResult(
 		t.Context(), root, state.head, io.Discard, dependencies,
-	); !errors.Is(err, errApplyTest) {
-		t.Fatalf("reconcileGitOpsSnapshot() error = %v", err)
+	)
+	if !errors.Is(err, errApplyTest) || counts.failed != 1 || counts.deferred != 1 {
+		t.Fatalf("reconcileGitOpsSnapshotResult() counts = %#v, error = %v", counts, err)
 	}
 	want := application.Event{
 		Kind: application.EventGitOpsServiceApplyFailed,
