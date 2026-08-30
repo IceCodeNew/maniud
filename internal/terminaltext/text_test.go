@@ -121,7 +121,7 @@ func TestCellAwareFitting(t *testing.T) {
 func TestWrapPreservesGraphemesAndNewlines(t *testing.T) {
 	t.Parallel()
 
-	if got := Wrap("value", 0); got != nil {
+	if got := Wrap("value", 0); len(got) != 0 || got == nil {
 		t.Fatalf("Wrap(0) = %q", got)
 	}
 	wide := string([]rune{0x4e16, 0x754c})

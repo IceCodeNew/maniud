@@ -144,7 +144,7 @@ func Middle(value string, cells int, marker string) string {
 // grapheme clusters. Existing newlines remain line boundaries.
 func Wrap(value string, cells int) []string {
 	if cells <= 0 {
-		return nil
+		return []string{}
 	}
 
 	return strings.Split(ansi.Hardwrap(value, cells, false), "\n")
