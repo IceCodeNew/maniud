@@ -238,6 +238,7 @@ func Run(
 		state,
 		tea.WithInput(input),
 		tea.WithOutput(output),
+		tea.WithWindowSize(defaultWidth, defaultHeight),
 	).Run()
 	discardErr := workspace.Discard(context.WithoutCancel(ctx))
 	if err != nil {

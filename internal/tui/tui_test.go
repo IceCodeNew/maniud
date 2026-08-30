@@ -493,7 +493,7 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 func TestRunReturnsContainedOperationFailure(t *testing.T) {
 	t.Parallel()
 
-	catalogReady := make(chan struct{})
+	homeReady := make(chan struct{})
 	evidenceReady := make(chan struct{})
 	target := testTarget()
 	catalog := &catalogFixture{
@@ -505,20 +505,40 @@ func TestRunReturnsContainedOperationFailure(t *testing.T) {
 			}},
 		},
 		registeredResult: OpenResult{Targets: []Target{target}},
-		ready:            catalogReady,
 	}
 	operations := newOperationsFixture()
 	operations.evidence.Version = 0
 	operations.evidenceReady = evidenceReady
 	reader := &phasedReader{phases: []readerPhase{
-		{ready: catalogReady, content: []byte("\r")},
+		{ready: homeReady, content: []byte("\r")},
 		{ready: evidenceReady, content: []byte("q")},
 	}}
+	output := &renderSignalWriter{needle: []byte(registeredAPIID), ready: homeReady}
 	if err := Run(
-		t.Context(), reader, io.Discard, catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{},
+		t.Context(), reader, output, catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{},
 	); !errors.Is(err, errInvalidInput) {
 		t.Fatalf("Run(operation failure) error = %v", err)
 	}
+}
+
+type renderSignalWriter struct {
+	mu       sync.Mutex
+	rendered []byte
+	needle   []byte
+	ready    chan struct{}
+	once     sync.Once
+}
+
+func (writer *renderSignalWriter) Write(content []byte) (int, error) {
+	writer.mu.Lock()
+	writer.rendered = append(writer.rendered, content...)
+	ready := bytes.Contains(writer.rendered, writer.needle)
+	writer.mu.Unlock()
+	if ready {
+		writer.once.Do(func() { close(writer.ready) })
+	}
+
+	return len(content), nil
 }
 
 type readerPhase struct {
