@@ -65,6 +65,76 @@ func TestJournalAcceptsEveryWorkloadRuntime(t *testing.T) {
 	}
 }
 
+func TestJournalBindsRepositoryAssociationAndInventoriesUnresolvedState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(privateTempDir(t), "state.db")
+	state, lock := openJournalTestStore(t, path)
+	intent := testTransactionIntent(domain.RuntimeDocker)
+	intent.RepositoryVersion = 1
+	intent.RepositoryScopeDigest = domain.Hash([]byte("repository scope"))
+	intent.RepositoryLocationDigest = domain.Hash([]byte("services/api.yaml"))
+	intent.HasRepository = true
+
+	want, err := lock.BeginTransaction(t.Context(), intent)
+	requireNoError(t, err)
+	if !want.HasRepository || want.RepositoryVersion != intent.RepositoryVersion ||
+		want.RepositoryScopeDigest != intent.RepositoryScopeDigest ||
+		want.RepositoryLocationDigest != intent.RepositoryLocationDigest {
+		t.Fatalf("BeginTransaction() = %#v", want)
+	}
+
+	records, err := state.UnresolvedRepositoryTransactions(t.Context(), intent.RepositoryScopeDigest)
+	requireNoError(t, err)
+	if len(records) != 1 || records[0] != want {
+		t.Fatalf("UnresolvedRepositoryTransactions() = %#v, want %#v", records, want)
+	}
+
+	records, err = state.UnresolvedRepositoryTransactions(
+		t.Context(),
+		domain.Hash([]byte("other repository scope")),
+	)
+	requireNoError(t, err)
+	if len(records) != 0 {
+		t.Fatalf("other scope inventory = %#v", records)
+	}
+
+	requireNoError(t, lock.Close())
+	requireNoError(t, state.Close())
+
+	reader := requireOpenReader(t, path)
+	records, err = reader.UnresolvedRepositoryTransactions(t.Context(), intent.RepositoryScopeDigest)
+	requireNoError(t, err)
+	if len(records) != 1 || records[0] != want {
+		t.Fatalf("Reader.UnresolvedRepositoryTransactions() = %#v, want %#v", records, want)
+	}
+	requireNoError(t, reader.Close())
+}
+
+func TestJournalRejectsIncompleteRepositoryAssociation(t *testing.T) {
+	t.Parallel()
+
+	state, lock := openJournalTestStore(t, filepath.Join(privateTempDir(t), "state.db"))
+	t.Cleanup(func() {
+		requireNoError(t, lock.Close())
+		requireNoError(t, state.Close())
+	})
+
+	incomplete := testTransactionIntent(domain.RuntimeDocker)
+	incomplete.RepositoryVersion = 1
+	incomplete.RepositoryScopeDigest = domain.Hash([]byte("repository scope"))
+	incomplete.HasRepository = true
+	unexpected := testTransactionIntent(domain.RuntimeDocker)
+	unexpected.RepositoryVersion = 1
+	unexpected.RepositoryScopeDigest = domain.Hash([]byte("repository scope"))
+	unexpected.RepositoryLocationDigest = domain.Hash([]byte("services/api.yaml"))
+
+	for _, intent := range []TransactionIntent{incomplete, unexpected} {
+		_, err := lock.BeginTransaction(t.Context(), intent)
+		assertErrorIs(t, err, ErrInvalidState)
+	}
+}
+
 func TestJournalRejectsInvalidTransitionsAndConcurrentMutation(t *testing.T) {
 	t.Parallel()
 

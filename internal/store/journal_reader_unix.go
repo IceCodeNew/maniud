@@ -10,6 +10,13 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+const (
+	unresolvedRepositoryTransactionQueryLimit = 257
+	transactionSelectColumns                  = "transaction_id, kind, state, runtime, source_digest, " +
+		"effective_digest, execution_digest, repository_version, repository_scope_digest, " +
+		"repository_location_digest, base_transaction_id, predecessor_workload_id"
+)
+
 // Transaction loads one durable transaction by its runtime ownership ID.
 func (store *Store) Transaction(ctx context.Context, identifier TransactionID) (Transaction, error) {
 	if store == nil || store.database == nil {
@@ -22,9 +29,7 @@ func (store *Store) Transaction(ctx context.Context, identifier TransactionID) (
 func transaction(ctx context.Context, database journalQueryer, identifier TransactionID) (Transaction, error) {
 	row := database.QueryRowContext(
 		ctx,
-		"SELECT transaction_id, kind, state, runtime, source_digest, effective_digest, execution_digest, "+
-			"base_transaction_id, predecessor_workload_id "+
-			"FROM journal_transactions WHERE transaction_id = ?",
+		"SELECT "+transactionSelectColumns+" FROM journal_transactions WHERE transaction_id = ?",
 		identifier[:],
 	)
 
@@ -63,9 +68,8 @@ func unresolvedTransaction(
 
 	row := database.QueryRowContext(
 		ctx,
-		"SELECT transaction_id, kind, state, runtime, source_digest, effective_digest, execution_digest, "+
-			"base_transaction_id, predecessor_workload_id "+
-			"FROM journal_transactions WHERE service_id = ? AND state IN ('active', 'degraded')",
+		"SELECT "+transactionSelectColumns+" FROM journal_transactions "+
+			"WHERE service_id = ? AND state IN ('active', 'degraded')",
 		serviceID[:],
 	)
 
@@ -77,6 +81,47 @@ func unresolvedTransaction(
 	}
 
 	return record, err == nil, err
+}
+
+// UnresolvedRepositoryTransactions returns a bounded inventory for one opaque
+// repository scope. Callers detect overflow when all 257 records are present.
+func (store *Store) UnresolvedRepositoryTransactions(
+	ctx context.Context,
+	scope domain.Digest,
+) ([]Transaction, error) {
+	if store == nil || store.database == nil || scope == (domain.Digest{}) {
+		return nil, ErrInvalidState
+	}
+
+	return unresolvedRepositoryTransactions(ctx, store.database, scope)
+}
+
+func unresolvedRepositoryTransactions(
+	ctx context.Context,
+	database journalQueryer,
+	scope domain.Digest,
+) ([]Transaction, error) {
+	if scope == (domain.Digest{}) {
+		return nil, ErrInvalidState
+	}
+
+	//nolint:rowserrcheck // readTransactions checks the iterator before this function closes it.
+	rows, err := database.QueryContext(
+		ctx,
+		"SELECT "+transactionSelectColumns+" FROM journal_transactions "+
+			"WHERE state IN ('active', 'degraded') AND repository_scope_digest = ? "+
+			"ORDER BY repository_location_digest, transaction_id LIMIT ?",
+		scope[:],
+		unresolvedRepositoryTransactionQueryLimit,
+	)
+	if err != nil {
+		return nil, classifySQLiteProbe(ctx, err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	return readTransactions(ctx, rows)
 }
 
 // Actions returns every action for a transaction in sequence order.
@@ -121,13 +166,13 @@ func actions(ctx context.Context, database journalQueryer, identifier Transactio
 	return actions, nil
 }
 
-type actionRowIterator interface {
+type journalRowIterator interface {
 	rowScanner
 	Next() bool
 	Err() error
 }
 
-func readActions(ctx context.Context, rows actionRowIterator) ([]Action, error) {
+func readActions(ctx context.Context, rows journalRowIterator) ([]Action, error) {
 	actions := make([]Action, 0)
 
 	for rows.Next() {
@@ -199,18 +244,40 @@ type rowScanner interface {
 	Scan(destination ...any) error
 }
 
+func readTransactions(ctx context.Context, rows journalRowIterator) ([]Transaction, error) {
+	records := make([]Transaction, 0)
+
+	for rows.Next() {
+		record, err := scanTransaction(ctx, rows)
+		if err != nil {
+			return nil, err
+		}
+
+		records = append(records, record)
+	}
+
+	if rows.Err() != nil {
+		return nil, classifySQLiteProbe(ctx, rows.Err())
+	}
+
+	return records, nil
+}
+
 func scanTransaction(ctx context.Context, row rowScanner) (Transaction, error) {
 	var (
-		record      Transaction
-		identifier  []byte
-		kind        string
-		state       string
-		runtime     string
-		source      []byte
-		effective   []byte
-		execution   []byte
-		base        []byte
-		predecessor sql.NullString
+		record             Transaction
+		identifier         []byte
+		kind               string
+		state              string
+		runtime            string
+		source             []byte
+		effective          []byte
+		execution          []byte
+		repositoryVersion  sql.NullInt64
+		repositoryScope    []byte
+		repositoryLocation []byte
+		base               []byte
+		predecessor        sql.NullString
 	)
 
 	err := row.Scan(
@@ -221,6 +288,9 @@ func scanTransaction(ctx context.Context, row rowScanner) (Transaction, error) {
 		&source,
 		&effective,
 		&execution,
+		&repositoryVersion,
+		&repositoryScope,
+		&repositoryLocation,
 		&base,
 		&predecessor,
 	)
@@ -238,12 +308,33 @@ func scanTransaction(ctx context.Context, row rowScanner) (Transaction, error) {
 
 	record.Kind = TransactionKind(kind)
 	record.State = TransactionState(state)
-	if !populateTransactionRelationship(&record, base, predecessor) ||
+	if !populateTransactionRepository(&record, repositoryVersion, repositoryScope, repositoryLocation) ||
+		!populateTransactionRelationship(&record, base, predecessor) ||
 		!validTransactionState(record.State) || !validTransactionRecord(record) {
 		return Transaction{}, ErrInvalidState
 	}
 
 	return record, nil
+}
+
+func populateTransactionRepository(
+	record *Transaction,
+	version sql.NullInt64,
+	scope []byte,
+	location []byte,
+) bool {
+	if !version.Valid {
+		return scope == nil && location == nil
+	}
+	if version.Int64 != 1 || !copyExact(record.RepositoryScopeDigest[:], scope) ||
+		!copyExact(record.RepositoryLocationDigest[:], location) {
+		return false
+	}
+
+	record.RepositoryVersion = int(version.Int64)
+	record.HasRepository = true
+
+	return true
 }
 
 func populateTransactionIdentity(
@@ -288,14 +379,18 @@ func populateTransactionRelationship(
 
 func validTransactionRecord(record Transaction) bool {
 	return validTransactionIntent(TransactionIntent{
-		Kind:                  record.Kind,
-		Runtime:               record.Runtime,
-		SourceDigest:          record.SourceDigest,
-		EffectiveDigest:       record.EffectiveDigest,
-		ExecutionDigest:       record.ExecutionDigest,
-		BaseTransactionID:     record.BaseTransactionID,
-		HasBaseTransaction:    record.HasBaseTransaction,
-		PredecessorWorkloadID: record.PredecessorWorkloadID,
+		Kind:                     record.Kind,
+		Runtime:                  record.Runtime,
+		SourceDigest:             record.SourceDigest,
+		EffectiveDigest:          record.EffectiveDigest,
+		ExecutionDigest:          record.ExecutionDigest,
+		RepositoryVersion:        record.RepositoryVersion,
+		RepositoryScopeDigest:    record.RepositoryScopeDigest,
+		RepositoryLocationDigest: record.RepositoryLocationDigest,
+		HasRepository:            record.HasRepository,
+		BaseTransactionID:        record.BaseTransactionID,
+		HasBaseTransaction:       record.HasBaseTransaction,
+		PredecessorWorkloadID:    record.PredecessorWorkloadID,
 	})
 }
 

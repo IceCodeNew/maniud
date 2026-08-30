@@ -71,6 +71,7 @@ type testTransactions struct {
 	unresolved func(context.Context, string, string) (store.Transaction, bool, error)
 	applied    func(context.Context, string, string) (store.AppliedService, bool, error)
 	actions    func(context.Context, store.TransactionID) ([]store.Action, error)
+	repository func(context.Context, domain.Digest) ([]store.Transaction, error)
 }
 
 func (transactions testTransactions) UnresolvedTransaction(
@@ -94,6 +95,17 @@ func (transactions testTransactions) Actions(
 	identifier store.TransactionID,
 ) ([]store.Action, error) {
 	return transactions.actions(ctx, identifier)
+}
+
+func (transactions testTransactions) UnresolvedRepositoryTransactions(
+	ctx context.Context,
+	scope domain.Digest,
+) ([]store.Transaction, error) {
+	if transactions.repository == nil {
+		return nil, nil
+	}
+
+	return transactions.repository(ctx, scope)
 }
 
 type testOperation struct {
@@ -315,14 +327,20 @@ func emptyTransaction() store.Transaction {
 }
 
 func exactTransaction(preparation Preparation, state store.TransactionState) store.Transaction {
+	repository := preparation.repository
+
 	return store.Transaction{
-		ID:              store.TransactionID{1},
-		Kind:            store.TransactionBootstrap,
-		State:           state,
-		Runtime:         preparation.Execution.Kind,
-		SourceDigest:    preparation.Workload.SourceDigest,
-		EffectiveDigest: preparation.Workload.EffectiveDigest,
-		ExecutionDigest: preparation.Execution.Digest,
+		ID:                       store.TransactionID{1},
+		Kind:                     store.TransactionBootstrap,
+		State:                    state,
+		Runtime:                  preparation.Execution.Kind,
+		SourceDigest:             preparation.Workload.SourceDigest,
+		EffectiveDigest:          preparation.Workload.EffectiveDigest,
+		ExecutionDigest:          preparation.Execution.Digest,
+		RepositoryVersion:        repository.Version,
+		RepositoryScopeDigest:    repository.Scope,
+		RepositoryLocationDigest: repository.Location,
+		HasRepository:            repository != (compose.RepositoryProvenance{}),
 	}
 }
 

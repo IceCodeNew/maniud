@@ -34,6 +34,9 @@ const (
 		"(typeof(effective_digest) = 'blob' AND length(effective_digest) = 32 AND effective_digest != zeroblob(32)), " +
 		"execution_digest BLOB NOT NULL CHECK " +
 		"(typeof(execution_digest) = 'blob' AND length(execution_digest) = 32 AND execution_digest != zeroblob(32)), " +
+		"repository_version INTEGER, " +
+		"repository_scope_digest BLOB, " +
+		"repository_location_digest BLOB, " +
 		"base_transaction_id BLOB CHECK (base_transaction_id IS NULL OR " +
 		"(typeof(base_transaction_id) = 'blob' AND length(base_transaction_id) = 16)), " +
 		"predecessor_workload_id TEXT CHECK (predecessor_workload_id IS NULL OR " +
@@ -44,6 +47,15 @@ const (
 		"FOREIGN KEY (service_id) REFERENCES writer_leases(service_id), " +
 		"FOREIGN KEY (base_transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id), " +
+		"CHECK ((repository_version IS NULL AND repository_scope_digest IS NULL " +
+		"AND repository_location_digest IS NULL) OR " +
+		"(repository_version IS NOT NULL AND repository_scope_digest IS NOT NULL " +
+		"AND repository_location_digest IS NOT NULL " +
+		"AND repository_version = 1 AND typeof(repository_version) = 'integer' " +
+		"AND typeof(repository_scope_digest) = 'blob' AND length(repository_scope_digest) = 32 " +
+		"AND repository_scope_digest != zeroblob(32) " +
+		"AND typeof(repository_location_digest) = 'blob' AND length(repository_location_digest) = 32 " +
+		"AND repository_location_digest != zeroblob(32))), " +
 		"CHECK ((kind = 'bootstrap' AND base_transaction_id IS NULL AND predecessor_workload_id IS NULL) OR " +
 		"(kind = 'adopt' AND base_transaction_id IS NULL AND predecessor_workload_id IS NOT NULL) OR " +
 		"(kind = 'upgrade' AND base_transaction_id IS NOT NULL AND predecessor_workload_id IS NOT NULL))) " +
@@ -271,6 +283,15 @@ SELECT
     typeof(source_digest) != 'blob' OR length(source_digest) != 32 OR source_digest = zeroblob(32) OR
     typeof(effective_digest) != 'blob' OR length(effective_digest) != 32 OR effective_digest = zeroblob(32) OR
     typeof(execution_digest) != 'blob' OR length(execution_digest) != 32 OR execution_digest = zeroblob(32) OR
+    ((repository_version IS NULL OR repository_scope_digest IS NULL OR repository_location_digest IS NULL) AND
+      (repository_version IS NOT NULL OR repository_scope_digest IS NOT NULL OR
+        repository_location_digest IS NOT NULL)) OR
+    (repository_version IS NOT NULL AND
+      (typeof(repository_version) != 'integer' OR repository_version != 1 OR
+        typeof(repository_scope_digest) != 'blob' OR length(repository_scope_digest) != 32 OR
+          repository_scope_digest = zeroblob(32) OR
+        typeof(repository_location_digest) != 'blob' OR length(repository_location_digest) != 32 OR
+          repository_location_digest = zeroblob(32))) OR
     (base_transaction_id IS NOT NULL AND
       (typeof(base_transaction_id) != 'blob' OR length(base_transaction_id) != 16)) OR
     (predecessor_workload_id IS NOT NULL AND

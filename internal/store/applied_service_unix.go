@@ -386,8 +386,7 @@ func transactionForService(
 ) (Transaction, error) {
 	row := transaction.QueryRowContext(
 		ctx,
-		"SELECT transaction_id, kind, state, runtime, source_digest, effective_digest, execution_digest, "+
-			"base_transaction_id, predecessor_workload_id FROM journal_transactions "+
+		"SELECT "+transactionSelectColumns+" FROM journal_transactions "+
 			"WHERE transaction_id = ? AND service_id = ?",
 		identifier[:],
 		serviceID[:],

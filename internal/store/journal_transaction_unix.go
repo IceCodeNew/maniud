@@ -49,41 +49,55 @@ func (lock *ServiceLock) beginTransaction(
 			return baselineErr
 		}
 
-		result, execErr := transaction.ExecContext(
-			ctx,
-			"INSERT INTO journal_transactions "+
-				"(transaction_id, service_id, kind, state, runtime, source_digest, effective_digest, execution_digest, "+
-				"base_transaction_id, predecessor_workload_id) "+
-				"SELECT ?, ?, ?, 'active', ?, ?, ?, ?, ?, ? "+
-				"WHERE EXISTS (SELECT 1 FROM writer_leases "+
-				"WHERE service_id = ? AND epoch = ? AND owner = ?) "+
-				"AND NOT EXISTS (SELECT 1 FROM journal_transactions "+
-				"WHERE service_id = ? AND state IN ('active', 'degraded'))",
-			record.ID[:],
-			lease.serviceID[:],
-			intent.Kind,
-			intent.Runtime.String(),
-			intent.SourceDigest[:],
-			intent.EffectiveDigest[:],
-			intent.ExecutionDigest[:],
-			nullableTransactionID(intent.BaseTransactionID, intent.HasBaseTransaction),
-			nullableWorkloadID(intent.PredecessorWorkloadID),
-			lease.serviceID[:],
-			lease.epoch,
-			lease.owner[:],
-			lease.serviceID[:],
-		)
-		if execErr != nil {
-			return classifySQLiteProbe(ctx, execErr)
-		}
-
-		return requireJournalMutation(result)
+		return insertJournalTransaction(ctx, transaction, lease, record.ID, intent)
 	})
 	if err != nil {
 		return Transaction{}, err
 	}
 
 	return lock.store.Transaction(ctx, record.ID)
+}
+
+func insertJournalTransaction(
+	ctx context.Context,
+	transaction *sql.Tx,
+	lease writerLease,
+	identifier TransactionID,
+	intent TransactionIntent,
+) error {
+	result, err := transaction.ExecContext(
+		ctx,
+		"INSERT INTO journal_transactions "+
+			"(transaction_id, service_id, kind, state, runtime, source_digest, effective_digest, execution_digest, "+
+			"repository_version, repository_scope_digest, repository_location_digest, "+
+			"base_transaction_id, predecessor_workload_id) "+
+			"SELECT ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ? "+
+			"WHERE EXISTS (SELECT 1 FROM writer_leases "+
+			"WHERE service_id = ? AND epoch = ? AND owner = ?) "+
+			"AND NOT EXISTS (SELECT 1 FROM journal_transactions "+
+			"WHERE service_id = ? AND state IN ('active', 'degraded'))",
+		identifier[:],
+		lease.serviceID[:],
+		intent.Kind,
+		intent.Runtime.String(),
+		intent.SourceDigest[:],
+		intent.EffectiveDigest[:],
+		intent.ExecutionDigest[:],
+		nullableRepositoryVersion(intent.RepositoryVersion, intent.HasRepository),
+		nullableDigest(intent.RepositoryScopeDigest, intent.HasRepository),
+		nullableDigest(intent.RepositoryLocationDigest, intent.HasRepository),
+		nullableTransactionID(intent.BaseTransactionID, intent.HasBaseTransaction),
+		nullableWorkloadID(intent.PredecessorWorkloadID),
+		lease.serviceID[:],
+		lease.epoch,
+		lease.owner[:],
+		lease.serviceID[:],
+	)
+	if err != nil {
+		return classifySQLiteProbe(ctx, err)
+	}
+
+	return requireJournalMutation(result)
 }
 
 // SetTransactionState marks a transaction degraded or failed only after all
@@ -157,7 +171,19 @@ func validTransactionIntent(intent TransactionIntent) bool {
 func validTransactionIdentity(intent TransactionIntent) bool {
 	return validTransactionKind(intent.Kind) && intent.Runtime.SupportsWorkloads() &&
 		intent.HasBaseTransaction == (intent.BaseTransactionID != (TransactionID{})) &&
-		validTransactionDigests(intent)
+		validTransactionDigests(intent) && validTransactionRepository(intent)
+}
+
+func validTransactionRepository(intent TransactionIntent) bool {
+	empty := domain.Digest{}
+
+	if !intent.HasRepository {
+		return intent.RepositoryVersion == 0 && intent.RepositoryScopeDigest == empty &&
+			intent.RepositoryLocationDigest == empty
+	}
+
+	return intent.RepositoryVersion == 1 && intent.RepositoryScopeDigest != empty &&
+		intent.RepositoryLocationDigest != empty
 }
 
 func validTransactionRelationship(intent TransactionIntent) bool {
@@ -202,6 +228,22 @@ func nullableWorkloadID(identifier string) any {
 	}
 
 	return identifier
+}
+
+func nullableRepositoryVersion(version int, present bool) any {
+	if !present {
+		return nil
+	}
+
+	return version
+}
+
+func nullableDigest(digest domain.Digest, present bool) any {
+	if !present {
+		return nil
+	}
+
+	return digest[:]
 }
 
 func validTransactionState(state TransactionState) bool {
