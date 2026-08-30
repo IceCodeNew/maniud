@@ -33,7 +33,7 @@ func TestReconcileGitOpsSnapshotSkipsInvalidSourceAndMutatesValidService(t *test
 	}
 	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(_ context.Context, path string) (compose.Source, error) {
-		if filepath.Base(path) == "broken.yaml" {
+		if filepath.Base(path) == testBrokenComposeName {
 			return compose.Source{Content: []byte(testInvalidValue), WorkingDir: root}, nil
 		}
 
@@ -74,7 +74,7 @@ func TestReconcileGitOpsSnapshotCompletesPreflightBeforeMutation(t *testing.T) {
 	}
 	dependencies := operationApplyDependencies(t, &events, operations)
 	dependencies.loadSource = func(_ context.Context, path string) (compose.Source, error) {
-		if filepath.Base(path) != "broken.yaml" {
+		if filepath.Base(path) != testBrokenComposeName {
 			return testComposeSource(t), nil
 		}
 
@@ -357,6 +357,189 @@ func TestCaptureGitOpsSnapshotRejectsInvalidServiceDirectory(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // Subtests exercise independent source and checkout boundary failures.
+func TestPrepareGitOpsSnapshotContainsSourceBoundaryFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("prepared source blocker", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsSnapshotTestRepository(t)
+		events := make([]string, 0, 4)
+		operations := &applyOperationsFixture{
+			events: &events, dryRunPlan: application.Plan{Kind: application.PlanBootstrap},
+		}
+		dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+		load := dependencies.loadSource
+		dependencies.loadSource = func(ctx context.Context, path string) (compose.Source, error) {
+			source, err := load(ctx, path)
+			if source.Repository != nil {
+				source.Repository.Root = filepath.Join(root, "other")
+			}
+
+			return source, err
+		}
+		state, err := cleanGitTree(t.Context(), root)
+		if err != nil {
+			t.Fatalf("cleanGitTree() error = %v", err)
+		}
+		snapshot, err := prepareGitOpsSnapshot(t.Context(), root, state.head, dependencies)
+		if err != nil || len(snapshot.services) != 0 || len(snapshot.skipped) != 2 {
+			t.Fatalf("prepareGitOpsSnapshot(blocker) = %#v, %v", snapshot, err)
+		}
+	})
+
+	t.Run("prepare source", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsSnapshotTestRepository(t)
+		events := make([]string, 0, 4)
+		operations := &applyOperationsFixture{events: &events, dryRunErr: errApplyTest}
+		dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+		state, err := cleanGitTree(t.Context(), root)
+		if err != nil {
+			t.Fatalf("cleanGitTree() error = %v", err)
+		}
+		if _, err = prepareGitOpsSnapshot(t.Context(), root, state.head, dependencies); !errors.Is(
+			err,
+			errApplyTest,
+		) {
+			t.Fatalf("prepareGitOpsSnapshot(prepare failure) error = %v", err)
+		}
+	})
+
+	t.Run("capture source", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsSnapshotTestRepository(t)
+		events := make([]string, 0, 4)
+		operations := &applyOperationsFixture{events: &events}
+		dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+		dependencies.loadSource = func(context.Context, string) (compose.Source, error) {
+			return compose.Source{}, io.ErrClosedPipe
+		}
+		state, err := cleanGitTree(t.Context(), root)
+		if err != nil {
+			t.Fatalf("cleanGitTree() error = %v", err)
+		}
+		if _, err = captureGitOpsSources(t.Context(), root, state.head, dependencies); !errors.Is(
+			err,
+			io.ErrClosedPipe,
+		) {
+			t.Fatalf("captureGitOpsSources(load failure) error = %v", err)
+		}
+	})
+
+	t.Run("source location", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsSnapshotTestRepository(t)
+		state, err := cleanGitTree(t.Context(), root)
+		if err != nil {
+			t.Fatalf("cleanGitTree() error = %v", err)
+		}
+		if _, err = captureGitOpsSourcesWithLocation(
+			t.Context(), root, state.head, applyDependencies{},
+			func(string, string, compose.RepositoryScope) (domain.Digest, error) {
+				return domain.Digest{}, io.ErrClosedPipe
+			},
+		); !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("captureGitOpsSourcesWithLocation() error = %v", err)
+		}
+	})
+
+	t.Run("checkout drift after prepare", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsSnapshotTestRepository(t)
+		events := make([]string, 0, 4)
+		operations := &applyOperationsFixture{events: &events}
+		operations.dryRun = func(application.Request) (application.Plan, error) {
+			if err := os.WriteFile(filepath.Join(root, "drift"), []byte("drift\n"), 0o600); err != nil {
+				return application.Plan{}, fmt.Errorf("write checkout drift: %w", err)
+			}
+
+			return application.Plan{Kind: application.PlanBootstrap}, nil
+		}
+		dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+		state, err := cleanGitTree(t.Context(), root)
+		if err != nil {
+			t.Fatalf("cleanGitTree() error = %v", err)
+		}
+		if _, err = prepareGitOpsSnapshot(t.Context(), root, state.head, dependencies); !errors.Is(
+			err,
+			errGitOpsRepositoryInvalid,
+		) {
+			t.Fatalf("prepareGitOpsSnapshot(checkout drift) error = %v", err)
+		}
+	})
+}
+
+func TestGitOpsSnapshotSourceHelpersContainInvalidEvidence(t *testing.T) {
+	t.Parallel()
+
+	if sourceMatchesRepositoryInventory(gitOpsSourceSnapshot{}, []application.RepositoryTransaction{{}}) {
+		t.Fatal("sourceMatchesRepositoryInventory(nil source) succeeded")
+	}
+	root := t.TempDir()
+	scope, err := compose.NewRepositoryScope(root, "https://example.com/repository.git", gitOpsTestBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	if _, err = gitOpsSourceLocation(testRelativePath, filepath.Join(root, "api.yaml"), scope); !errors.Is(
+		err,
+		errGitOpsRepositoryInvalid,
+	) {
+		t.Fatalf("gitOpsSourceLocation(relative root) error = %v", err)
+	}
+	if _, err = gitOpsSourceLocation(root, filepath.Join(filepath.Dir(root), "outside.yaml"), scope); !errors.Is(
+		err,
+		errGitOpsRepositoryInvalid,
+	) {
+		t.Fatalf("gitOpsSourceLocation(outside root) error = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	source := testComposeSource(t)
+	dependencies := applyDependencies{
+		loadSource: func(context.Context, string) (compose.Source, error) { return source, nil },
+	}
+	if _, err = captureGitOpsSource(cancelled, "api.yaml", domain.Digest{}, dependencies); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("captureGitOpsSource(cancelled validation) error = %v", err)
+	}
+}
+
+func TestPrepareRepositorySourceRecoveriesContainsComposeBlocker(t *testing.T) {
+	t.Parallel()
+
+	root := initGitOpsSnapshotTestRepository(t)
+	events := make([]string, 0, 4)
+	operations := &applyOperationsFixture{events: &events}
+	dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+	path := filepath.Join(root, filepath.FromSlash(tuiTestServicePath))
+	source := repositoryRecoverySource(t, root, path)
+	location, err := dependencies.repository.Location(source.Repository.Entry)
+	if err != nil {
+		t.Fatalf("RepositoryScope.Location() error = %v", err)
+	}
+	source.Repository.Root = filepath.Join(root, "other")
+	_, err = prepareRepositorySourceRecoveries(
+		t.Context(),
+		gitOpsSourceSnapshot{
+			path: path, source: source, services: []string{applyServiceValue}, location: location,
+		},
+		[]application.RepositoryTransaction{{Source: source.Repository.Digest, Location: location}},
+		dependencies,
+	)
+	if !errors.Is(err, errGitOpsRecoverySourceBlocked) {
+		t.Fatalf("prepareRepositorySourceRecoveries(compose blocker) error = %v", err)
+	}
+}
+
 func TestDependenciesWithApplySourceRejectsAnotherPath(t *testing.T) {
 	t.Parallel()
 
@@ -392,7 +575,7 @@ func initGitOpsSnapshotTestRepository(t *testing.T) string {
 	if err := os.MkdirAll(services, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	for _, name := range []string{"api.yaml", "broken.yaml"} {
+	for _, name := range []string{"api.yaml", testBrokenComposeName} {
 		if err := os.WriteFile(filepath.Join(services, name), []byte("services: {}\n"), 0o600); err != nil {
 			t.Fatalf("WriteFile() error = %v", err)
 		}

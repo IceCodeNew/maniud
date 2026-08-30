@@ -105,7 +105,7 @@ func (project Project) ServiceNames() []string {
 
 // Load validates and normalizes one in-memory Compose document without secondary file reads.
 //
-//nolint:cyclop // Repository and in-memory sources share one loader and distinct I/O policies.
+//nolint:cyclop,funlen // Repository and in-memory sources share one loader and distinct I/O policies.
 func Load(ctx context.Context, source Source) (Project, error) {
 	ctxErr := ctx.Err()
 	if ctxErr != nil {

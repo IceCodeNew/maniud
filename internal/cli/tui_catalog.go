@@ -56,10 +56,8 @@ func (catalog *tuiCatalog) Snapshot(ctx context.Context) tui.CatalogSnapshot {
 		if ctx.Err() != nil {
 			return tui.CatalogSnapshot{State: tui.CatalogUnavailable}
 		}
-		id, valid := registeredTUIServiceID(registration.Repository, path)
-		if !valid {
-			continue
-		}
+		// listGitOpsServiceFiles returns direct children of this registered repository.
+		id := filepath.ToSlash(filepath.Join(gitOpsServicesDirectory, filepath.Base(path)))
 
 		service := tui.Service{ID: id, Location: id, Blocker: tui.BlockerInvalid}
 		result := catalog.openSource(ctx, path)

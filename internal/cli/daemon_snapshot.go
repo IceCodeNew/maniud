@@ -85,6 +85,7 @@ func recoverGitOpsSnapshot(
 	return err
 }
 
+//nolint:cyclop // Recovery keeps inventory, source capture, and final checkout proof in one ordered transaction.
 func recoverGitOpsSnapshotResult(
 	ctx context.Context,
 	root string,
@@ -337,6 +338,16 @@ func captureGitOpsSources(
 	selectedCommit string,
 	dependencies applyDependencies,
 ) ([]gitOpsSourceSnapshot, error) {
+	return captureGitOpsSourcesWithLocation(ctx, root, selectedCommit, dependencies, gitOpsSourceLocation)
+}
+
+func captureGitOpsSourcesWithLocation(
+	ctx context.Context,
+	root string,
+	selectedCommit string,
+	dependencies applyDependencies,
+	locationFor func(string, string, compose.RepositoryScope) (domain.Digest, error),
+) ([]gitOpsSourceSnapshot, error) {
 	state, err := cleanGitTree(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return nil, errGitOpsRepositoryInvalid
@@ -349,7 +360,7 @@ func captureGitOpsSources(
 
 	sources := make([]gitOpsSourceSnapshot, 0, len(paths))
 	for _, path := range paths {
-		location, locationErr := gitOpsSourceLocation(root, path, dependencies.repository)
+		location, locationErr := locationFor(root, path, dependencies.repository)
 		if locationErr != nil {
 			return nil, locationErr
 		}

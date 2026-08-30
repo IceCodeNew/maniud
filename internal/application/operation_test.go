@@ -144,6 +144,97 @@ func TestApplyFacadeRejectsRepositoryInventoryOverflow(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // One table covers every malformed inventory field and resource failure boundary.
+func TestApplyFacadeContainsRepositoryInventoryFailures(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	scope, err := compose.NewRepositoryScope(
+		filepath.Clean(t.TempDir()),
+		"https://example.com/team/desired.git",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	validRecord := store.Transaction{
+		ID: store.TransactionID{1}, State: store.TransactionActive,
+		SourceDigest:      domain.Hash([]byte("source")),
+		RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
+		RepositoryLocationDigest: domain.Hash([]byte("services/api.yaml")), HasRepository: true,
+	}
+	readerEvents := make([]string, 0, 1)
+	reader := &operationReaderFixture{testTransactions: operation.transactions, events: &readerEvents}
+	facade := newOperationTestFacade(
+		operation,
+		&operationRuntimeFixture{testRuntime: operation.runtime, events: new([]string)},
+		reader,
+	)
+
+	if _, err = (*ApplyFacade)(nil).RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(nil facade) error = %v", err)
+	}
+	if _, err = (&ApplyFacade{}).RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(missing opener) error = %v", err)
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), compose.RepositoryScope{}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(invalid scope) error = %v", err)
+	}
+
+	facade.openReader = func(context.Context) (OperationReader, error) { return nil, errTestBoundary }
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(open failure) error = %v", err)
+	}
+	facade.openReader = func(context.Context) (OperationReader, error) {
+		//nolint:nilnil // This fixture verifies that the façade rejects a broken opener contract.
+		return nil, nil
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(nil reader) error = %v", err)
+	}
+
+	facade.openReader = func(context.Context) (OperationReader, error) { return reader, nil }
+	operation.transactions.repository = func(context.Context, domain.Digest) ([]store.Transaction, error) {
+		return nil, errTestBoundary
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(read failure) error = %v", err)
+	}
+	operation.transactions.repository = func(context.Context, domain.Digest) ([]store.Transaction, error) {
+		return []store.Transaction{validRecord}, nil
+	}
+	reader.closeErr = errTestBoundary
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(close failure) error = %v", err)
+	}
+	reader.closeErr = nil
+
+	invalidRecords := make([]store.Transaction, 1, 7)
+	record := validRecord
+	record.SourceDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryLocationDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.HasRepository = false
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryVersion++
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryScopeDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.State = store.TransactionFailed
+	invalidRecords = append(invalidRecords, record)
+	for _, record := range invalidRecords {
+		if _, err = repositoryInventory([]store.Transaction{record}, scope); !errors.Is(err, ErrConflictingState) {
+			t.Fatalf("repositoryInventory(%#v) error = %v", record, err)
+		}
+	}
+}
+
 func TestApplyFacadeDryRunOwnsResourceLifetime(t *testing.T) {
 	t.Parallel()
 

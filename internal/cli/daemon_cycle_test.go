@@ -227,6 +227,21 @@ func TestGitOpsSourceBlockerEventsSuppressRecoveryUnavailableDuplicates(t *testi
 	}
 }
 
+func TestGitOpsSourceBlockerEventsContainNilDestinations(t *testing.T) {
+	t.Parallel()
+
+	var missing *gitOpsSourceBlockerEvents
+	if missing.TryPublish(application.Event{}) {
+		t.Fatal("nil blocker events accepted an event")
+	}
+	missing.observe(gitOpsCycleConverged, gitOpsCycleCounts{})
+
+	events := &gitOpsSourceBlockerEvents{}
+	if events.TryPublish(application.Event{}) {
+		t.Fatal("blocker events without sink accepted an event")
+	}
+}
+
 func TestFinishGitOpsCycleRejectsNotificationEvidenceWithInvalidSummary(t *testing.T) {
 	t.Parallel()
 

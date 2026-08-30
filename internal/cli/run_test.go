@@ -14,13 +14,18 @@ import (
 
 const (
 	testArchitectureAMD64 = "amd64"
+	testBrokenComposeName = "broken.yaml"
+	testCancelledName     = "cancelled"
 	testDockerRuntime     = "docker"
 	testImageSource       = "image:1"
 	testInvalidValue      = "invalid"
+	testMissingName       = "missing"
 	testPlatformAMD64     = "linux/amd64"
 	testRegistrySource    = "example.invalid/api:1"
 	testRelativePath      = "relative"
 	testServiceName       = "service"
+	testTermEnvironment   = "TERM"
+	testTerminalName      = "xterm-256color"
 	testNumericUser       = "1000:1001"
 	testWorkingDirectory  = "/workspace"
 	invalidInputJSON      = "{\"code\":\"invalid_input\",\"message\":" +

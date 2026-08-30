@@ -234,6 +234,24 @@ func TestBindApplyRepositorySourceRejectsMismatchedEvidence(t *testing.T) {
 		provenance != (compose.RepositoryProvenance{}) {
 		t.Fatalf("bindApplyRepositorySource(invalid scope) = %#v, %v", provenance, bindErr)
 	}
+	zeroDigest := valid
+	zeroDigest.Repository.Digest = domain.Digest{}
+	if _, bindErr = bindApplyRepositorySource(root, path, scope, zeroDigest); !errors.Is(
+		bindErr,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("bindApplyRepositorySource(zero digest) error = %v", bindErr)
+	}
+	dependencies := applyDependencies{
+		loadSource:     func(context.Context, string) (compose.Source, error) { return zeroDigest, nil },
+		repositoryRoot: root,
+		repository:     scope,
+	}
+	if _, loadErr := loadApplyRequest(
+		t.Context(), applyInvocation{compose: path}, dependencies,
+	); !errors.Is(loadErr, compose.ErrInvalidSource) {
+		t.Fatalf("loadApplyRequest(unbound repository) error = %v", loadErr)
+	}
 }
 
 type applyBoundaryTest struct {

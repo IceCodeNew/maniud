@@ -84,6 +84,64 @@ func TestFastForwardGitOpsCheckoutRejectsRemoteRewrite(t *testing.T) {
 	}
 }
 
+func TestFastForwardGitOpsCheckoutRejectsFetchedDivergence(t *testing.T) {
+	t.Parallel()
+
+	checkout, producer, registered := initFastForwardGitOpsTestRepositories(t)
+	if _, err := runGit(t.Context(), producer, "checkout", "--quiet", "--orphan", "diverged"); err != nil {
+		t.Fatalf("git checkout --orphan error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(producer, "README.md")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	writeGitOpsTestCommit(t, producer, "services/api.yaml", "services: {}\n", "diverged")
+	if _, err := runGit(
+		t.Context(), producer, "push", "--quiet", "--force", gitOpsRemoteName, "HEAD:"+gitOpsTestBranch,
+	); err != nil {
+		t.Fatalf("git force push error = %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), checkout, "fetch", "--quiet", gitOpsRemoteName,
+		"refs/heads/"+gitOpsTestBranch+":refs/maniud-test/diverged",
+	); err != nil {
+		t.Fatalf("git fetch diverged object error = %v", err)
+	}
+	diverged, err := resolveGitObject(t.Context(), checkout, "refs/maniud-test/diverged^{commit}")
+	if err != nil {
+		t.Fatalf("resolve diverged commit error = %v", err)
+	}
+	if _, err = runGit(
+		t.Context(), checkout, "update-ref", "refs/remotes/"+gitOpsRemoteName+"/"+gitOpsTestBranch, diverged,
+	); err != nil {
+		t.Fatalf("git update-ref error = %v", err)
+	}
+
+	_, err = fastForwardGitOpsCheckout(t.Context(), checkout, gitOpsTestBranch, registered)
+	if !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("fastForwardGitOpsCheckout(diverged) error = %v", err)
+	}
+}
+
+func TestFastForwardGitOpsCheckoutContainsAdvanceFailure(t *testing.T) {
+	t.Parallel()
+
+	checkout, producer, registered := initFastForwardGitOpsTestRepositories(t)
+	writeGitOpsTestCommit(t, producer, "services/api.yaml", "services: {}\n", "add api")
+	if _, err := runGit(t.Context(), producer, "push", "--quiet", gitOpsRemoteName, "HEAD:"+gitOpsTestBranch); err != nil {
+		t.Fatalf("git push error = %v", err)
+	}
+	if err := os.Chmod(checkout, 0o500); err != nil { //nolint:gosec // The test removes repository write access.
+		t.Fatalf("Chmod(checkout) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(checkout, 0o700) //nolint:gosec // Cleanup restores private owner access.
+	})
+	_, err := fastForwardGitOpsCheckout(t.Context(), checkout, gitOpsTestBranch, registered)
+	if !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("fastForwardGitOpsCheckout(advance failure) error = %v", err)
+	}
+}
+
 func TestFastForwardGitOpsCheckoutRejectsInvalidRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -98,11 +156,11 @@ func TestGitOpsFastForwardRejectsInvalidLifecycleState(t *testing.T) {
 
 	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
 	if _, _, err := registeredGitOpsCheckout(
-		t.Context(), filepath.Join(t.TempDir(), "missing"), gitOpsTestBranch, registered,
+		t.Context(), filepath.Join(t.TempDir(), testMissingName), gitOpsTestBranch, registered,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("registeredGitOpsCheckout(missing) = %v", err)
 	}
-	if _, err := fetchGitOpsCommit(t.Context(), checkout, "missing"); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	if _, err := fetchGitOpsCommit(t.Context(), checkout, testMissingName); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fetchGitOpsCommit(missing branch) = %v", err)
 	}
 	if _, err := runGit(

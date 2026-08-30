@@ -49,7 +49,7 @@ func TestModelNavigatesHomeReviewConfirmationAndApply(t *testing.T) {
 	state.handleKey(key("enter"))
 	state.handleKey(key("tab"))
 	deliver(t, state, state.handleKey(key("enter")))
-	if _, valid = state.page.(reviewPage); !valid || state.mutationOutcome != "Apply completed" ||
+	if _, valid = state.page.(reviewPage); !valid || state.mutationOutcome != testApplyCompleted ||
 		!slices.Equal(operations.recordedCalls(), []string{
 			snapshotCall, evidenceCall, "apply", snapshotCall, evidenceCall,
 		}) {
@@ -171,7 +171,7 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 		"commit:false:Add api service!",
 		"commit:false:Add api service!",
 		"commit:true:Add api service!",
-	}) || !slices.Equal(operations.recordedCalls(), []string{"dry-run", snapshotCall, evidenceCall}) {
+	}) || !slices.Equal(operations.recordedCalls(), []string{dryRunCall, snapshotCall, evidenceCall}) {
 		t.Fatalf("calls = %q / %q", workspace.recordedCalls(), operations.recordedCalls())
 	}
 }
@@ -183,8 +183,30 @@ func TestModelRejectsCommittedPlanDrift(t *testing.T) {
 	operations.dryRunPlan.Service = "changed"
 	deliver(t, state, state.startCommittedSnapshot(application.Request{Service: testAPI}))
 	if !errors.Is(state.err, errInvalidInput) || state.status != "Committed service changed during validation" ||
-		!slices.Equal(operations.recordedCalls(), []string{"dry-run", snapshotCall, evidenceCall}) {
+		!slices.Equal(operations.recordedCalls(), []string{dryRunCall, snapshotCall, evidenceCall}) {
 		t.Fatalf("drift state = %#v, calls = %q", state, operations.recordedCalls())
+	}
+}
+
+func TestModelContainsCommittedSnapshotFailures(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	request := application.Request{Service: testAPI}
+	operations.dryRunErr = errTestTUI
+	deliver(t, state, state.startCommittedSnapshot(request))
+	if !errors.Is(state.err, errTestTUI) || !slices.Equal(operations.recordedCalls(), []string{dryRunCall}) {
+		t.Fatalf("committed dry-run failure = %#v, calls %q", state, operations.recordedCalls())
+	}
+
+	operations.dryRunErr = nil
+	operations.snapshotErr = errTestTUI
+	deliver(t, state, state.startCommittedSnapshot(request))
+	if !errors.Is(state.err, errTestTUI) || !slices.Equal(
+		operations.recordedCalls(),
+		[]string{dryRunCall, dryRunCall, snapshotCall},
+	) {
+		t.Fatalf("committed snapshot failure = %#v, calls %q", state, operations.recordedCalls())
 	}
 }
 
@@ -263,7 +285,7 @@ func TestModelContainsCatalogBlockersAndUnsafeDisplayValues(t *testing.T) {
 	}
 
 	for blocker, message := range map[SourceBlocker]string{
-		BlockerInvalid:     "Compose source did not pass validation",
+		BlockerInvalid:     testBlockerMessage,
 		BlockerUnavailable: "Compose source is unavailable",
 	} {
 		state.handleOpenResult(openResultMsg{sequence: state.sequence, result: OpenResult{Blocker: blocker}})
@@ -403,13 +425,13 @@ func TestModelContainsOperationFailuresAndStaleResults(t *testing.T) {
 	}
 
 	state.err = nil
-	state.status = "stable"
+	state.status = testStableStatus
 	state.sequence = 10
 	state.Update(snapshotResultMsg{sequence: 9, err: errTestTUI})
 	state.Update(applyResultMsg{sequence: 9, err: errTestTUI})
 	state.Update(openResultMsg{sequence: 9, result: OpenResult{Blocker: BlockerInvalid}})
 	state.Update(catalogResultMsg{sequence: 9, snapshot: CatalogSnapshot{State: CatalogUnavailable}})
-	if state.err != nil || state.status != "stable" {
+	if state.err != nil || state.status != testStableStatus {
 		t.Fatalf("stale results changed state = %#v", state)
 	}
 
@@ -468,7 +490,7 @@ func TestModelInvalidatesConfirmationBelowCompactFloor(t *testing.T) {
 
 	state.resize(defaultWidth, defaultHeight)
 	preview := servicePreviewPage{draft: ServiceDraft{
-		Runtime: testRuntime, Image: "image", Service: testService, ComposePath: testServicePath,
+		Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testServicePath,
 	}}
 	state.page = stageServiceConfirmationPage{preview: preview, focus: confirmationApply}
 	state.resize(hardMinimumWidth, hardMinimumHeight)
@@ -507,9 +529,9 @@ func TestModelRoutesPageNavigationAndContext(t *testing.T) {
 	state.handleKey(key("up"))
 	state.handleKey(key("d"))
 	state.handleKey(key("enter"))
-	state.handleKey(key("right"))
-	state.handleKey(key("left"))
-	state.handleKey(key("shift+tab"))
+	state.handleKey(key(keyRight))
+	state.handleKey(key(keyLeft))
+	state.handleKey(key(keyShiftTab))
 	state.handleKey(key("esc"))
 	if _, valid := state.page.(reviewPage); !valid {
 		t.Fatalf("page navigation ended at %T", state.page)
@@ -522,5 +544,605 @@ func TestModelRoutesPageNavigationAndContext(t *testing.T) {
 	}
 	if state.handleKey(key("ctrl+c")) == nil || state.handleKey(key("q")) == nil {
 		t.Fatal("idle quit keys did not quit")
+	}
+}
+
+//nolint:cyclop,funlen,gocognit,gocyclo,maintidx // One contract covers every page-specific keyboard boundary.
+func TestModelKeyboardBoundaryContracts(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
+	commit := commitServicePage{
+		preview: preview,
+		staged:  workspace.staged,
+		message: workspace.staged.CommitMessage,
+	}
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan:    planView{status: statusReady},
+	}
+
+	pages := []page{
+		homePage{}, openPathPage{}, sourceDiagnosticPage{}, registrationPage{},
+		registrationConfirmationPage{}, addServicePage{}, servicePreviewPage{},
+		stageServiceConfirmationPage{}, commitServicePage{}, stagedDiffPage{},
+		unsignedCommitConfirmationPage{}, selectServicePage{}, reviewPage{}, detailsPage{}, confirmationPage{},
+	}
+	for _, current := range pages {
+		current.isPage()
+	}
+	ignoredPages := []page{
+		homePage{catalog: CatalogSnapshot{State: CatalogReady}},
+		sourceDiagnosticPage{},
+		preview,
+		stageServiceConfirmationPage{preview: preview},
+		commit,
+		stagedDiffPage{commit: commit},
+		unsignedCommitConfirmationPage{commit: commit},
+		registrationConfirmationPage{},
+		selectServicePage{choices: []serviceChoice{{request: application.Request{Service: testAPI}}}},
+		review,
+		detailsPage{review: review},
+		confirmationPage{review: review},
+	}
+	for _, current := range ignoredPages {
+		state.page = current
+		if command := state.handleKey(key("x")); command != nil {
+			t.Fatalf("%T handled an unknown key", current)
+		}
+	}
+	for _, name := range []string{"k", "j", keyEnter} {
+		state.page = sourceDiagnosticPage{previous: homePage{}}
+		state.handleKey(key(name))
+	}
+	state.busy = true
+	if command, handled := state.handleSessionKey("x"); command != nil || !handled {
+		t.Fatalf("busy unknown key = %#v, %t", command, handled)
+	}
+	state.cancel = nil
+	state.requestCancellation()
+	state.busy = false
+
+	state.page = nil
+	if command := state.handleKey(key("x")); command != nil {
+		t.Fatal("unknown page handled a key")
+	}
+
+	state.page = homePage{catalog: CatalogSnapshot{State: CatalogReady}}
+	if command := state.handleKey(key("r")); command == nil {
+		t.Fatal("home refresh command is nil")
+	}
+	state.finishOperation()
+	state.page = homePage{catalog: CatalogSnapshot{State: CatalogReady}}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("home quit command is nil")
+	}
+	state.activateAddService(CatalogSnapshot{State: CatalogMissing})
+	if state.status != "Set up a desired-state repository before adding a service" {
+		t.Fatalf("missing-repository Add service status = %q", state.status)
+	}
+	state.activateAddService(CatalogSnapshot{State: CatalogMissing, SuggestedRepository: testRepositoryPath})
+	if _, valid := state.page.(registrationPage); !valid {
+		t.Fatalf("suggested repository page = %T", state.page)
+	}
+
+	state.page = openPathPage{}
+	state.handleKey(key("backspace"))
+	state.handleKey(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "\x00"}))
+	if got := openPathPageValue(t, state).value; got != "" {
+		t.Fatalf("rejected path input = %q", got)
+	}
+	state.page = openPathPage{value: strings.Repeat("x", maximumDisplayBytes)}
+	state.handleKey(key("x"))
+	if got := openPathPageValue(t, state).value; len(got) != maximumDisplayBytes {
+		t.Fatalf("oversized path input length = %d", len(got))
+	}
+	state.page = openPathPage{}
+	if command := state.handleKey(key("esc")); command == nil {
+		t.Fatal("open-path back command is nil")
+	}
+	state.finishOperation()
+
+	state.page = registrationPage{}
+	state.handleKey(key("enter"))
+	if state.status != "Enter a repository path" {
+		t.Fatalf("empty registration status = %q", state.status)
+	}
+	state.handleKey(key("backspace"))
+	state.handleKey(key("x"))
+	state.handleKey(key("backspace"))
+	registration, valid := state.page.(registrationPage)
+	if !valid || registration.value != "" {
+		t.Fatalf("edited registration page = %#v", state.page)
+	}
+
+	state.page = addServicePage{}
+	state.handleKey(key("enter"))
+	if state.status != "Enter a fixed image URI or a complete runtime command" {
+		t.Fatalf("empty Add service status = %q", state.status)
+	}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("Add service quit command is nil")
+	}
+	state.page = addServicePage{}
+	if command := state.handleKey(key("esc")); command == nil {
+		t.Fatal("Add service back command is nil")
+	}
+	state.finishOperation()
+
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	state.page = preview
+	state.handleKey(key("enter"))
+	if state.status != "Resize to review the file mutation" {
+		t.Fatalf("small preview status = %q", state.status)
+	}
+	state.resize(defaultWidth, defaultHeight)
+	state.page = preview
+	state.handleKey(key("esc"))
+	addService, valid := state.page.(addServicePage)
+	if !valid || addService.value != preview.input {
+		t.Fatalf("restored Add service page = %#v", state.page)
+	}
+	state.page = preview
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("service preview quit command is nil")
+	}
+
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	state.page = stageServiceConfirmationPage{preview: preview, focus: confirmationApply}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(servicePreviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("small stage confirmation = %#v", state)
+	}
+	state.resize(defaultWidth, defaultHeight)
+	for _, name := range []string{keyLeft, keyRight, keyShiftTab} {
+		state.page = stageServiceConfirmationPage{preview: preview}
+		state.handleKey(key(name))
+		confirmation, valid := state.page.(stageServiceConfirmationPage)
+		if !valid || confirmation.focus != confirmationApply {
+			t.Fatalf("stage confirmation %s did not change focus", name)
+		}
+	}
+	state.page = stageServiceConfirmationPage{preview: preview}
+	state.handleKey(key("esc"))
+	state.page = stageServiceConfirmationPage{preview: preview}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("stage confirmation quit command is nil")
+	}
+
+	for _, name := range []string{keyLeft, keyRight, keyShiftTab} {
+		state.page = commit
+		state.handleKey(key(name))
+		current := commitServicePageValue(t, state)
+		if current.focus != confirmationApply {
+			t.Fatalf("commit review %s did not change focus", name)
+		}
+	}
+	state.page = commit
+	state.handleKey(key("up"))
+	state.handleKey(key("down"))
+	state.handleKey(key("k"))
+	state.handleKey(key("j"))
+	state.handleKey(key("e"))
+	state.handleKey(key("esc"))
+	if current := commitServicePageValue(t, state); current.editing {
+		t.Fatal("commit message remained in edit mode")
+	}
+	current := commitServicePageValue(t, state)
+	current.editing = true
+	current.message = strings.Repeat("x", maximumCommitMessageBytes)
+	state.page = current
+	state.handleKey(key("x"))
+	if got := commitServicePageValue(t, state).message; len(got) != maximumCommitMessageBytes {
+		t.Fatalf("oversized commit message length = %d", len(got))
+	}
+	state.page = commit
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("commit review quit command is nil")
+	}
+	state.page = commit
+	deliver(t, state, state.handleKey(key("esc")))
+	if _, valid := state.page.(servicePreviewPage); !valid {
+		t.Fatalf("discarded commit page = %T", state.page)
+	}
+
+	state.page = stagedDiffPage{commit: commit, scroll: 1}
+	state.handleKey(key("up"))
+	state.handleKey(key("down"))
+	state.handleKey(key("k"))
+	state.handleKey(key("j"))
+	state.handleKey(key("esc"))
+	state.page = stagedDiffPage{commit: commit}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("staged diff quit command is nil")
+	}
+
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	state.page = unsignedCommitConfirmationPage{commit: commit, focus: confirmationApply}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(commitServicePage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("small unsigned confirmation = %#v", state)
+	}
+	state.resize(defaultWidth, defaultHeight)
+	for _, name := range []string{keyLeft, keyRight, keyShiftTab} {
+		state.page = unsignedCommitConfirmationPage{commit: commit}
+		state.handleKey(key(name))
+		confirmation, valid := state.page.(unsignedCommitConfirmationPage)
+		if !valid || confirmation.focus != confirmationApply {
+			t.Fatalf("unsigned confirmation %s did not change focus", name)
+		}
+	}
+	state.page = unsignedCommitConfirmationPage{commit: commit}
+	state.handleKey(key("esc"))
+	state.page = unsignedCommitConfirmationPage{commit: commit}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("unsigned confirmation quit command is nil")
+	}
+
+	registration = registrationPage{value: testRepositoryPath}
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	state.page = registrationConfirmationPage{registration: registration, focus: confirmationApply}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(registrationPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("small registration confirmation = %#v", state)
+	}
+	state.resize(defaultWidth, defaultHeight)
+	for _, name := range []string{keyLeft, keyRight, keyShiftTab} {
+		state.page = registrationConfirmationPage{registration: registration}
+		state.handleKey(key(name))
+		registrationConfirmation, valid := state.page.(registrationConfirmationPage)
+		if !valid || registrationConfirmation.focus != confirmationApply {
+			t.Fatalf("registration confirmation %s did not change focus", name)
+		}
+	}
+	state.page = registrationConfirmationPage{registration: registration, focus: confirmationApply}
+	state.handleKey(key("tab"))
+	state.page = registrationConfirmationPage{registration: registration}
+	state.handleKey(key("esc"))
+	state.page = registrationConfirmationPage{registration: registration}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("registration confirmation quit command is nil")
+	}
+
+	choices := selectServicePage{choices: []serviceChoice{{request: application.Request{Service: testAPI}}}}
+	state.page = choices
+	state.handleKey(key("k"))
+	state.handleKey(key("j"))
+	state.handleKey(key("tab"))
+	state.handleKey(key("esc"))
+	state.page = choices
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("service choice quit command is nil")
+	}
+
+	state.page = review
+	if command := state.handleKey(key("r")); command == nil {
+		t.Fatal("review refresh command is nil")
+	}
+	state.finishOperation()
+	state.page = review
+	if command := state.handleKey(key("esc")); command == nil {
+		t.Fatal("review back command is nil")
+	}
+	state.finishOperation()
+	state.page = review
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("review quit command is nil")
+	}
+
+	state.page = detailsPage{review: review, scroll: 1}
+	state.handleKey(key("k"))
+	state.handleKey(key("j"))
+	state.handleKey(key("esc"))
+	state.page = detailsPage{review: review}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("details quit command is nil")
+	}
+
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	state.page = confirmationPage{review: review, focus: confirmationApply}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(reviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("small apply confirmation = %#v", state)
+	}
+	state.resize(defaultWidth, defaultHeight)
+	state.page = confirmationPage{review: review, focus: confirmationApply}
+	state.handleKey(key("tab"))
+	confirmation, valid := state.page.(confirmationPage)
+	if !valid || confirmation.focus != confirmationBack {
+		t.Fatal("apply confirmation did not restore Back focus")
+	}
+	state.page = confirmationPage{review: review}
+	state.handleKey(key("esc"))
+	state.page = confirmationPage{review: review}
+	if command := state.handleKey(key("q")); command == nil {
+		t.Fatal("apply confirmation quit command is nil")
+	}
+}
+
+//nolint:cyclop,funlen,gocognit,gocyclo,maintidx // Result variants define the model's containment boundary.
+func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
+	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+
+	state.sequence = 10
+	state.status = testStableStatus
+	for _, message := range []tea.Msg{
+		servicePreviewResultMsg{sequence: 9, err: errTestTUI},
+		serviceStageResultMsg{sequence: 9, err: errTestTUI},
+		serviceCommitResultMsg{sequence: 9, err: errTestTUI},
+		serviceDiscardResultMsg{sequence: 9, err: errTestTUI},
+		registrationResultMsg{sequence: 9, result: RegistrationResult{Blocker: BlockerInvalid}},
+	} {
+		state.Update(message)
+	}
+	if state.status != testStableStatus || state.err != nil {
+		t.Fatalf("stale workspace results changed state = %#v", state)
+	}
+
+	for _, run := range []func(uint64) tea.Msg{
+		func(sequence uint64) tea.Msg {
+			return servicePreviewResultMsg{sequence: sequence, err: errTestTUI}
+		},
+		func(sequence uint64) tea.Msg {
+			return serviceStageResultMsg{sequence: sequence, err: errTestTUI}
+		},
+		func(sequence uint64) tea.Msg {
+			return serviceCommitResultMsg{sequence: sequence, err: errTestTUI}
+		},
+		func(sequence uint64) tea.Msg {
+			return serviceDiscardResultMsg{sequence: sequence, err: errTestTUI}
+		},
+	} {
+		state.sequence++
+		state.busy = true
+		state.Update(run(state.sequence))
+		if !errors.Is(state.err, errTestTUI) || state.status != "Operation failed" {
+			t.Fatalf("workspace failure state = %#v", state)
+		}
+	}
+
+	state.sequence++
+	state.busy = true
+	state.Update(servicePreviewResultMsg{sequence: state.sequence, input: preview.input, draft: ServiceDraft{}})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Generated service could not be displayed safely" {
+		t.Fatalf("invalid preview result = %#v", state)
+	}
+	state.sequence++
+	state.busy = true
+	state.Update(serviceStageResultMsg{sequence: state.sequence, preview: preview, staged: StagedService{}})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Staged change could not be displayed safely" {
+		t.Fatalf("invalid stage result = %#v", state)
+	}
+	state.sequence++
+	state.busy = true
+	state.Update(serviceCommitResultMsg{sequence: state.sequence, commit: commit})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Commit result could not be verified" {
+		t.Fatalf("unverified commit result = %#v", state)
+	}
+
+	state.sequence++
+	state.busy = true
+	state.Update(serviceDiscardResultMsg{sequence: state.sequence, preview: preview})
+	if _, valid := state.page.(servicePreviewPage); !valid || state.status != "Staged files discarded" {
+		t.Fatalf("discard result = %#v", state)
+	}
+	workspace.discardErr = errTestTUI
+	deliver(t, state, state.startServiceDiscard(preview))
+	if !errors.Is(state.err, errTestTUI) || state.status != "Operation failed" {
+		t.Fatalf("discard failure = %#v", state)
+	}
+
+	state.sequence++
+	state.busy = true
+	state.Update(registrationResultMsg{
+		sequence: state.sequence,
+		result:   RegistrationResult{Blocker: BlockerUnavailable},
+	})
+	if state.status != "Compose source is unavailable" {
+		t.Fatalf("registration blocker status = %q", state.status)
+	}
+
+	state.sequence++
+	state.busy = true
+	state.page = homePage{}
+	state.Update(applyResultMsg{sequence: state.sequence})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Apply result could not be refreshed" {
+		t.Fatalf("apply result on invalid page = %#v", state)
+	}
+	state.sequence++
+	state.busy = true
+	state.quitAfterOperation = true
+	state.page = reviewPage{request: application.Request{Service: testService}}
+	_, command := state.Update(applyResultMsg{sequence: state.sequence})
+	if command == nil || state.status != testApplyCompleted {
+		t.Fatalf("apply-and-quit result = %#v", state)
+	}
+
+	unsafe := strings.Repeat("x", displayLimits().Bytes+1)
+	for _, draft := range []ServiceDraft{
+		{Runtime: unsafe, Image: testImage, Service: testService, ComposePath: testComposePath},
+		{Runtime: testRuntime, Image: unsafe, Service: testService, ComposePath: testComposePath},
+		{Runtime: testRuntime, Image: testImage, Service: unsafe, ComposePath: testComposePath},
+		{Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: unsafe},
+		{Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testComposePath, Preparation: unsafe},
+		{Runtime: "", Image: testImage, Service: testService, ComposePath: testComposePath},
+		{Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testComposePath, WarningCount: -1},
+	} {
+		if _, err := canonicalServiceDraft(draft); err == nil {
+			t.Fatalf("canonicalServiceDraft(%#v) succeeded", draft)
+		}
+	}
+
+	validStaged := workspace.staged
+	for _, staged := range []StagedService{
+		{ComposePath: unsafe, CommitMessage: testCommitMessage, Diff: testDiff},
+		{ComposePath: testComposePath, Preparation: unsafe, CommitMessage: testCommitMessage, Diff: testDiff},
+		{ComposePath: testComposePath, CommitMessage: unsafe, Diff: testDiff},
+		{ComposePath: testComposePath, CommitMessage: strings.Repeat("x", maximumCommitMessageBytes+1), Diff: testDiff},
+		{ComposePath: testComposePath, CommitMessage: testCommitMessage, Diff: unsafe},
+		{ComposePath: testComposePath, CommitMessage: testCommitMessage},
+	} {
+		if _, err := canonicalStagedService(staged); err == nil {
+			t.Fatalf("canonicalStagedService(%#v) succeeded", staged)
+		}
+	}
+	if staged, err := canonicalStagedService(validStaged); err != nil || staged != validStaged {
+		t.Fatalf("canonicalStagedService(valid) = %#v, %v", staged, err)
+	}
+
+	for _, target := range []Target{
+		{Project: unsafe, Service: testService, Runtime: testRuntime},
+		{Project: testProject, Service: unsafe, Runtime: testRuntime},
+		{Project: testProject, Service: testService, Runtime: unsafe},
+	} {
+		if _, err := canonicalChoices([]Target{target}); err == nil {
+			t.Fatalf("canonicalChoices(%#v) succeeded", target)
+		}
+	}
+
+	operations.snapshot = application.OperationSnapshot{Plan: testPlan()}
+	operations.snapshot.Plan.Kind = application.PlanUnchanged
+	operations.snapshot.Plan.Platform.Variant = "v8"
+	operations.snapshot.Plan.Warnings = []application.Warning{{}}
+	view, err := projectPlan(operations.snapshot)
+	if err != nil || view.current != "Not deployed" || view.status != "No runtime change needed" ||
+		view.platform != "linux/amd64/v8" || view.warningText == "" {
+		t.Fatalf("projectPlan(unchanged) = %#v, %v", view, err)
+	}
+
+	for _, snapshot := range []CatalogSnapshot{
+		{State: CatalogReady},
+		{State: CatalogMissing},
+		{State: CatalogUnavailable},
+		{State: CatalogState("unknown")},
+	} {
+		if catalogMessage(snapshot) == "" {
+			t.Fatalf("catalogMessage(%#v) is empty", snapshot)
+		}
+	}
+	if got := blockerMessage(SourceBlocker("unknown")); got != testBlockerMessage {
+		t.Fatalf("blockerMessage(unknown) = %q", got)
+	}
+	if got := blockerMessage(BlockerNone); got != testBlockerMessage {
+		t.Fatalf("blockerMessage(none) = %q", got)
+	}
+}
+
+//nolint:cyclop // Assertions cover each catalog and open-result containment boundary.
+func TestModelCanonicalCatalogAndOpenResultBoundaries(t *testing.T) {
+	t.Parallel()
+
+	unsafe := strings.Repeat("x", displayLimits().Bytes+1)
+	for _, service := range []Service{
+		{Location: unsafe, Project: testProject, Name: testService, Runtime: testRuntime},
+		{Location: testPlaceholderPath, Project: unsafe, Name: testService, Runtime: testRuntime},
+		{Location: testPlaceholderPath, Project: testProject, Name: unsafe, Runtime: testRuntime},
+		{Location: testPlaceholderPath, Project: testProject, Name: testService, Runtime: unsafe},
+	} {
+		catalog := canonicalCatalog(CatalogSnapshot{State: CatalogReady, Services: []Service{service}})
+		if catalog.Services[0].Blocker != BlockerInvalid || catalog.Services[0].Location != "Invalid source" {
+			t.Fatalf("canonicalCatalog(%#v) = %#v", service, catalog)
+		}
+	}
+	catalog := canonicalCatalog(CatalogSnapshot{State: CatalogReady, SuggestedRepository: unsafe})
+	if catalog.State != CatalogUnavailable || catalog.SuggestedRepository != "" {
+		t.Fatalf("unsafe suggested repository = %#v", catalog)
+	}
+	diagnostic := SourceDiagnostic{File: testServicePath, Reason: DiagnosticYAMLSyntax}
+	catalog = canonicalCatalog(CatalogSnapshot{State: CatalogReady, Services: []Service{{
+		Location: testServicePath, Project: testProject, Name: testService, Runtime: testRuntime,
+		Blocker: BlockerInvalid, Diagnostic: diagnostic,
+	}}})
+	if catalog.Services[0].Diagnostic != diagnostic {
+		t.Fatalf("safe source diagnostic = %#v", catalog.Services[0].Diagnostic)
+	}
+
+	state, _, _ := newTestModel(t)
+	state.page = homePage{catalog: catalog}
+	state.handleKey(key("enter"))
+	if _, valid := state.page.(sourceDiagnosticPage); !valid {
+		t.Fatalf("blocked home diagnostic page = %T", state.page)
+	}
+
+	state.sequence++
+	state.busy = true
+	state.page = openPathPage{}
+	state.Update(openResultMsg{sequence: state.sequence, result: OpenResult{}})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Compose source could not be displayed safely" {
+		t.Fatalf("empty open result = %#v", state)
+	}
+	for _, target := range []Target{
+		{Project: unsafe, Service: testService, Runtime: testRuntime},
+		{Project: testProject, Service: unsafe, Runtime: testRuntime},
+		{Project: testProject, Service: testService, Runtime: unsafe},
+	} {
+		state.sequence++
+		state.busy = true
+		state.Update(openResultMsg{sequence: state.sequence, result: OpenResult{Targets: []Target{target}}})
+		if !errors.Is(state.err, errInvalidInput) {
+			t.Fatalf("unsafe open target = %#v", state)
+		}
+	}
+}
+
+//nolint:cyclop // Assertions cover independent page transition boundaries.
+func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
+	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	registration := registrationPage{value: testRepositoryPath}
+
+	state.page = registrationConfirmationPage{registration: registration}
+	state.invalidateConfirmation()
+	if _, valid := state.page.(registrationPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("invalidated registration = %#v", state)
+	}
+	commit.editing = true
+	commit.focus = confirmationApply
+	state.page = commit
+	state.invalidateConfirmation()
+	if current := commitServicePageValue(t, state); current.editing || current.focus != confirmationBack {
+		t.Fatalf("invalidated commit review = %#v", current)
+	}
+
+	state.page = homePage{catalog: CatalogSnapshot{State: CatalogReady, Services: []Service{{
+		ID: "blocked", Location: "services/blocked.yaml", Blocker: BlockerInvalid,
+	}}}}
+	state.handleKey(key("enter"))
+	if state.status != testBlockerMessage {
+		t.Fatalf("blocked service status = %q", state.status)
+	}
+
+	if got := editSingleLine(testStableStatus, tea.KeyPressMsg(tea.Key{Code: 'x', Text: "\n"})); got != testStableStatus {
+		t.Fatalf("control edit = %q", got)
+	}
+	oversized := strings.Repeat("x", maximumDisplayBytes)
+	if got := editSingleLine(oversized, key("x")); got != oversized {
+		t.Fatalf("oversized edit length = %d", len(got))
+	}
+	if got := toggledConfirmationFocus(confirmationApply); got != confirmationBack {
+		t.Fatalf("toggle Apply = %d", got)
+	}
+
+	commit.focus = confirmationBack
+	commit.editing = false
+	state.page = commit
+	command := state.handleKey(key("enter"))
+	if command == nil {
+		t.Fatalf("Back-and-discard command is nil: %#v", state)
+	}
+	deliver(t, state, command)
+	if _, valid := state.page.(servicePreviewPage); !valid {
+		t.Fatalf("Back-and-discard page = %T", state.page)
 	}
 }

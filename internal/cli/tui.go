@@ -20,6 +20,17 @@ var (
 	errTUITermUnavailable   = errors.New("TERM is not interactive")
 )
 
+type tuiRunner func(
+	context.Context,
+	io.Reader,
+	io.Writer,
+	tui.Catalog,
+	tui.ServiceWorkspace,
+	applyDependencies,
+	*tui.EventStream,
+	tui.Options,
+) error
+
 func executeTUI(
 	ctx context.Context,
 	input io.Reader,
@@ -46,7 +57,24 @@ func executeProductionTUI(
 	runtimes runtimeplugin.Set,
 	notifications *processNotifications,
 ) error {
-	if err := requireInteractiveTerminal(input, output, environment["TERM"], tui.IsTerminal); err != nil {
+	return executeProductionTUIWith(
+		ctx, input, output, stderr, environment, getWorkingDirectory, runtimes, notifications,
+		tui.IsTerminal, executeTUI,
+	)
+}
+
+func executeProductionTUIWith(
+	ctx context.Context,
+	input io.Reader,
+	output, stderr io.Writer,
+	environment map[string]string,
+	getWorkingDirectory func() (string, error),
+	runtimes runtimeplugin.Set,
+	notifications *processNotifications,
+	isTerminal func(uintptr) bool,
+	run tuiRunner,
+) error {
+	if err := requireInteractiveTerminal(input, output, environment["TERM"], isTerminal); err != nil {
 		return err
 	}
 
@@ -65,7 +93,7 @@ func executeProductionTUI(
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes, dependencies.loadSource)
 
-	err = runtimes.Classify(executeTUI(
+	err = runtimes.Classify(run(
 		ctx, input, output, catalog, workspace, dependencies, tuiEvents, tuiOptions(environment),
 	))
 	if err != nil {
@@ -121,11 +149,11 @@ func tuiOptions(environment map[string]string) tui.Options {
 
 	return tui.Options{
 		Color:   !noColor,
-		Unicode: unicodeTerminal(environment),
+		Unicode: unicodeTerminal(environment, terminaltext.Width),
 	}
 }
 
-func unicodeTerminal(environment map[string]string) bool {
+func unicodeTerminal(environment map[string]string, width func(string) int) bool {
 	if environment["MANIUD_TUI_ASCII"] == "1" {
 		return false
 	}
@@ -141,7 +169,7 @@ func unicodeTerminal(environment map[string]string) bool {
 		return false
 	}
 	for _, symbol := range []string{"◆", "✓", "›", "│", "─", "…", "▌"} {
-		if terminaltext.Width(symbol) != 1 {
+		if width(symbol) != 1 {
 			return false
 		}
 	}

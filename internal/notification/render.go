@@ -75,6 +75,7 @@ func ignoredApplicationEvent(kind application.EventKind) bool {
 	return ignored
 }
 
+//nolint:cyclop // The closed event kind mapping stays explicit so new events fail closed.
 func notificationEventTitle(kind application.EventKind) (string, bool, bool) {
 	switch kind {
 	case application.EventPlanPrepared:

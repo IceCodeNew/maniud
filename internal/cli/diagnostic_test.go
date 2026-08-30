@@ -151,7 +151,7 @@ func TestDebugInvalidInputAndCancellation(t *testing.T) {
 			wantStatus: 1, wantCode: domain.ErrorInvalidInput,
 		},
 		{
-			name: "cancelled", cancelled: true,
+			name: testCancelledName, cancelled: true,
 			args:       []string{debugOption, string(commandApply), composeFileValue},
 			wantStatus: 130, wantCode: domain.ErrorOperationCancelled,
 		},

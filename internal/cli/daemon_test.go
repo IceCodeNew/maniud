@@ -275,6 +275,7 @@ func TestExecuteDaemonRejectsUnknownOperation(t *testing.T) {
 		"",
 		commandGen,
 		commandApply,
+		commandTUI,
 		commandGitOpsInit,
 		commandDoctor,
 	} {
@@ -546,6 +547,7 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBeforeRecoverySettles(t *t
 
 					return gitOpsCheckoutSelection{}, nil
 				},
+				compose.NewRepositoryScope,
 			)
 			mutations := countEvent(events, string(commandApply))
 			if !errors.Is(err, test.wantErr) || fetched || mutations != test.wantMutations ||
@@ -655,6 +657,7 @@ func TestReconcileRegisteredGitOpsCheckoutRecoversDurableStateBeforeFetch(t *tes
 				root: root, commit: checkout.head, awaitingPush: true,
 			}, nil
 		},
+		compose.NewRepositoryScope,
 	)
 	if err != nil || len(events) != 3 || events[0] != dryRunEvent ||
 		events[1] != string(commandApply) || events[2] != "fetch" {
@@ -685,7 +688,7 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotMutateLocalAheadCommit(t *testi
 
 	output := new(bytes.Buffer)
 	err := reconcileRegisteredGitOpsCheckout(
-		t.Context(), output, registration, dependencies, fastForwardGitOpsCheckout,
+		t.Context(), output, registration, dependencies, fastForwardGitOpsCheckout, compose.NewRepositoryScope,
 	)
 	if err != nil || countEvent(events, dryRunEvent) != 0 ||
 		countEvent(events, string(commandApply)) != 0 {
@@ -695,6 +698,31 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotMutateLocalAheadCommit(t *testi
 	if summary.Status != gitOpsCycleAwaitingPush || summary.Commit == "" ||
 		summary.Applied != 0 || summary.Failed != 0 {
 		t.Fatalf("awaiting-push cycle summary = %#v", summary)
+	}
+}
+
+func TestReconcileRegisteredGitOpsCheckoutContainsRepositoryIdentityFailures(t *testing.T) {
+	t.Parallel()
+
+	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
+	registration := gitOpsRegistration{
+		Version: gitOpsRegistrationVersion, Repository: checkout, Branch: gitOpsTestBranch,
+		Remote: testMissingName, BaselineCommit: registered,
+	}
+	if err := reconcileRegisteredGitOpsCheckout(
+		t.Context(), io.Discard, registration, applyDependencies{}, fastForwardGitOpsCheckout,
+		compose.NewRepositoryScope,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("reconcileRegisteredGitOpsCheckout(missing remote) error = %v", err)
+	}
+	registration.Remote = gitOpsRemoteName
+	if err := reconcileRegisteredGitOpsCheckout(
+		t.Context(), io.Discard, registration, applyDependencies{}, fastForwardGitOpsCheckout,
+		func(string, string, string) (compose.RepositoryScope, error) {
+			return compose.RepositoryScope{}, compose.ErrInvalidSource
+		},
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("reconcileRegisteredGitOpsCheckout(scope failure) error = %v", err)
 	}
 }
 
@@ -871,6 +899,7 @@ func TestClassifyDaemonCommandFailure(t *testing.T) {
 		code domain.ErrorCode
 	}{
 		{err: context.Canceled, code: domain.ErrorOperationCancelled},
+		{err: errGitOpsRecoverySourceBlocked, code: domain.ErrorApplyFailed},
 		{err: errGitOpsRegistrationExists, code: domain.ErrorApplyFailed},
 		{err: errGitOpsRepositoryInvalid, code: domain.ErrorInvalidInput},
 		{err: compose.ErrInvalidSource, code: domain.ErrorInvalidInput},

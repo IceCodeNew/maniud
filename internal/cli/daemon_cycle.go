@@ -183,10 +183,8 @@ func writeGitOpsCycleSummary(
 		Failed: counts.failed, Deferred: counts.deferred,
 		SkippedSources: counts.skippedSources,
 	}
-	encoded, err := json.Marshal(&summary)
-	if err != nil {
-		return fmt.Errorf("encode gitops cycle summary: %w", err)
-	}
+	// The summary contains only bounded JSON scalar and slice fields, so Marshal cannot fail.
+	encoded, _ := json.Marshal(&summary)
 	encoded = append(encoded, '\n')
 	written, err := output.Write(encoded)
 	if err != nil {

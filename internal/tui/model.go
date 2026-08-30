@@ -379,6 +379,7 @@ func (state *model) invalidateConfirmation() {
 	}
 }
 
+//nolint:cyclop // The type switch is the single keyboard dispatch table for all page states.
 func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 	key := message.String()
 	if command, handled := state.handleSessionKey(key); handled {

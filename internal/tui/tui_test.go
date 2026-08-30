@@ -21,17 +21,28 @@ var (
 )
 
 const (
-	testProject     = "project"
-	testService     = "service"
-	testRuntime     = "docker"
-	testPlatform    = "linux/amd64"
-	testUpgrade     = "upgrade"
-	testAPI         = "api"
-	testWorker      = "worker"
-	snapshotCall    = "snapshot"
-	evidenceCall    = "evidence"
-	registeredAPIID = "services/api.yaml"
-	testServicePath = "services/service.yaml"
+	testProject         = "project"
+	testService         = "service"
+	testRuntime         = "docker"
+	testPlatform        = "linux/amd64"
+	testUpgrade         = "upgrade"
+	testAPI             = "api"
+	testWorker          = "worker"
+	dryRunCall          = "dry-run"
+	snapshotCall        = "snapshot"
+	evidenceCall        = "evidence"
+	registeredAPIID     = "services/api.yaml"
+	testServicePath     = "services/service.yaml"
+	testComposePath     = "compose.yaml"
+	testImage           = "image"
+	testRuntimeCommand  = "docker run image"
+	testRepositoryPath  = "/tmp/repository"
+	testApplyCompleted  = "Apply completed"
+	testBlockerMessage  = "Compose source did not pass validation"
+	testCommitMessage   = "message"
+	testStableStatus    = "stable"
+	testDiff            = "diff"
+	testPlaceholderPath = "path"
 )
 
 type catalogFixture struct {
@@ -94,11 +105,14 @@ type operationsFixture struct {
 	snapshot       application.OperationSnapshot
 	evidence       application.EvidenceBundle
 	applyErr       error
+	dryRunErr      error
 	snapshotErr    error
 	evidenceErr    error
 	blockApply     bool
 	cancelObserved chan struct{}
 	cancelOnce     sync.Once
+	evidenceReady  chan struct{}
+	evidenceOnce   sync.Once
 }
 
 type workspaceFixture struct {
@@ -157,7 +171,7 @@ func (fixture *workspaceFixture) recordedCalls() []string {
 func newWorkspaceFixture() *workspaceFixture {
 	return &workspaceFixture{
 		draft: ServiceDraft{
-			Runtime: "docker", Image: "registry.example/api@sha256:aaaaaaaa", Service: testAPI,
+			Runtime: testRuntime, Image: "registry.example/api@sha256:aaaaaaaa", Service: testAPI,
 			ComposePath: "services/api.yaml",
 		},
 		staged: StagedService{
@@ -171,9 +185,9 @@ func (fixture *operationsFixture) DryRun(
 	_ context.Context,
 	request application.Request,
 ) (application.Plan, error) {
-	fixture.record("dry-run", request)
+	fixture.record(dryRunCall, request)
 
-	return fixture.dryRunPlan, fixture.snapshotErr
+	return fixture.dryRunPlan, fixture.dryRunErr
 }
 
 func (fixture *operationsFixture) Apply(
@@ -204,6 +218,9 @@ func (fixture *operationsFixture) Evidence(
 	application.OperationSnapshot,
 ) (application.EvidenceBundle, error) {
 	fixture.record(evidenceCall, application.Request{})
+	if fixture.evidenceReady != nil {
+		fixture.evidenceOnce.Do(func() { close(fixture.evidenceReady) })
+	}
 
 	return fixture.evidence, fixture.evidenceErr
 }
@@ -359,10 +376,10 @@ func key(name string) tea.KeyPressMsg {
 		keyEscape:   {Code: tea.KeyEscape},
 		"up":        {Code: tea.KeyUp},
 		keyDown:     {Code: tea.KeyDown},
-		"left":      {Code: tea.KeyLeft},
-		"right":     {Code: tea.KeyRight},
+		keyLeft:     {Code: tea.KeyLeft},
+		keyRight:    {Code: tea.KeyRight},
 		keyTab:      {Code: tea.KeyTab},
-		"shift+tab": {Code: tea.KeyTab, Mod: tea.ModShift},
+		keyShiftTab: {Code: tea.KeyTab, Mod: tea.ModShift},
 		"backspace": {Code: tea.KeyBackspace},
 		"ctrl+c":    {Code: 'c', Mod: tea.ModCtrl},
 	}
@@ -473,6 +490,61 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	}
 }
 
+func TestRunReturnsContainedOperationFailure(t *testing.T) {
+	t.Parallel()
+
+	catalogReady := make(chan struct{})
+	evidenceReady := make(chan struct{})
+	target := testTarget()
+	catalog := &catalogFixture{
+		snapshot: CatalogSnapshot{
+			State: CatalogReady,
+			Services: []Service{{
+				ID: registeredAPIID, Location: registeredAPIID, Project: testProject,
+				Name: testService, Runtime: testRuntime,
+			}},
+		},
+		registeredResult: OpenResult{Targets: []Target{target}},
+		ready:            catalogReady,
+	}
+	operations := newOperationsFixture()
+	operations.evidence.Version = 0
+	operations.evidenceReady = evidenceReady
+	reader := &phasedReader{phases: []readerPhase{
+		{ready: catalogReady, content: []byte("\r")},
+		{ready: evidenceReady, content: []byte("q")},
+	}}
+	if err := Run(
+		t.Context(), reader, io.Discard, catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{},
+	); !errors.Is(err, errInvalidInput) {
+		t.Fatalf("Run(operation failure) error = %v", err)
+	}
+}
+
+type readerPhase struct {
+	ready   <-chan struct{}
+	content []byte
+}
+
+type phasedReader struct {
+	phases []readerPhase
+}
+
+func (reader *phasedReader) Read(destination []byte) (int, error) {
+	if len(reader.phases) == 0 {
+		return 0, io.EOF
+	}
+	phase := &reader.phases[0]
+	<-phase.ready
+	count := copy(destination, phase.content)
+	phase.content = phase.content[count:]
+	if len(phase.content) == 0 {
+		reader.phases = reader.phases[1:]
+	}
+
+	return count, nil
+}
+
 type signalReader struct {
 	ready   <-chan struct{}
 	content []byte
@@ -512,5 +584,8 @@ func TestSignalReaderDrainsContent(t *testing.T) {
 	}
 	if count, err := reader.Read(buffer); count != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("second Read() = %d, %v", count, err)
+	}
+	if IsTerminal(^uintptr(0)) {
+		t.Fatal("invalid descriptor reported as a terminal")
 	}
 }

@@ -24,11 +24,18 @@ func TestDefaultTUICatalogReportsRegistrationState(t *testing.T) {
 	}
 
 	unavailable := defaultTUICatalog(
-		map[string]string{homeKey: "relative"},
+		map[string]string{homeKey: testRelativePath},
 		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
 	)
 	if snapshot := unavailable.Snapshot(t.Context()); snapshot.State != tui.CatalogUnavailable {
 		t.Fatalf("unavailable Snapshot() = %#v", snapshot)
+	}
+	withoutHome := defaultTUICatalog(
+		map[string]string{xdgStateHomeKey: t.TempDir()},
+		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
+	)
+	if withoutHome.suggestedPath != "" {
+		t.Fatalf("catalog without HOME suggested %q", withoutHome.suggestedPath)
 	}
 }
 
@@ -49,9 +56,13 @@ func TestTUICatalogRegistersDefaultRepository(t *testing.T) {
 		t.Fatalf("registered repository: %v", err)
 	}
 
-	invalid := catalog.Register(t.Context(), "relative")
+	invalid := catalog.Register(t.Context(), testRelativePath)
 	if invalid.Blocker != tui.BlockerInvalid {
 		t.Fatalf("Register(relative) = %#v", invalid)
+	}
+	unavailable := (&tuiCatalog{}).Register(t.Context(), filepath.Join(t.TempDir(), "desired-state"))
+	if unavailable.Blocker != tui.BlockerUnavailable {
+		t.Fatalf("Register(unavailable state) = %#v", unavailable)
 	}
 }
 
@@ -99,6 +110,9 @@ func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 	if result.Blocker != tui.BlockerNone || len(result.Targets) != 1 ||
 		result.Targets[0].Service != applyServiceValue {
 		t.Fatalf("OpenRegistered(ready) = %#v", result)
+	}
+	if result = catalog.OpenRegistered(t.Context(), snapshot.Services[1].ID); result.Blocker != tui.BlockerInvalid {
+		t.Fatalf("OpenRegistered(blocked) = %#v", result)
 	}
 	if result = catalog.OpenRegistered(t.Context(), "services/missing.yaml"); result.Blocker != tui.BlockerNotFound {
 		t.Fatalf("OpenRegistered(missing) = %#v", result)
@@ -157,6 +171,28 @@ func TestTUICatalogContainsInvalidAndUnavailableSources(t *testing.T) {
 	}
 	if result := (&tuiCatalog{}).OpenPath(t.Context(), composeFileValue); result.Blocker != tui.BlockerUnavailable {
 		t.Fatalf("OpenPath(unavailable) = %#v", result)
+	}
+	runtimeMissing := &tuiCatalog{loadSource: func(context.Context, string) (compose.Source, error) {
+		return committedTUIComposeSource(t, []byte(`name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/api:1
+    network_mode: bridge
+x-maniud:
+  services:
+    worker:
+      runtime: podman
+`)), nil
+	}}
+	if result := runtimeMissing.openSource(t.Context(), composeFileValue); result.Blocker != tui.BlockerInvalid {
+		t.Fatalf("openSource(missing runtime) = %#v", result)
+	}
+	empty := &tuiCatalog{loadSource: func(context.Context, string) (compose.Source, error) {
+		return committedTUIComposeSource(t, []byte("name: example\nservices: {}\n")), nil
+	}}
+	if result := empty.openSource(t.Context(), composeFileValue); result.Blocker != tui.BlockerInvalid {
+		t.Fatalf("openSource(empty project) = %#v", result)
 	}
 
 	root := t.TempDir()

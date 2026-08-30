@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -99,6 +101,67 @@ func TestRecoverGitOpsSnapshotMatchesEveryRepositoryTransaction(t *testing.T) {
 			mutations,
 			operations.inventoryScope,
 		)
+	}
+}
+
+func TestRecoverGitOpsSnapshotContainsPreparationAndFinalCheckoutFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(string, *applyOperationsFixture)
+		wantError error
+	}{
+		{
+			name: "prepare source",
+			mutate: func(_ string, operations *applyOperationsFixture) {
+				operations.dryRunErr = errApplyTest
+			},
+			wantError: errApplyTest,
+		},
+		{
+			name: "checkout drift after prepare",
+			mutate: func(root string, operations *applyOperationsFixture) {
+				operations.dryRun = func(application.Request) (application.Plan, error) {
+					if err := os.WriteFile(filepath.Join(root, "drift"), []byte("drift\n"), 0o600); err != nil {
+						return application.Plan{}, fmt.Errorf("write checkout drift: %w", err)
+					}
+
+					return application.Plan{Kind: application.PlanResume}, nil
+				}
+			},
+			wantError: errGitOpsRepositoryInvalid,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := initGitOpsSnapshotTestRepository(t)
+			events := make([]string, 0, 8)
+			operations := &applyOperationsFixture{
+				events: &events, dryRunPlan: application.Plan{Kind: application.PlanResume},
+			}
+			dependencies := repositoryRecoveryDependencies(t, root, &events, operations)
+			path := filepath.Join(root, filepath.FromSlash(tuiTestServicePath))
+			source := repositoryRecoverySource(t, root, path)
+			location, err := dependencies.repository.Location(source.Repository.Entry)
+			if err != nil {
+				t.Fatalf("RepositoryScope.Location() error = %v", err)
+			}
+			operations.inventory = []application.RepositoryTransaction{{
+				Source: source.Repository.Digest, Location: location,
+			}}
+			test.mutate(root, operations)
+			state, err := cleanGitTree(t.Context(), root)
+			if err != nil {
+				t.Fatalf("cleanGitTree() error = %v", err)
+			}
+
+			_, err = recoverGitOpsSnapshotResult(t.Context(), root, state.head, io.Discard, dependencies)
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("recoverGitOpsSnapshotResult() error = %v, want %v", err, test.wantError)
+			}
+		})
 	}
 }
 

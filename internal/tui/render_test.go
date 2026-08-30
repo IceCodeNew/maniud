@@ -58,6 +58,7 @@ func TestViewUsesColorUnicodeAndASCIICapabilities(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The page table keeps the complete rendering contract visible.
 func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 	t.Parallel()
 
@@ -66,7 +67,7 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		kind: testUpgrade, project: testProject, service: testService, runtime: testRuntime, platform: testPlatform,
 		current: "old", proposed: "new", status: statusReady, warningText: "1 warning(s) require review",
 	}}
-	preview := servicePreviewPage{input: "docker run image", draft: ServiceDraft{
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: ServiceDraft{
 		Runtime: testRuntime, Image: strings.Repeat("registry.example/image@sha256:a", 4),
 		Service: testService, ComposePath: testServicePath, Preparation: "services/service.prepare.sh",
 		WarningCount: 1,
@@ -95,7 +96,7 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		{page: registrationConfirmationPage{
 			registration: registrationPage{value: "/home/user/maniud-desired-state"}, focus: confirmationBack,
 		}, contains: "Confirm repository setup"},
-		{page: addServicePage{value: "docker run image"}, contains: testAddServiceMessage},
+		{page: addServicePage{value: testRuntimeCommand}, contains: testAddServiceMessage},
 		{page: preview, contains: "parsed, not run"},
 		{page: stageServiceConfirmationPage{preview: preview, focus: confirmationBack},
 			contains: "Confirm file mutation"},
@@ -114,7 +115,7 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 	for _, test := range pages {
 		state.page = test.page
 		state.err = errTestSecret
-		state.mutationOutcome = "Apply completed"
+		state.mutationOutcome = testApplyCompleted
 		content := state.View().Content
 		if !strings.Contains(content, test.contains) || strings.Contains(content, errTestSecret.Error()) {
 			t.Fatalf("%T view = %q", test.page, content)
@@ -183,6 +184,98 @@ func TestSourceDiagnosticTextUsesFixedCopy(t *testing.T) {
 		if message == "" || action == "" {
 			t.Fatalf("sourceDiagnosticText(%q) = %q, %q", reason, message, action)
 		}
+	}
+}
+
+//nolint:cyclop,funlen // Assertions cover independent conditional render branches in one state fixture.
+func TestRenderConditionalStatePaths(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	for _, current := range []page{
+		homePage{},
+		openPathPage{},
+		sourceDiagnosticPage{},
+		registrationPage{},
+		addServicePage{},
+		servicePreviewPage{},
+		stageServiceConfirmationPage{},
+		commitServicePage{},
+		stagedDiffPage{},
+		unsignedCommitConfirmationPage{},
+		selectServicePage{},
+		reviewPage{},
+		detailsPage{},
+		confirmationPage{},
+	} {
+		state.page = current
+		if lines := state.hardFloorView(hardMinimumWidth); len(lines) != 4 {
+			t.Fatalf("hardFloorView(%T) rows = %d", current, len(lines))
+		}
+	}
+
+	state.page = reviewPage{}
+	state.busy = true
+	state.status = "Applying change"
+	if lines := state.rail(); !strings.Contains(strings.Join(lines, "\n"), "Apply") {
+		t.Fatalf("applying rail = %q", lines)
+	}
+	state.page = detailsPage{}
+	if lines := state.rail(); len(lines) == 0 {
+		t.Fatal("non-reviewing apply rail is empty")
+	}
+	state.page = nil
+	if lines := state.body(defaultWidth, false); len(lines) != 0 {
+		t.Fatalf("unknown page body = %q", lines)
+	}
+	if lines := state.sourceDiagnosticBody(sourceDiagnosticPage{diagnostic: SourceDiagnostic{
+		Line: 2, Reason: DiagnosticYAMLSyntax,
+	}}, defaultWidth); len(lines) == 0 {
+		t.Fatal("line-only source diagnostic body is empty")
+	}
+	if lines := state.servicePreviewBody(servicePreviewPage{draft: ServiceDraft{
+		Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testComposePath,
+	}}, defaultWidth); len(lines) == 0 {
+		t.Fatal("minimal service preview body is empty")
+	}
+	if lines := state.stageServiceConfirmationBody(stageServiceConfirmationPage{preview: servicePreviewPage{
+		draft: ServiceDraft{ComposePath: testComposePath},
+	}}, defaultWidth); len(lines) == 0 {
+		t.Fatal("minimal stage confirmation body is empty")
+	}
+	if lines := state.detailsBody(detailsPage{review: reviewPage{plan: planView{
+		current: "current", proposed: "proposed",
+	}}}, defaultWidth); len(lines) == 0 {
+		t.Fatal("unscrolled details body is empty")
+	}
+
+	catalog := CatalogSnapshot{
+		State:               CatalogMissing,
+		SuggestedRepository: testRepositoryPath,
+		Services: []Service{
+			{Location: "services/ready.yaml", Name: "ready", Runtime: testRuntime},
+			{Location: "services/blocked.yaml", Blocker: BlockerInvalid},
+		},
+	}
+	if lines := state.homeBody(homePage{catalog: catalog}, defaultWidth); len(lines) == 0 {
+		t.Fatal("homeBody() is empty")
+	}
+	lines := state.addServiceBody(addServicePage{}, defaultWidth)
+	if !strings.Contains(strings.Join(lines, "\n"), "docker://") {
+		t.Fatalf("empty addServiceBody() = %q", lines)
+	}
+	commit := commitServicePage{
+		editing: true,
+		staged: StagedService{
+			Diff: "diff\n", ComposePath: testServicePath,
+		},
+	}
+	if lines := state.commitServiceBody(commit, defaultWidth); !strings.Contains(strings.Join(lines, "\n"), "_") {
+		t.Fatalf("editing commitServiceBody() = %q", lines)
+	}
+	lines = state.openPathBody(openPathPage{}, defaultWidth)
+	if !strings.Contains(strings.Join(lines, "\n"), testComposePath) {
+		t.Fatalf("empty openPathBody() = %q", lines)
 	}
 }
 

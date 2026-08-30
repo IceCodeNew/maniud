@@ -218,15 +218,18 @@ func reconcileRegisteredRepository(
 		registration,
 		dependencies,
 		fastForwardGitOpsCheckout,
+		compose.NewRepositoryScope,
 	)
 }
 
+//nolint:funlen // The daemon keeps recovery-before-fetch ordering visible in one orchestration function.
 func reconcileRegisteredGitOpsCheckout(
 	ctx context.Context,
 	output io.Writer,
 	registration gitOpsRegistration,
 	dependencies applyDependencies,
 	fastForward func(context.Context, string, string, string) (gitOpsCheckoutSelection, error),
+	newScope func(string, string, string) (compose.RepositoryScope, error),
 ) error {
 	root, currentCommit, err := registeredGitOpsCheckout(
 		ctx,
@@ -241,7 +244,7 @@ func reconcileRegisteredGitOpsCheckout(
 	if err != nil {
 		return errGitOpsRepositoryInvalid
 	}
-	scope, err := compose.NewRepositoryScope(root, remote, registration.Branch)
+	scope, err := newScope(root, remote, registration.Branch)
 	if err != nil {
 		return errGitOpsRepositoryInvalid
 	}

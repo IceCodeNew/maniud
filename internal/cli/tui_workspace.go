@@ -46,6 +46,8 @@ type tuiServiceWorkspace struct {
 	environment      map[string]string
 	runtimes         runtimeplugin.Set
 	loadSource       func(context.Context, string) (compose.Source, error)
+	dependencies     func(map[string]string, io.Writer, func() (string, error), runtimeplugin.Set) (genDependencies, error)
+	render           func(context.Context, genInvocation, genDependencies) (generatedCompose, error)
 	draft            *tuiServiceDraft
 	staged           *tuiStagedService
 	instructions     []string
@@ -58,7 +60,10 @@ func defaultTUIServiceWorkspace(
 ) *tuiServiceWorkspace {
 	statePath, err := defaultStatePath(environment)
 	if err != nil {
-		return &tuiServiceWorkspace{environment: environment, runtimes: runtimes, loadSource: loadSource}
+		return &tuiServiceWorkspace{
+			environment: environment, runtimes: runtimes, loadSource: loadSource,
+			dependencies: defaultGenDependencies, render: renderGen,
+		}
 	}
 
 	return &tuiServiceWorkspace{
@@ -66,6 +71,8 @@ func defaultTUIServiceWorkspace(
 		environment:      environment,
 		runtimes:         runtimes,
 		loadSource:       loadSource,
+		dependencies:     defaultGenDependencies,
+		render:           renderGen,
 	}
 }
 
@@ -99,7 +106,7 @@ func prepareTUIServiceDraft(
 	if err != nil {
 		return tuiServiceDraft{}, err
 	}
-	dependencies, err := defaultGenDependencies(
+	dependencies, err := workspace.dependencies(
 		workspace.environment,
 		io.Discard,
 		func() (string, error) { return repository, nil },
@@ -108,7 +115,7 @@ func prepareTUIServiceDraft(
 	if err != nil {
 		return tuiServiceDraft{}, err
 	}
-	generated, err := renderGen(ctx, arguments, dependencies)
+	generated, err := workspace.render(ctx, arguments, dependencies)
 	if err != nil || !validGeneratedTUIService(generated) {
 		return tuiServiceDraft{}, errors.Join(err, runtimeargv.ErrInvalid)
 	}
@@ -243,6 +250,15 @@ func (workspace *tuiServiceWorkspace) Stage(ctx context.Context) (tui.StagedServ
 }
 
 func stageTUIService(ctx context.Context, draft tuiServiceDraft) ([]string, []byte, string, error) {
+	return stageTUIServiceWith(ctx, draft, stagedTUIDiff, writeGitTree)
+}
+
+func stageTUIServiceWith(
+	ctx context.Context,
+	draft tuiServiceDraft,
+	diffStaged func(context.Context, string, []string) ([]byte, error),
+	writeTree func(context.Context, string) (string, error),
+) ([]string, []byte, string, error) {
 	state, err := cleanGitTree(ctx, draft.repository)
 	if err != nil || state != draft.base {
 		return nil, nil, "", compose.ErrInvalidSource
@@ -257,11 +273,11 @@ func stageTUIService(ctx context.Context, draft tuiServiceDraft) ([]string, []by
 	if !exactStagedPaths(ctx, draft.repository, paths) {
 		return nil, nil, "", errors.Join(compose.ErrInvalidSource, discardTUIStaged(ctx, draft, paths))
 	}
-	diff, err := stagedTUIDiff(ctx, draft.repository, paths)
+	diff, err := diffStaged(ctx, draft.repository, paths)
 	if err != nil {
 		return nil, nil, "", errors.Join(err, discardTUIStaged(ctx, draft, paths))
 	}
-	expectedTree, err := writeGitTree(ctx, draft.repository)
+	expectedTree, err := writeTree(ctx, draft.repository)
 	if err != nil {
 		return nil, nil, "", errors.Join(err, discardTUIStaged(ctx, draft, paths))
 	}
@@ -333,6 +349,16 @@ func (workspace *tuiServiceWorkspace) Commit(
 	message string,
 	unsigned bool,
 ) (tui.ServiceCommitResult, error) {
+	return workspace.commitWith(ctx, message, unsigned, commitTUIStaged)
+}
+
+//nolint:funcorder // Commit delegates to this injected command boundary while retaining the transaction lock.
+func (workspace *tuiServiceWorkspace) commitWith(
+	ctx context.Context,
+	message string,
+	unsigned bool,
+	commit func(context.Context, tuiStagedService, string, bool) error,
+) (tui.ServiceCommitResult, error) {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 
@@ -344,21 +370,7 @@ func (workspace *tuiServiceWorkspace) Commit(
 		return tui.ServiceCommitResult{}, compose.ErrInvalidSource
 	}
 
-	var commitErr error
-	if unsigned {
-		_, commitErr = runGit(
-			ctx,
-			staged.draft.repository,
-			"-c", "user.name=maniud",
-			"-c", "user.email=maniud@localhost",
-			"-c", "commit.gpgsign=false",
-			"commit", "--quiet", "--no-gpg-sign", "--no-verify", "-m", message,
-		)
-	} else {
-		_, commitErr = runGitWithUserConfig(
-			ctx, staged.draft.repository, "commit", "--quiet", "-S", "--no-verify", "-m", message,
-		)
-	}
+	commitErr := commit(ctx, staged, message, unsigned)
 	committed, unchanged := proveTUICommit(ctx, staged, !unsigned)
 	if committed {
 		workspace.staged = nil
@@ -379,6 +391,26 @@ func (workspace *tuiServiceWorkspace) Commit(
 	}
 
 	return tui.ServiceCommitResult{}, compose.ErrInvalidSource
+}
+
+func commitTUIStaged(ctx context.Context, staged tuiStagedService, message string, unsigned bool) error {
+	if unsigned {
+		_, err := runGit(
+			ctx,
+			staged.draft.repository,
+			"-c", "user.name=maniud",
+			"-c", "user.email=maniud@localhost",
+			"-c", "commit.gpgsign=false",
+			"commit", "--quiet", "--no-gpg-sign", "--no-verify", "-m", message,
+		)
+
+		return err
+	}
+	_, err := runGitWithUserConfig(
+		ctx, staged.draft.repository, "commit", "--quiet", "-S", "--no-verify", "-m", message,
+	)
+
+	return err
 }
 
 func validTUICommitMessage(message string) bool {

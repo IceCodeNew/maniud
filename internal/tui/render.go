@@ -79,14 +79,14 @@ func (state *model) View() tea.View {
 	}
 
 	var lines []string
-	switch layoutFor(width, height) {
+	switch layoutFor(width, height) { //nolint:exhaustive // Default contains invalid internal layout values.
 	case layoutFull:
 		lines = state.fullView(width, height)
 	case layoutCompact:
 		lines = state.compactView(width, height)
 	case layoutHardFloor:
 		lines = state.hardFloorView(width)
-	case layoutResize:
+	default:
 		lines = []string{
 			state.accent("maniud"),
 			terminaltext.Clip("Resize to at least 32 x 8 to continue.", width),
@@ -270,6 +270,7 @@ func (state *model) serviceWorkspaceRail() ([]string, bool) {
 	return lines, true
 }
 
+//nolint:cyclop // The type switch is the single renderer dispatch table for all page states.
 func (state *model) body(width int, compact bool) []string {
 	lines, setupPage := state.auxiliaryPageBody(width)
 	if !setupPage {

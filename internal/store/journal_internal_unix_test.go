@@ -275,6 +275,58 @@ func TestReadActionsContainsIteratorFailures(t *testing.T) {
 	assertErrorIs(t, err, ErrInvalidState)
 }
 
+func TestRepositoryInventoryReaderContainsInvalidState(t *testing.T) {
+	t.Parallel()
+
+	scope := domain.Hash([]byte("repository scope"))
+	var nilStore *Store
+	_, err := nilStore.UnresolvedRepositoryTransactions(t.Context(), scope)
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = (&Store{}).UnresolvedRepositoryTransactions(t.Context(), scope)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	database := testDatabase(t, "file::memory:")
+	store := &Store{database: database}
+	_, err = store.UnresolvedRepositoryTransactions(t.Context(), domain.Digest{})
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = unresolvedRepositoryTransactions(t.Context(), database, domain.Digest{})
+	assertErrorIs(t, err, ErrInvalidState)
+	requireNoError(t, database.Close())
+	_, err = unresolvedRepositoryTransactions(t.Context(), database, scope)
+	assertErrorIs(t, err, ErrInvalidState)
+
+	_, err = readTransactions(t.Context(), &failingActionRows{next: true, scanErr: errJournalTest})
+	assertErrorIs(t, err, ErrInvalidState)
+	_, err = readTransactions(t.Context(), &failingActionRows{rowsErr: errJournalTest})
+	assertErrorIs(t, err, ErrInvalidState)
+}
+
+func TestTransactionScannerContainsRepositoryAssociationFailures(t *testing.T) {
+	t.Parallel()
+
+	database := testDatabase(t, "file::memory:")
+	t.Cleanup(func() { requireNoError(t, database.Close()) })
+	identifier := make([]byte, transactionIDBytes)
+	digest := make([]byte, len(domain.Digest{}))
+	values := []any{
+		identifier, string(TransactionBootstrap), string(TransactionActive), domain.RuntimeDocker.String(),
+		digest, digest, []byte("short"), nil, nil, nil, nil, nil,
+	}
+	_, err := scanTransaction(t.Context(), queryValues(t, database, values...))
+	assertErrorIs(t, err, ErrInvalidState)
+
+	values[6] = digest
+	values[7] = int64(2)
+	values[8] = digest
+	values[9] = digest
+	_, err = scanTransaction(t.Context(), queryValues(t, database, values...))
+	assertErrorIs(t, err, ErrInvalidState)
+
+	if populateTransactionRepository(&Transaction{}, sql.NullInt64{Int64: 2, Valid: true}, digest, digest) {
+		t.Fatal("populateTransactionRepository() accepted an unsupported version")
+	}
+}
+
 type failingReader struct{}
 
 func (failingReader) Read(_ []byte) (int, error) {
