@@ -65,6 +65,36 @@ services:
 	}
 }
 
+//nolint:goconst // Source values remain adjacent to their normalized expectations.
+func TestProjectServiceSpecReturnsNormalizedSourceFields(t *testing.T) {
+	t.Parallel()
+
+	project, err := Load(t.Context(), testSource(t, `
+name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/team/api:1
+    network_mode: bridge
+    cpus: 1.5
+    command: [serve]
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	spec, err := project.ServiceSpec(apiService)
+	if err != nil || spec.ServiceName != apiService || spec.ContainerName != "example-api" ||
+		spec.CPUs != "1.5" || !reflect.DeepEqual(spec.Command, []string{"serve"}) || spec.Platform != (domain.Platform{}) {
+		t.Fatalf("ServiceSpec() = %#v, %v", spec, err)
+	}
+	if _, err = project.ServiceSpec("missing"); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("ServiceSpec(missing) error = %v", err)
+	}
+	if _, err = (Project{}).ServiceSpec(apiService); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("ServiceSpec(zero project) error = %v", err)
+	}
+}
+
 func TestWorkloadProjectsCoreService(t *testing.T) {
 	t.Parallel()
 
