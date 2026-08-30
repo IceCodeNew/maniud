@@ -66,7 +66,7 @@ func TestTUICatalogRegistersDefaultRepository(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // This lifecycle test verifies that refresh and fresh-open observe filesystem changes in order.
+//nolint:cyclop // This lifecycle test verifies that refresh and fresh-open observe repository changes in order.
 func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 	t.Parallel()
 	const blockedServiceFile = "b.yaml"
@@ -81,7 +81,6 @@ services:
 	root := initGitOpsTestRepository(t)
 	writeGitOpsTestCommit(t, root, "services/a.yml", composeContent, "add a")
 	writeGitOpsTestCommit(t, root, "services/"+blockedServiceFile, "fixture", "add b")
-	servicesDirectory := filepath.Join(root, gitOpsServicesDirectory)
 	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
 	writeTUIRegistration(t, registrationPath, root)
 	opened := make([]string, 0, 4)
@@ -124,10 +123,19 @@ services:
 	if result = catalog.OpenRegistered(t.Context(), "services/missing.yaml"); result.Blocker != tui.BlockerNotFound {
 		t.Fatalf("OpenRegistered(missing) = %#v", result)
 	}
-	if err := os.Remove(filepath.Join(servicesDirectory, "a.yml")); err != nil {
-		t.Fatalf("Remove(a.yml) error = %v", err)
+	removeAndCommitTUIService(t, root, "services/a.yml")
+	if result = catalog.OpenRegistered(t.Context(), snapshot.Services[0].ID); result.Blocker != tui.BlockerNotFound {
+		t.Fatalf("OpenRegistered(removed) = %#v", result)
 	}
-	if _, err := runGit(t.Context(), root, "add", "--update", "--", "services/a.yml"); err != nil {
+}
+
+func removeAndCommitTUIService(t *testing.T, root, path string) {
+	t.Helper()
+
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(path))); err != nil {
+		t.Fatalf("Remove(%s) error = %v", filepath.Base(path), err)
+	}
+	if _, err := runGit(t.Context(), root, "add", "--update", "--", path); err != nil {
 		t.Fatalf("git add removal error = %v", err)
 	}
 	if _, err := runGit(
@@ -135,12 +143,9 @@ services:
 		"-c", "user.name=Maniud Tests",
 		"-c", "user.email=maniud@example.invalid",
 		"-c", "commit.gpgsign=false",
-		"commit", "--quiet", "-m", "remove a",
+		"commit", "--quiet", "-m", "remove service",
 	); err != nil {
 		t.Fatalf("git commit removal error = %v", err)
-	}
-	if result = catalog.OpenRegistered(t.Context(), snapshot.Services[0].ID); result.Blocker != tui.BlockerNotFound {
-		t.Fatalf("OpenRegistered(removed) = %#v", result)
 	}
 }
 
@@ -346,6 +351,60 @@ services:
 	if snapshot := catalog.Snapshot(cancelled); snapshot.State != tui.CatalogUnavailable {
 		t.Fatalf("Snapshot(cancelled) = %#v", snapshot)
 	}
+}
+
+func TestTUICatalogContainsRegisteredRepositoryFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing remote", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsTestRepository(t)
+		registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+		writeTUIRegistration(t, registrationPath, root)
+		if _, err := runGit(t.Context(), root, "remote", "remove", gitOpsRemoteName); err != nil {
+			t.Fatalf("git remote remove error = %v", err)
+		}
+		catalog := &tuiCatalog{registrationPath: registrationPath}
+		if result := catalog.OpenRegistered(t.Context(), tuiTestServicePath); result.Blocker != tui.BlockerUnavailable {
+			t.Fatalf("OpenRegistered(missing remote) = %#v", result)
+		}
+	})
+
+	t.Run("services path is a file", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsTestRepository(t)
+		writeGitOpsTestCommit(t, root, gitOpsServicesDirectory, "not a directory\n", "block services")
+		registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+		writeTUIRegistration(t, registrationPath, root)
+		catalog := &tuiCatalog{registrationPath: registrationPath}
+		if result := catalog.OpenRegistered(t.Context(), tuiTestServicePath); result.Blocker != tui.BlockerUnavailable {
+			t.Fatalf("OpenRegistered(blocked services path) = %#v", result)
+		}
+	})
+
+	t.Run("source outside repository", func(t *testing.T) {
+		t.Parallel()
+
+		root := initGitOpsTestRepository(t)
+		scope, err := compose.NewRepositoryScope(root, root, gitOpsTestBranch)
+		if err != nil {
+			t.Fatalf("NewRepositoryScope() error = %v", err)
+		}
+		catalog := &tuiCatalog{loadSource: func(context.Context, string) (compose.Source, error) {
+			return committedTUIComposeSource(t, []byte(
+				"name: example\nservices:\n  api:\n    container_name: example-api\n"+
+					"    image: example.com/api:1\n    network_mode: bridge\n",
+			)), nil
+		}}
+		result := catalog.openRepositorySource(
+			t.Context(), filepath.Join(root, composeFileValue), root, scope,
+		)
+		if result.Blocker != tui.BlockerInvalid {
+			t.Fatalf("openRepositorySource(outside source) = %#v", result)
+		}
+	})
 }
 
 func TestRegisteredTUIServiceID(t *testing.T) {

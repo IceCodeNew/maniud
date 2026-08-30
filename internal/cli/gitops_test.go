@@ -499,6 +499,18 @@ func TestGitOpsRepositoryRejectsInvalidGitState(t *testing.T) {
 	if _, err := gitRemoteURL(t.Context(), root, gitOpsRemoteName); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("gitRemoteURL(missing) = %v", err)
 	}
+	if _, err := gitOpsRepositoryScope(t.Context(), gitOpsRegistration{
+		Remote: gitOpsRemoteName, Branch: gitOpsTestBranch,
+	}, root); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("gitOpsRepositoryScope(missing remote) = %v", err)
+	}
+
+	root = initGitOpsTestRepository(t)
+	if _, err := gitOpsRepositoryScope(t.Context(), gitOpsRegistration{
+		Remote: gitOpsRemoteName,
+	}, root); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("gitOpsRepositoryScope(invalid branch) = %v", err)
+	}
 
 	if err := requireFastForward(
 		t.Context(), root, "invalid", "also-invalid",

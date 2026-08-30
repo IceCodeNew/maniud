@@ -211,6 +211,12 @@ func TestTUIWorkspaceRejectsRepositorySignerOverride(t *testing.T) {
 		workspace.staged == nil {
 		t.Fatalf("Commit(repository signer) = %#v, %v", result, err)
 	}
+	if err = commitTUIStaged(t.Context(), *workspace.staged, "Add api service", false); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("commitTUIStaged(repository signer) error = %v", err)
+	}
 }
 
 func TestTUIWorkspaceProvesCommitAfterCallerCancellation(t *testing.T) {
@@ -543,6 +549,17 @@ func TestTUIWorkspaceContainsDependencyAndRepositoryInspectionFailures(t *testin
 	if _, _, _, err := registeredTUIWorkspace(t.Context(), workspace.registrationPath); err == nil {
 		t.Fatal("registeredTUIWorkspace(missing repository) succeeded")
 	}
+
+	workspace, repository = newRegisteredTUIWorkspace(t)
+	if _, err := runGit(t.Context(), repository, "remote", "remove", gitOpsRemoteName); err != nil {
+		t.Fatalf("git remote remove error = %v", err)
+	}
+	if _, err := workspace.Preview(t.Context(), "docker run registry.example/team/api:latest"); !errors.Is(
+		err,
+		errGitOpsRepositoryInvalid,
+	) {
+		t.Fatalf("Preview(missing remote) error = %v", err)
+	}
 }
 
 func TestTUIWorkspaceContainsStableStageFailures(t *testing.T) {
@@ -659,6 +676,28 @@ func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
 		}
 	})
 
+	t.Run("cancelled commit command", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		workspace := &tuiServiceWorkspace{draft: &draft}
+		if _, err := workspace.Stage(t.Context()); err != nil {
+			t.Fatalf("Stage() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		result, err := workspace.commitWith(
+			ctx, "Add api service", true,
+			func(context.Context, tuiStagedService, string, bool) error {
+				cancel()
+
+				return nil
+			},
+		)
+		if !errors.Is(err, context.Canceled) || result.Committed || result.NeedsUnsignedApproval {
+			t.Fatalf("Commit(cancelled command) = %#v, %v", result, err)
+		}
+	})
+
 	t.Run("discard removal", func(t *testing.T) {
 		t.Parallel()
 
@@ -737,6 +776,9 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	if matchesTUICommit(t.Context(), mismatchedTree, head, false) {
 		t.Fatal("matchesTUICommit(mismatched tree) succeeded")
 	}
+	if committed, unchanged := proveTUICommit(t.Context(), mismatchedTree, false); committed != "" || unchanged {
+		t.Fatalf("proveTUICommit(mismatched tree) = %q, %t", committed, unchanged)
+	}
 	if matchesTUICommit(t.Context(), staged, head, true) {
 		t.Fatal("matchesTUICommit(unsigned commit) succeeded with required signature")
 	}
@@ -745,6 +787,70 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	); !errors.Is(err, compose.ErrInvalidSource) {
 		t.Fatalf("committedTUIRequest(relative runtime base) error = %v", err)
 	}
+}
+
+func TestCommittedTUIRequestRejectsUnstableSources(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing bind source", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		draft.generated.content = append(
+			draft.generated.content,
+			[]byte("    volumes:\n      - ./missing:/data:ro\n")...,
+		)
+		staged, head := committedTUIStagedFixture(t, draft)
+		if _, err := committedTUIRequest(
+			t.Context(), staged, head, nil, t.TempDir(),
+		); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("committedTUIRequest(missing bind) error = %v", err)
+		}
+	})
+
+	t.Run("checkout drift", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		staged, _ := committedTUIStagedFixture(t, draft)
+		if _, err := committedTUIRequest(
+			t.Context(), staged, draft.base.head, nil, t.TempDir(),
+		); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("committedTUIRequest(checkout drift) error = %v", err)
+		}
+	})
+
+	t.Run("mismatched source path", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		staged, head := committedTUIStagedFixture(t, draft)
+		staged.draft.generated.absolutePath = filepath.Join(draft.repository, "services", "other.yaml")
+		if _, err := committedTUIRequest(
+			t.Context(), staged, head, nil, t.TempDir(),
+		); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("committedTUIRequest(mismatched path) error = %v", err)
+		}
+	})
+}
+
+func committedTUIStagedFixture(t *testing.T, draft tuiServiceDraft) (tuiStagedService, string) {
+	t.Helper()
+
+	paths, _, expectedTree, err := stageTUIService(t.Context(), draft)
+	if err != nil {
+		t.Fatalf("stageTUIService() error = %v", err)
+	}
+	staged := tuiStagedService{draft: draft, paths: paths, expectedTree: expectedTree}
+	if err = commitTUIStaged(t.Context(), staged, "Add api service", true); err != nil {
+		t.Fatalf("commitTUIStaged() error = %v", err)
+	}
+	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("resolve HEAD error = %v", err)
+	}
+
+	return staged, head
 }
 
 //nolint:cyclop // Assertions exercise each generated-file identity and removal boundary.

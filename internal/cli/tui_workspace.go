@@ -381,16 +381,28 @@ func (workspace *tuiServiceWorkspace) commitWith(
 	}
 
 	commitErr := commit(ctx, staged, message, unsigned)
+
+	return workspace.settleCommit(ctx, staged, unsigned, commitErr)
+}
+
+//nolint:funcorder // settleCommit completes commitWith while the transaction lock is held.
+func (workspace *tuiServiceWorkspace) settleCommit(
+	ctx context.Context,
+	staged tuiStagedService,
+	unsigned bool,
+	commitErr error,
+) (tui.ServiceCommitResult, error) {
 	proofCtx := context.WithoutCancel(ctx)
 	committedHead, unchanged := proveTUICommit(proofCtx, staged, !unsigned)
 	if committedHead != "" {
 		workspace.staged = nil
 		workspace.draft = nil
 		workspace.instructions = commitInstructions(staged.draft)
-		request, err := committedTUIRequest(
+		request, requestErr := committedTUIRequest(
 			proofCtx, staged, committedHead, workspace.environment, workspace.runtimeBase,
 		)
-		if err != nil {
+		if requestErr != nil {
+			//nolint:nilerr // Commit proof succeeded; only immutable validation is unavailable.
 			return tui.ServiceCommitResult{Committed: true, ValidationUnavailable: true}, nil
 		}
 

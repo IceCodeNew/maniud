@@ -159,6 +159,12 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	if !valid || unsigned.focus != confirmationBack {
 		t.Fatalf("unsigned confirmation = %#v", state.page)
 	}
+	state.resize(compactMinimum, compactMinHeight)
+	unsigned, valid = state.page.(unsignedCommitConfirmationPage)
+	if !valid || unsigned.commit.diffWidth != state.serviceDiffWidth() {
+		t.Fatalf("resized unsigned confirmation = %#v", state.page)
+	}
+	state.resize(defaultWidth, defaultHeight)
 	state.handleKey(key("enter"))
 	if _, valid = state.page.(commitServicePage); !valid {
 		t.Fatalf("unsigned default back page = %T", state.page)
@@ -181,6 +187,18 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 		"commit:true:Add api service!",
 	}) || !slices.Equal(operations.recordedCalls(), []string{dryRunCall, snapshotCall, evidenceCall}) {
 		t.Fatalf("calls = %q / %q", workspace.recordedCalls(), operations.recordedCalls())
+	}
+}
+
+func TestModelCachesServiceDiffAtDefaultDimensions(t *testing.T) {
+	t.Parallel()
+
+	state := &model{}
+	commit := state.wrapServiceDiff(commitServicePage{staged: StagedService{Diff: "+image: pinned\n"}})
+	cached := state.wrapServiceDiff(commit)
+	if commit.diffWidth != state.serviceDiffWidth() || cached.diffWidth != commit.diffWidth ||
+		!slices.Equal(cached.diffLines, commit.diffLines) {
+		t.Fatalf("cached service diff = %#v, want %#v", cached, commit)
 	}
 }
 

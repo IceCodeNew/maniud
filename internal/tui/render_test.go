@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,12 @@ func TestRenderHelpersRespectCellsAndLayoutBoundaries(t *testing.T) {
 	comparison := imageComparison("current", "proposed", 3)
 	if len(comparison) != 2 {
 		t.Fatalf("imageComparison() = %q", comparison)
+	}
+	cached := []string{"cached diff"}
+	if lines := stagedServiceDiffLines(commitServicePage{
+		diffWidth: 4, diffLines: cached,
+	}, 4+detailsPadding); !slices.Equal(lines, cached) {
+		t.Fatalf("stagedServiceDiffLines(cached) = %q", lines)
 	}
 }
 
