@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${MANIUD_GATE_MANIFEST:-}" ]]; then
+	if ! command_e2e="$(awk -F $'\t' '
+    $1 == "command-e2e" {
+      count++
+      value = $2
+      if (NF != 2) invalid = 1
+    }
+    END {
+      if (count != 1 || invalid || (value != "true" && value != "false")) exit 1
+      print value
+    }
+  ' "$MANIUD_GATE_MANIFEST")"; then
+		printf '%s\n' 'invalid gate manifest: expected one command-e2e row' >&2
+		exit 1
+	fi
+	if [[ "$command_e2e" == false ]]; then
+		printf '%s\n' 'command E2E not selected'
+		exit 0
+	fi
+fi
+
 if (($# > 1)); then
 	printf 'usage: %s [maniud-binary]\n' "$0" >&2
 	exit 2

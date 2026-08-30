@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+	printf 'usage: %s (--full | --base ref --head ref) --output file\n' "$0" >&2
+	exit 2
+}
+base="" head="HEAD" output="" full=0
+while (($#)); do
+	case "$1" in
+	--base)
+		(($# >= 2)) || usage
+		base="$2"
+		shift 2
+		;;
+	--head)
+		(($# >= 2)) || usage
+		head="$2"
+		shift 2
+		;;
+	--output)
+		(($# >= 2)) || usage
+		output="$2"
+		shift 2
+		;;
+	--full)
+		full=1
+		shift
+		;;
+	*) usage ;;
+	esac
+done
+[[ -n "$output" ]] || usage
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$root"
+emit_full() {
+	local path module package listed tree manifest invalid
+	local modules=()
+	local patterns=()
+	tree="$(mktemp)" manifest="$(mktemp)"
+	if ! git ls-tree -rz --name-only "$head" >"$tree"; then
+		rm -f "$tree" "$manifest"
+		return 1
+	fi
+	invalid=0
+	while IFS= read -r -d '' path; do
+		[[ "$path" == go.mod || "$path" == */go.mod ]] || continue
+		if [[ "$path" == go.mod ]]; then module="."; else module="${path%/go.mod}"; fi
+		if [[ "$module" == *$'\t'* || "$module" == *$'\n'* ]]; then
+			invalid=1
+			break
+		fi
+		modules+=("$module")
+	done <"$tree"
+	if ((invalid)) || ((${#modules[@]} == 0)); then
+		rm -f "$tree" "$manifest"
+		return 1
+	fi
+	if ! (
+		printf 'mode\tfull\n'
+		for module in "${modules[@]}"; do
+			printf 'module\t%s\n' "$module"
+			patterns=(./...)
+			if [[ "$module" == "." ]]; then
+				patterns=(./internal/... ./plugins/...)
+			fi
+			if ! listed="$(cd "$module" && GOWORK=off CGO_ENABLED=0 go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "${patterns[@]}")"; then
+				exit 1
+			fi
+			while IFS= read -r package; do
+				[[ -n "$package" && "$package" != *$'\t'* ]] || continue
+				printf 'package\t%s\t%s\n' "$module" "$package"
+			done <<<"$listed"
+		done
+		printf 'command-e2e\ttrue\n'
+	) >"$manifest"; then
+		rm -f "$tree" "$manifest"
+		return 1
+	fi
+	if ! cat "$manifest" >"$output"; then
+		rm -f "$tree" "$manifest"
+		return 1
+	fi
+	rm -f "$tree" "$manifest"
+}
+if ((full)); then
+	emit_full
+	exit
+fi
+[[ -n "$base" ]] || usage
+
+# This guard intentionally runs before selector code from HEAD. Any uncertainty
+# executes the repository-owned full path instead of trusting changed code.
+if [[ "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null || ! git cat-file -e "$head^{commit}" 2>/dev/null; then
+	emit_full
+	exit
+fi
+if [[ "$(git rev-parse --is-shallow-repository)" == true ]] || ! git merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
+	emit_full
+	exit
+fi
+raw="$(mktemp)" paths_file="$(mktemp)"
+trap 'rm -f "$raw" "$paths_file"' EXIT
+if ! git diff --name-status -z -M "$base" "$head" >"$raw"; then
+	emit_full
+	exit
+fi
+paths=() bypass=0
+while IFS= read -r -d '' status; do
+	case "$status" in
+	D* | R* | C*)
+		bypass=1
+		break
+		;;
+	A* | M* | T*) ;;
+	*)
+		bypass=1
+		break
+		;;
+	esac
+	IFS= read -r -d '' path || {
+		bypass=1
+		break
+	}
+	paths+=("$path")
+	case "$path" in
+	internal/changescope/* | scripts/* | .agents/* | .github/workflows/* | prek.toml | .golangci.yml | _typos.toml | */go.mod | */go.sum | go.mod | go.sum) bypass=1 ;;
+	esac
+	if [[ "$path" == *.go ]] && {
+		git show "$base:$path" 2>/dev/null || true
+		git show "$head:$path" 2>/dev/null || true
+	} | grep -Eq '^[[:space:]]*//go:build '; then bypass=1; fi
+done <"$raw"
+if ((bypass)) || ((${#paths[@]} == 0)); then
+	emit_full
+	exit
+fi
+printf '%s\0' "${paths[@]}" >"$paths_file"
+if ! go run ./internal/changescope/cmd/changescope --base "$base" --head "$head" --paths-file "$paths_file" --output "$output"; then
+	emit_full
+	exit
+fi

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (($# == 0)); then
+	printf 'usage: %s command [argument ...]\n' "$0" >&2
+	exit 2
+fi
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+if [[ -n "${MANIUD_GATE_MANIFEST:-}" ]]; then
+	"$@"
+	exit
+fi
+temporary="$(mktemp)"
+trap 'rm -f "$temporary"' EXIT
+if [[ -n "${PRE_COMMIT_FROM_REF:-}" && -n "${PRE_COMMIT_TO_REF:-}" ]]; then
+	"$root/scripts/select-affected-gates" --base "$PRE_COMMIT_FROM_REF" --head "$PRE_COMMIT_TO_REF" --output "$temporary"
+else
+	"$root/scripts/select-affected-gates" --full --head HEAD --output "$temporary"
+fi
+MANIUD_GATE_MANIFEST="$temporary" "$@"

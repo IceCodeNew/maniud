@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-packages_file=""
+packages_file="${MANIUD_GATE_MANIFEST:-}"
+if [[ -n "$packages_file" ]]; then
+	packages_file="$(realpath "$packages_file")"
+fi
 profile_argument=""
 while (($# > 0)); do
 	case "$1" in
@@ -56,7 +59,7 @@ for module_number in "${!module_names[@]}"; do
 	if [[ -n "$packages_file" ]]; then
 		while IFS= read -r coverage_package; do
 			coverage_packages+=("$coverage_package")
-		done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
+		done < <(awk -F $'\t' -v module="$module_name" '$1 == "package" && $2 == module { print $3 }' "$packages_file")
 	else
 		while IFS= read -r coverage_package; do
 			coverage_packages+=("$coverage_package")
@@ -68,7 +71,10 @@ for module_number in "${!module_names[@]}"; do
 	if ((${#coverage_packages[@]} == 0)); then
 		continue
 	fi
-	coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
+	coverpkg="$(
+		IFS=,
+		printf '%s' "${coverage_packages[*]}"
+	)"
 	module_profile="$temporary_dir/statements-$module_number.cover"
 	module_profiles+=("$module_profile")
 	test_args=(
@@ -117,8 +123,13 @@ absolute_profile="$temporary_dir/statements-absolute.cover"
 } >"$absolute_profile"
 
 repository_module_path="$(cd "$repository_root" && GOWORK=off go list -m -f '{{.Path}}')"
-cover_report="$(GOWORK=off go tool cover -func="$absolute_profile")"
-printf '%s\n' "${cover_report//"$repository_root/"/"$repository_module_path/"}"
+GOWORK=off go tool cover -func="$absolute_profile" | awk \
+	-v directory="$repository_root/" -v module_prefix="$repository_module_path/" '
+  index($1, directory) == 1 {
+    $1 = module_prefix substr($1, length(directory) + 1)
+  }
+  { print }
+'
 awk -v directory="$repository_root/" -v module_prefix="$repository_module_path/" '
   NR == 1 { print; next }
   index($1, directory) == 1 {
@@ -196,7 +207,7 @@ PY
 		if [[ -n "$packages_file" ]]; then
 			while IFS= read -r coverage_package; do
 				coverage_packages+=("$coverage_package")
-			done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
+			done < <(awk -F $'\t' -v module="$module_name" '$1 == "package" && $2 == module { print $3 }' "$packages_file")
 		else
 			coverage_packages=("${coverage_patterns[@]}")
 		fi
