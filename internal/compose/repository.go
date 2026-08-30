@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	composeformat "github.com/compose-spec/compose-go/v2/format"
@@ -17,6 +18,9 @@ import (
 )
 
 const (
+	// RepositoryProvenanceVersion identifies the canonical repository identity encoding.
+	RepositoryProvenanceVersion = 1
+
 	maximumRepositoryFiles = 256
 	maximumRepositoryBytes = 16 << 20
 	composeBindMountType   = "bind"
@@ -24,7 +28,101 @@ const (
 	composeDisableEnvFile  = "COMPOSE_DISABLE_ENV_FILE"
 	repositoryPathKey      = "path"
 	repositoryFormatKey    = "format"
+	repositoryScopeDomain  = "maniud.repository.scope"
+	repositoryPathDomain   = "maniud.repository.location"
+	repositoryLengthBytes  = 8
+	repositoryVersionBytes = 4
 )
+
+// RepositoryScope is an opaque identity for one physical checkout, validated
+// origin URL, and branch. Callers must not interpret Digest.
+type RepositoryScope struct {
+	Version int
+	Digest  domain.Digest
+}
+
+// RepositoryProvenance binds one committed source to its repository scope and
+// slash-separated location.
+type RepositoryProvenance struct {
+	Version  int
+	Scope    domain.Digest
+	Location domain.Digest
+	Source   domain.Digest
+}
+
+// NewRepositoryScope derives one versioned, domain-separated repository scope
+// after the caller has proved the Git inputs.
+func NewRepositoryScope(root, remote, branch string) (RepositoryScope, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root ||
+		!validProvenanceValue(remote) || !validProvenanceValue(branch) {
+		return RepositoryScope{}, ErrInvalidSource
+	}
+
+	return RepositoryScope{
+		Version: RepositoryProvenanceVersion,
+		Digest:  repositoryProvenanceDigest(repositoryScopeDomain, root, remote, branch),
+	}, nil
+}
+
+// Location derives the opaque location identity for one repository-relative path.
+func (scope RepositoryScope) Location(entry string) (domain.Digest, error) {
+	if !scope.Valid() || !validRepositoryPath(entry) {
+		return domain.Digest{}, ErrInvalidSource
+	}
+
+	return repositoryProvenanceDigest(repositoryPathDomain, entry), nil
+}
+
+// Bind associates one exact committed source digest with a location in scope.
+func (scope RepositoryScope) Bind(entry string, source domain.Digest) (RepositoryProvenance, error) {
+	location, err := scope.Location(entry)
+	if err != nil || source == (domain.Digest{}) {
+		return RepositoryProvenance{}, ErrInvalidSource
+	}
+
+	return RepositoryProvenance{
+		Version: scope.Version,
+		Scope:   scope.Digest, Location: location, Source: source,
+	}, nil
+}
+
+// Valid reports whether scope uses the current encoding and has an identity.
+func (scope RepositoryScope) Valid() bool {
+	return scope.Version == RepositoryProvenanceVersion && scope.Digest != (domain.Digest{})
+}
+
+// ValidFor reports whether provenance is complete and bound to source.
+func (provenance RepositoryProvenance) ValidFor(source domain.Digest) bool {
+	return provenance.Version == RepositoryProvenanceVersion &&
+		provenance.Scope != (domain.Digest{}) && provenance.Location != (domain.Digest{}) &&
+		provenance.Source != (domain.Digest{}) && provenance.Source == source
+}
+
+func validProvenanceValue(value string) bool {
+	return value != "" && len(value) <= maxSourceBytes && utf8.ValidString(value) &&
+		!strings.ContainsRune(value, 0)
+}
+
+func repositoryProvenanceDigest(domainName string, values ...string) domain.Digest {
+	encoded := make(
+		[]byte,
+		0,
+		len(domainName)+len(values)*repositoryLengthBytes+repositoryVersionBytes,
+	)
+	encoded = appendRepositoryProvenanceValue(encoded, domainName)
+	encoded = binary.BigEndian.AppendUint32(encoded, RepositoryProvenanceVersion)
+	for _, value := range values {
+		encoded = appendRepositoryProvenanceValue(encoded, value)
+	}
+
+	return domain.Hash(encoded)
+}
+
+func appendRepositoryProvenanceValue(encoded []byte, value string) []byte {
+	encoded = binary.BigEndian.AppendUint64(encoded, uint64(len(value)))
+
+	return append(encoded, value...)
+}
 
 // RepositoryFile contains one committed regular file and its Git executable bit.
 type RepositoryFile struct {
