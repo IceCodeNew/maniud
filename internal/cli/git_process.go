@@ -153,10 +153,11 @@ func splitNullTerminated(value []byte) ([][]byte, bool) {
 
 func hostileGitConfigKey(value string) bool {
 	key := strings.ToLower(value)
-	if key == "include.path" || strings.HasPrefix(key, "includeif.") || strings.HasPrefix(key, "filter.") {
+	switch key {
+	case "include.path", "gpg.program", "gpg.format", "gpg.ssh.defaultkeycommand":
 		return true
 	}
-	if key == "gpg.program" || key == "gpg.format" || key == "gpg.ssh.defaultkeycommand" ||
+	if strings.HasPrefix(key, "includeif.") || strings.HasPrefix(key, "filter.") ||
 		strings.HasPrefix(key, "gpg.") && strings.HasSuffix(key, ".program") {
 		return true
 	}
