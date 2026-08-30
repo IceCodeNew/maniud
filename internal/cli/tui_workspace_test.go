@@ -763,7 +763,14 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 		t.Fatalf("stageTUIService() error = %v", err)
 	}
 	staged := tuiStagedService{draft: draft, paths: stagedPaths, expectedTree: expectedTree}
-	if _, err := runGit(t.Context(), draft.repository, "commit", "--no-gpg-sign", "-m", "add api"); err != nil {
+	if _, err := runGit(
+		t.Context(),
+		draft.repository,
+		"-c", "user.name=Maniud Tests",
+		"-c", "user.email=maniud@example.invalid",
+		"-c", "commit.gpgsign=false",
+		"commit", "--no-gpg-sign", "-m", "add api",
+	); err != nil {
 		t.Fatalf("git commit error = %v", err)
 	}
 	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
