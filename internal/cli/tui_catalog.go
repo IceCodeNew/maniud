@@ -26,7 +26,7 @@ func defaultTUICatalog(
 	if err != nil {
 		return &tuiCatalog{loadSource: loadSource}
 	}
-	home := environment[homeKey]
+	home := environment["HOME"]
 	suggestedPath := ""
 	if filepath.IsAbs(home) && filepath.Clean(home) == home {
 		suggestedPath = filepath.Join(home, "maniud-desired-state")
