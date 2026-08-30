@@ -8,7 +8,7 @@ The default result omits private paths, endpoint details, credentials, and upstr
 `gen` may print a plain-language recovery hint on standard error before the JSON object.
 
 ```json
-{"code":"generation_failed","message":"generation failed","retryable":false}
+{"code":"apply_failed","message":"apply failed","retryable":false}
 ```
 
 | Code | Meaning | What to do |
@@ -17,6 +17,7 @@ The default result omits private paths, endpoint details, credentials, and upstr
 | `operation_cancelled` | A signal or calling context cancelled the operation. | Run the same command again so maniud can recover an unfinished operation. |
 | `generation_failed` | `gen` could not validate the image, service, or output. | Follow the standard-error hint, pull the requested image when it is missing, and rerun `gen`. |
 | `apply_failed` | `apply`, `daemon`, or `doctor` could not prove a safe result. | Retry only when `retryable` is true; otherwise preserve the current state and inspect `--debug` output. |
+| `runtime_not_built` | The selected runtime was not compiled into this binary. | Install or build a maniud binary that includes the selected runtime. |
 | `tui_unavailable` | `maniud tui` has no interactive terminal input, terminal output, or usable `TERM`. | Run it in an interactive terminal, or validate with `maniud apply --dry-run <compose>` and add `--json` when structured output is required. |
 | `internal_error` | The binary could not provide the selected command service. | Verify the installed release and report its version with the JSON result. |
 

@@ -70,17 +70,18 @@ func TestTUICatalogRegistersDefaultRepository(t *testing.T) {
 func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 	t.Parallel()
 	const blockedServiceFile = "b.yaml"
+	const composeContent = `name: example
+services:
+  api:
+    container_name: example-api
+    image: example.com/api:1
+    network_mode: bridge
+`
 
-	root := t.TempDir()
+	root := initGitOpsTestRepository(t)
+	writeGitOpsTestCommit(t, root, "services/a.yml", composeContent, "add a")
+	writeGitOpsTestCommit(t, root, "services/"+blockedServiceFile, "fixture", "add b")
 	servicesDirectory := filepath.Join(root, gitOpsServicesDirectory)
-	if err := os.Mkdir(servicesDirectory, 0o700); err != nil {
-		t.Fatalf("Mkdir(services) error = %v", err)
-	}
-	for _, name := range []string{blockedServiceFile, "a.yml"} {
-		if err := os.WriteFile(filepath.Join(servicesDirectory, name), []byte("fixture"), 0o600); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", name, err)
-		}
-	}
 	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
 	writeTUIRegistration(t, registrationPath, root)
 	opened := make([]string, 0, 4)
@@ -92,7 +93,12 @@ func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 				return compose.Source{}, compose.ErrInvalidSource
 			}
 
-			return testComposeSource(t), nil
+			return committedTUIComposeSourceAt(
+				t,
+				root,
+				filepath.ToSlash(filepath.Join(gitOpsServicesDirectory, filepath.Base(path))),
+				[]byte(composeContent),
+			), nil
 		},
 	}
 
@@ -108,7 +114,8 @@ func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 
 	result := catalog.OpenRegistered(t.Context(), snapshot.Services[0].ID)
 	if result.Blocker != tui.BlockerNone || len(result.Targets) != 1 ||
-		result.Targets[0].Service != applyServiceValue {
+		result.Targets[0].Service != applyServiceValue ||
+		!result.Targets[0].Request.Repository.ValidFor(result.Targets[0].Request.Source.Repository.Digest) {
 		t.Fatalf("OpenRegistered(ready) = %#v", result)
 	}
 	if result = catalog.OpenRegistered(t.Context(), snapshot.Services[1].ID); result.Blocker != tui.BlockerInvalid {
@@ -119,6 +126,18 @@ func TestTUICatalogListsAndFreshlyOpensRegisteredServices(t *testing.T) {
 	}
 	if err := os.Remove(filepath.Join(servicesDirectory, "a.yml")); err != nil {
 		t.Fatalf("Remove(a.yml) error = %v", err)
+	}
+	if _, err := runGit(t.Context(), root, "add", "--update", "--", "services/a.yml"); err != nil {
+		t.Fatalf("git add removal error = %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), root,
+		"-c", "user.name=Maniud Tests",
+		"-c", "user.email=maniud@example.invalid",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", "remove a",
+	); err != nil {
+		t.Fatalf("git commit removal error = %v", err)
 	}
 	if result = catalog.OpenRegistered(t.Context(), snapshot.Services[0].ID); result.Blocker != tui.BlockerNotFound {
 		t.Fatalf("OpenRegistered(removed) = %#v", result)
@@ -295,22 +314,7 @@ func TestTUISourceDiagnosticMapsOnlyStableReasons(t *testing.T) {
 func TestTUICatalogRejectsMultiServiceRegisteredFileAndCancellation(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	servicesDirectory := filepath.Join(root, gitOpsServicesDirectory)
-	if err := os.Mkdir(servicesDirectory, 0o700); err != nil {
-		t.Fatalf("Mkdir(services) error = %v", err)
-	}
-	path := filepath.Join(servicesDirectory, "multi.yaml")
-	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
-		t.Fatalf("WriteFile(multi) error = %v", err)
-	}
-	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
-	writeTUIRegistration(t, registrationPath, root)
-	catalog := &tuiCatalog{
-		registrationPath: registrationPath,
-		loadSource: func(context.Context, string) (compose.Source, error) {
-			return compose.Source{
-				Content: []byte(`name: example
+	const composeContent = `name: example
 services:
   api:
     container_name: example-api
@@ -320,7 +324,17 @@ services:
     container_name: example-worker
     image: example.com/worker:1
     network_mode: bridge
-`), WorkingDir: t.TempDir()}, nil
+`
+	root := initGitOpsTestRepository(t)
+	writeGitOpsTestCommit(t, root, "services/multi.yaml", composeContent, "add services")
+	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	writeTUIRegistration(t, registrationPath, root)
+	catalog := &tuiCatalog{
+		registrationPath: registrationPath,
+		loadSource: func(context.Context, string) (compose.Source, error) {
+			return committedTUIComposeSourceAt(
+				t, root, "services/multi.yaml", []byte(composeContent),
+			), nil
 		},
 	}
 	if result := catalog.OpenRegistered(t.Context(), "services/multi.yaml"); result.Blocker != tui.BlockerInvalid {
@@ -368,12 +382,18 @@ func writeTUIRegistration(t *testing.T, path, root string) {
 func committedTUIComposeSource(t *testing.T, content []byte) compose.Source {
 	t.Helper()
 
+	return committedTUIComposeSourceAt(t, t.TempDir(), composeFileValue, content)
+}
+
+func committedTUIComposeSourceAt(t *testing.T, root, entry string, content []byte) compose.Source {
+	t.Helper()
+
 	source, err := compose.CaptureRepositorySource(
-		t.TempDir(),
-		composeFileValue,
+		root,
+		entry,
 		nil,
 		func(path string) (compose.RepositoryFile, bool, error) {
-			if path == composeFileValue {
+			if path == entry {
 				return compose.RepositoryFile{Content: content}, true, nil
 			}
 

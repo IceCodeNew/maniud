@@ -28,10 +28,11 @@ const (
 )
 
 type tuiServiceDraft struct {
-	generated  generatedCompose
-	repository string
-	branch     string
-	base       gitTreeState
+	generated       generatedCompose
+	repository      string
+	repositoryScope compose.RepositoryScope
+	branch          string
+	base            gitTreeState
 }
 
 type tuiStagedService struct {
@@ -45,7 +46,7 @@ type tuiServiceWorkspace struct {
 	registrationPath string
 	environment      map[string]string
 	runtimes         runtimeplugin.Set
-	loadSource       func(context.Context, string) (compose.Source, error)
+	runtimeBase      string
 	dependencies     func(map[string]string, io.Writer, func() (string, error), runtimeplugin.Set) (genDependencies, error)
 	render           func(context.Context, genInvocation, genDependencies) (generatedCompose, error)
 	draft            *tuiServiceDraft
@@ -56,12 +57,11 @@ type tuiServiceWorkspace struct {
 func defaultTUIServiceWorkspace(
 	environment map[string]string,
 	runtimes runtimeplugin.Set,
-	loadSource func(context.Context, string) (compose.Source, error),
 ) *tuiServiceWorkspace {
 	statePath, err := defaultStatePath(environment)
 	if err != nil {
 		return &tuiServiceWorkspace{
-			environment: environment, runtimes: runtimes, loadSource: loadSource,
+			environment: environment, runtimes: runtimes,
 			dependencies: defaultGenDependencies, render: renderGen,
 		}
 	}
@@ -70,7 +70,7 @@ func defaultTUIServiceWorkspace(
 		registrationPath: gitOpsRegistrationPath(statePath),
 		environment:      environment,
 		runtimes:         runtimes,
-		loadSource:       loadSource,
+		runtimeBase:      filepath.Dir(statePath),
 		dependencies:     defaultGenDependencies,
 		render:           renderGen,
 	}
@@ -102,6 +102,10 @@ func prepareTUIServiceDraft(
 	if err != nil {
 		return tuiServiceDraft{}, err
 	}
+	repositoryScope, err := gitOpsRepositoryScope(ctx, registration, repository)
+	if err != nil {
+		return tuiServiceDraft{}, err
+	}
 	arguments, err := tuiGenInvocation(input, repository)
 	if err != nil {
 		return tuiServiceDraft{}, err
@@ -121,7 +125,8 @@ func prepareTUIServiceDraft(
 	}
 
 	return tuiServiceDraft{
-		generated: generated, repository: repository, branch: registration.Branch, base: base,
+		generated: generated, repository: repository, repositoryScope: repositoryScope,
+		branch: registration.Branch, base: base,
 	}, nil
 }
 
@@ -369,19 +374,30 @@ func (workspace *tuiServiceWorkspace) commitWith(
 	if !verifyTUIStagedState(ctx, staged) {
 		return tui.ServiceCommitResult{}, compose.ErrInvalidSource
 	}
+	if !unsigned {
+		if err := validateGitProcessConfiguration(ctx, staged.draft.repository); err != nil {
+			return tui.ServiceCommitResult{}, err
+		}
+	}
 
 	commitErr := commit(ctx, staged, message, unsigned)
-	committed, unchanged := proveTUICommit(ctx, staged, !unsigned)
-	if committed {
+	proofCtx := context.WithoutCancel(ctx)
+	committedHead, unchanged := proveTUICommit(proofCtx, staged, !unsigned)
+	if committedHead != "" {
 		workspace.staged = nil
 		workspace.draft = nil
 		workspace.instructions = commitInstructions(staged.draft)
-		request, err := committedTUIRequest(ctx, workspace.loadSource, staged)
+		request, err := committedTUIRequest(
+			proofCtx, staged, committedHead, workspace.environment, workspace.runtimeBase,
+		)
 		if err != nil {
-			return tui.ServiceCommitResult{}, err
+			return tui.ServiceCommitResult{Committed: true, ValidationUnavailable: true}, nil
 		}
 
 		return tui.ServiceCommitResult{Request: request, Committed: true}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return tui.ServiceCommitResult{}, fmt.Errorf("commit cancelled: %w", err)
 	}
 	if !unsigned && unchanged {
 		return tui.ServiceCommitResult{NeedsUnsignedApproval: true}, nil
@@ -404,6 +420,9 @@ func commitTUIStaged(ctx context.Context, staged tuiStagedService, message strin
 			"commit", "--quiet", "--no-gpg-sign", "--no-verify", "-m", message,
 		)
 
+		return err
+	}
+	if err := validateGitProcessConfiguration(ctx, staged.draft.repository); err != nil {
 		return err
 	}
 	_, err := runGitWithUserConfig(
@@ -429,16 +448,19 @@ func verifyTUIStagedState(ctx context.Context, staged tuiStagedService) bool {
 	return err == nil && tree == staged.expectedTree
 }
 
-func proveTUICommit(ctx context.Context, staged tuiStagedService, requireSignature bool) (bool, bool) {
+func proveTUICommit(ctx context.Context, staged tuiStagedService, requireSignature bool) (string, bool) {
 	head, err := resolveGitObject(ctx, staged.draft.repository, "HEAD^{commit}")
 	if err != nil {
-		return false, false
+		return "", false
 	}
 	if head == staged.draft.base.head {
-		return false, verifyTUIStagedState(ctx, staged)
+		return "", verifyTUIStagedState(ctx, staged)
+	}
+	if !proveNewTUICommit(ctx, staged, head, requireSignature) {
+		return "", false
 	}
 
-	return proveNewTUICommit(ctx, staged, head, requireSignature), false
+	return head, false
 }
 
 func proveNewTUICommit(
@@ -485,18 +507,51 @@ func gitCommitHasSignature(ctx context.Context, repository, head string) bool {
 
 func committedTUIRequest(
 	ctx context.Context,
-	loadSource func(context.Context, string) (compose.Source, error),
 	staged tuiStagedService,
+	head string,
+	environment map[string]string,
+	runtimeBase string,
 ) (application.Request, error) {
-	if loadSource == nil {
+	entry := filepath.ToSlash(staged.draft.generated.path)
+	if !validGitObjectID(head) || !validGitObjectID(staged.expectedTree) ||
+		!staged.draft.repositoryScope.Valid() {
 		return application.Request{}, compose.ErrInvalidSource
 	}
-	source, err := loadSource(ctx, staged.draft.generated.absolutePath)
-	if err != nil || source.Repository == nil {
+	source, err := compose.CaptureRepositorySource(
+		staged.draft.repository,
+		entry,
+		environment,
+		func(name string) (compose.RepositoryFile, bool, error) {
+			return readCommittedGitFile(ctx, staged.draft.repository, staged.expectedTree, name)
+		},
+		func(name string) (compose.RepositoryPathSnapshot, error) {
+			return readCommittedGitPath(ctx, staged.draft.repository, staged.expectedTree, name)
+		},
+	)
+	if err != nil {
+		return application.Request{}, compose.ErrInvalidSource
+	}
+	after, err := cleanGitTree(ctx, staged.draft.repository)
+	if err != nil || after != (gitTreeState{head: head, tree: staged.expectedTree}) {
+		return application.Request{}, compose.ErrInvalidSource
+	}
+	source, err = compose.PinRepositoryRuntime(source, runtimeBase)
+	if err != nil {
+		return application.Request{}, compose.ErrInvalidSource
+	}
+	provenance, err := bindApplyRepositorySource(
+		staged.draft.repository,
+		staged.draft.generated.absolutePath,
+		staged.draft.repositoryScope,
+		source,
+	)
+	if err != nil {
 		return application.Request{}, compose.ErrInvalidSource
 	}
 
-	return application.Request{Source: source, Service: staged.draft.generated.service}, nil
+	return application.Request{
+		Source: source, Service: staged.draft.generated.service, Repository: provenance,
+	}, nil
 }
 
 func (workspace *tuiServiceWorkspace) Discard(ctx context.Context) error {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+
+	"github.com/IceCodeNew/maniud/internal/compose"
 )
 
 func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, error) {
@@ -120,6 +122,23 @@ func gitRemoteURL(ctx context.Context, root, remote string) (string, error) {
 	}
 
 	return value, nil
+}
+
+func gitOpsRepositoryScope(
+	ctx context.Context,
+	registration gitOpsRegistration,
+	root string,
+) (compose.RepositoryScope, error) {
+	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	if err != nil {
+		return compose.RepositoryScope{}, errGitOpsRepositoryInvalid
+	}
+	scope, err := compose.NewRepositoryScope(root, remote, registration.Branch)
+	if err != nil {
+		return compose.RepositoryScope{}, errGitOpsRepositoryInvalid
+	}
+
+	return scope, nil
 }
 
 func requireFastForward(ctx context.Context, root, ancestor, descendant string) error {

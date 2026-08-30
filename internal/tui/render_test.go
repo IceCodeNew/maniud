@@ -216,7 +216,7 @@ func TestRenderConditionalStatePaths(t *testing.T) {
 
 	state.page = reviewPage{}
 	state.busy = true
-	state.status = "Applying change"
+	state.applying = true
 	if lines := state.rail(); !strings.Contains(strings.Join(lines, "\n"), "Apply") {
 		t.Fatalf("applying rail = %q", lines)
 	}

@@ -8,7 +8,7 @@
 `gen` 可能先在标准错误中打印便于阅读的处理提示，再写入 JSON 对象。
 
 ```json
-{"code":"generation_failed","message":"generation failed","retryable":false}
+{"code":"apply_failed","message":"apply failed","retryable":false}
 ```
 
 | Code | 含义 | 处理方式 |
@@ -17,6 +17,7 @@
 | `operation_cancelled` | 系统信号或调用方取消了操作。 | 再次执行同一条命令，让 maniud 恢复未完成的操作。 |
 | `generation_failed` | `gen` 无法验证镜像、服务或输出文件。 | 按标准错误中的提示处理，本地缺少镜像时先拉取，再重新运行 `gen`。 |
 | `apply_failed` | `apply`、`daemon` 或 `doctor` 无法确认操作安全。 | 只有 `retryable` 为 true 时才直接重试，否则应保留当前状态并检查 `--debug` 结果。 |
+| `runtime_not_built` | 当前二进制文件没有编译选定的运行时。 | 安装或构建包含该运行时的 maniud 二进制文件。 |
 | `tui_unavailable` | `maniud tui` 缺少交互终端输入、终端输出或可用的 `TERM`。 | 改用交互终端运行；需要非交互验证时，运行 `maniud apply --dry-run <compose>`，结构化输出再加 `--json`。 |
 | `internal_error` | 二进制文件无法提供选定的命令服务。 | 核验已安装的发布版本，并在报告问题时附上程序版本和 JSON 结果。 |
 

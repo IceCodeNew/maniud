@@ -91,7 +91,7 @@ func executeProductionTUIWith(
 		return err
 	}
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
-	workspace := defaultTUIServiceWorkspace(environment, runtimes, dependencies.loadSource)
+	workspace := defaultTUIServiceWorkspace(environment, runtimes)
 
 	err = runtimes.Classify(run(
 		ctx, input, output, catalog, workspace, dependencies, tuiEvents, tuiOptions(environment),

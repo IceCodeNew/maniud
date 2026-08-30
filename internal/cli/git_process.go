@@ -101,7 +101,6 @@ func runGitProcess(
 
 func userConfiguredGitEnvironment() []string {
 	environment := []string{
-		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_TERMINAL_PROMPT=0",
 		"LANG=C",
@@ -155,6 +154,10 @@ func splitNullTerminated(value []byte) ([][]byte, bool) {
 func hostileGitConfigKey(value string) bool {
 	key := strings.ToLower(value)
 	if key == "include.path" || strings.HasPrefix(key, "includeif.") || strings.HasPrefix(key, "filter.") {
+		return true
+	}
+	if key == "gpg.program" || key == "gpg.format" || key == "gpg.ssh.defaultkeycommand" ||
+		strings.HasPrefix(key, "gpg.") && strings.HasSuffix(key, ".program") {
 		return true
 	}
 

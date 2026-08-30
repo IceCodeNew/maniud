@@ -107,6 +107,14 @@ maniud daemon start --interval 300
 
 The daemon checks the repository immediately and after each interval. To upgrade a service, change its fixed image version, review any changed preparation script, then commit and push the update.
 
+Each check writes one JSON line to standard output:
+
+```json
+{"commit":"0123456789ab","status":"partial","applied":1,"unchanged":2,"skipped":1,"failed":0,"deferred":0,"skipped_sources":[{"path":"services/legacy.yaml","code":"invalid_compose_source"}]}
+```
+
+`commit` is the checked commit's 12-character prefix. `status` is `converged`, `partial`, `awaiting_push`, `failed`, or `recovery_source_blocked`. The five counters report that cycle's results. `skipped_sources` identifies invalid direct children of `services/` and is omitted when no source was skipped.
+
 ## Notifications
 
 Copy the settings needed from [`env.example`](env.example) into the process environment. Bark and Telegram can be enabled at the same time. Notification delivery failures are reported separately and do not change an operation result.

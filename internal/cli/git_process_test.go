@@ -64,7 +64,7 @@ test "$GPG_TTY" = /dev/ttys001
 test "$SSH_AUTH_SOCK" = '`+home+`/agent.sock'
 test "${GIT_DIR+set}" != set
 test "${GIT_CONFIG_GLOBAL+set}" != set
-test "$GIT_CONFIG_NOSYSTEM" = 1
+test "${GIT_CONFIG_NOSYSTEM+set}" != set
 test "$GIT_TERMINAL_PROMPT" = 0
 printf 'signed\n'
 `)
@@ -125,6 +125,12 @@ func TestValidateGitProcessConfigurationRejectsExecutableConfig(t *testing.T) {
 		"include.path",
 		"includeIf.onbranch:main.path",
 		"filter.maniud.process",
+		"gpg.program",
+		"gpg.format",
+		"gpg.openpgp.program",
+		"gpg.ssh.program",
+		"gpg.ssh.defaultKeyCommand",
+		"gpg.x509.program",
 		"url.ext::command.insteadOf",
 		"url.ext::command.pushInsteadOf",
 	} {

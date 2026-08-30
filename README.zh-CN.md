@@ -107,6 +107,14 @@ maniud daemon start --interval 300
 
 daemon 会在启动时立即检查仓库，之后按设定间隔继续检查。升级服务时，修改固定镜像版本，检查有变化的准备脚本，再提交并推送改动。
 
+每轮检查都会向标准输出写入一行 JSON：
+
+```json
+{"commit":"0123456789ab","status":"partial","applied":1,"unchanged":2,"skipped":1,"failed":0,"deferred":0,"skipped_sources":[{"path":"services/legacy.yaml","code":"invalid_compose_source"}]}
+```
+
+`commit` 是本轮检查提交的 12 字符前缀。`status` 取值为 `converged`、`partial`、`awaiting_push`、`failed` 或 `recovery_source_blocked`。五个计数字段记录本轮结果。`skipped_sources` 只列出 `services/` 直属目录中未通过验证的来源；没有跳过项时，该字段不会出现在结果中。
+
 ## 通知
 
 从 [`env.example`](env.example) 复制需要的设置到进程环境。Bark 和 Telegram 可以同时启用。通知发送失败会单独报告，不会改变操作结果。

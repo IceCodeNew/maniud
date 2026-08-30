@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -89,16 +90,15 @@ func TestTUIWorkspaceCreatesProvenUnsignedCommit(t *testing.T) {
 
 	draft := newTUIWorkspaceDraft(t)
 	workspace := &tuiServiceWorkspace{
-		draft: &draft,
-		loadSource: func(context.Context, string) (compose.Source, error) {
-			return committedTUIComposeSource(t, draft.generated.content), nil
-		},
+		draft: &draft, runtimeBase: t.TempDir(),
 	}
 	if _, err := workspace.Stage(t.Context()); err != nil {
 		t.Fatalf("Stage() error = %v", err)
 	}
 	result, err := workspace.Commit(t.Context(), "Add api service", true)
-	if err != nil || !result.Committed || result.NeedsUnsignedApproval || result.Request.Service != applyServiceValue {
+	if err != nil || !result.Committed || result.NeedsUnsignedApproval || result.ValidationUnavailable ||
+		result.Request.Service != applyServiceValue || result.Request.Source.Repository == nil ||
+		!result.Request.Repository.ValidFor(result.Request.Source.Repository.Digest) {
 		t.Fatalf("Commit(unsigned) = %#v, %v", result, err)
 	}
 	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
@@ -117,6 +117,44 @@ func TestTUIWorkspaceCreatesProvenUnsignedCommit(t *testing.T) {
 	}
 	if instructions := workspace.Instructions(); !slices.Equal(instructions, wantInstructions) {
 		t.Fatalf("Instructions() = %q, want %q", instructions, wantInstructions)
+	}
+}
+
+//nolint:cyclop // Each assertion proves one step of the real signed-commit path.
+func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
+	home := t.TempDir()
+	key := filepath.Join(home, "signing-key")
+	//nolint:gosec // The executable and all options except the temporary output path are fixed.
+	command := exec.CommandContext(
+		t.Context(), "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen error = %v: %s", err, output)
+	}
+	configuration := []byte(
+		"[user]\n\tname = Maniud Tests\n\temail = maniud@example.invalid\n\tsigningKey = " + key +
+			"\n[gpg]\n\tformat = ssh\n",
+	)
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), configuration, 0o600); err != nil {
+		t.Fatalf("WriteFile(.gitconfig) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("SSH_AUTH_SOCK", "")
+
+	draft := newTUIWorkspaceDraft(t)
+	workspace := &tuiServiceWorkspace{draft: &draft, runtimeBase: t.TempDir()}
+	if _, err := workspace.Stage(t.Context()); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	result, err := workspace.Commit(t.Context(), "Add api service", false)
+	if err != nil || !result.Committed || result.NeedsUnsignedApproval || result.ValidationUnavailable ||
+		result.Request.Source.Repository == nil {
+		t.Fatalf("Commit(signed) = %#v, %v", result, err)
+	}
+	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
+	if err != nil || !gitCommitHasSignature(t.Context(), draft.repository, head) {
+		t.Fatalf("signed HEAD = %q, %v", head, err)
 	}
 }
 
@@ -152,6 +190,52 @@ func TestTUIWorkspaceOffersUnsignedFallbackOnlyForUnchangedStage(t *testing.T) {
 		compose.ErrInvalidSource,
 	) || result.NeedsUnsignedApproval {
 		t.Fatalf("Commit(drift) = %#v, %v", result, err)
+	}
+}
+
+func TestTUIWorkspaceRejectsRepositorySignerOverride(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	workspace := &tuiServiceWorkspace{draft: &draft, runtimeBase: t.TempDir()}
+	if _, err := workspace.Stage(t.Context()); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), draft.repository, "config", "--local", "gpg.ssh.program", "hostile-signer",
+	); err != nil {
+		t.Fatalf("git config error = %v", err)
+	}
+	result, err := workspace.Commit(t.Context(), "Add api service", false)
+	if !errors.Is(err, compose.ErrInvalidSource) || result.Committed || result.NeedsUnsignedApproval ||
+		workspace.staged == nil {
+		t.Fatalf("Commit(repository signer) = %#v, %v", result, err)
+	}
+}
+
+func TestTUIWorkspaceProvesCommitAfterCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	workspace := &tuiServiceWorkspace{draft: &draft, runtimeBase: t.TempDir()}
+	if _, err := workspace.Stage(t.Context()); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	result, err := workspace.commitWith(
+		ctx,
+		"Add api service",
+		true,
+		func(ctx context.Context, staged tuiStagedService, message string, unsigned bool) error {
+			commitErr := commitTUIStaged(ctx, staged, message, unsigned)
+			cancel()
+
+			return commitErr
+		},
+	)
+	if err != nil || ctx.Err() == nil || !result.Committed || result.ValidationUnavailable ||
+		result.Request.Source.Repository == nil {
+		t.Fatalf("Commit(cancelled after commit) = %#v, %v, context %v", result, err, ctx.Err())
 	}
 }
 
@@ -237,7 +321,7 @@ func TestTUIWorkspaceContainsPreviewPreparationFailures(t *testing.T) {
 	t.Parallel()
 
 	invalidEnvironment := map[string]string{homeKey: testRelativePath}
-	invalidWorkspace := defaultTUIServiceWorkspace(invalidEnvironment, testRuntimePlugins(t), nil)
+	invalidWorkspace := defaultTUIServiceWorkspace(invalidEnvironment, testRuntimePlugins(t))
 	if invalidWorkspace.registrationPath != "" || invalidWorkspace.render == nil {
 		t.Fatalf("invalid default workspace = %#v", invalidWorkspace)
 	}
@@ -361,8 +445,8 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 	}
 
 	staged := tuiStagedService{draft: draft, paths: []string{draft.generated.path}}
-	if committed, unchanged := proveTUICommit(t.Context(), staged, false); committed || unchanged {
-		t.Fatalf("proveTUICommit(invalid stage) = %t, %t", committed, unchanged)
+	if committed, unchanged := proveTUICommit(t.Context(), staged, false); committed != "" || unchanged {
+		t.Fatalf("proveTUICommit(invalid stage) = %q, %t", committed, unchanged)
 	}
 	if proveNewTUICommit(t.Context(), staged, draft.base.head, false) ||
 		matchesTUICommit(t.Context(), staged, draft.base.head, false) {
@@ -372,19 +456,10 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 		t.Fatal("unsigned fixture commit reported a signature")
 	}
 
-	if _, err := committedTUIRequest(t.Context(), nil, staged); !errors.Is(err, compose.ErrInvalidSource) {
-		t.Fatalf("committedTUIRequest(nil) error = %v", err)
-	}
-	for _, loadSource := range []func(context.Context, string) (compose.Source, error){
-		func(context.Context, string) (compose.Source, error) { return compose.Source{}, io.ErrClosedPipe },
-		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
-	} {
-		if _, err := committedTUIRequest(t.Context(), loadSource, staged); !errors.Is(
-			err,
-			compose.ErrInvalidSource,
-		) {
-			t.Fatalf("committedTUIRequest(invalid source) error = %v", err)
-		}
+	if _, err := committedTUIRequest(
+		t.Context(), staged, gitOpsTestCommit, nil, t.TempDir(),
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("committedTUIRequest(invalid source) error = %v", err)
 	}
 }
 
@@ -542,11 +617,9 @@ func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
 		if _, err := workspace.Stage(t.Context()); err != nil {
 			t.Fatalf("Stage() error = %v", err)
 		}
-		if _, err := workspace.Commit(t.Context(), "Add api service", true); !errors.Is(
-			err,
-			compose.ErrInvalidSource,
-		) {
-			t.Fatalf("Commit(missing source loader) error = %v", err)
+		result, err := workspace.Commit(t.Context(), "Add api service", true)
+		if err != nil || !result.Committed || !result.ValidationUnavailable {
+			t.Fatalf("Commit(missing runtime base) = %#v, %v", result, err)
 		}
 	})
 
@@ -639,8 +712,8 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	}
 	if committed, unchanged := proveTUICommit(t.Context(), tuiStagedService{draft: tuiServiceDraft{
 		repository: filepath.Join(draft.repository, testMissingName),
-	}}, false); committed || unchanged {
-		t.Fatalf("proveTUICommit(missing repository) = %t, %t", committed, unchanged)
+	}}, false); committed != "" || unchanged {
+		t.Fatalf("proveTUICommit(missing repository) = %q, %t", committed, unchanged)
 	}
 
 	draft.generated.preparationPath = ""
@@ -667,8 +740,10 @@ func TestTUIWorkspaceChecksPathsAndCommitProof(t *testing.T) {
 	if matchesTUICommit(t.Context(), staged, head, true) {
 		t.Fatal("matchesTUICommit(unsigned commit) succeeded with required signature")
 	}
-	if _, err := committedTUIRequest(t.Context(), nil, staged); !errors.Is(err, compose.ErrInvalidSource) {
-		t.Fatalf("committedTUIRequest(nil) error = %v", err)
+	if _, err := committedTUIRequest(
+		t.Context(), staged, head, nil, testRelativePath,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("committedTUIRequest(relative runtime base) error = %v", err)
 	}
 }
 
@@ -751,7 +826,7 @@ func newRegisteredTUIWorkspace(t *testing.T) (*tuiServiceWorkspace, string) {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)
 	}
 
-	return defaultTUIServiceWorkspace(environment, testRuntimePlugins(t), nil), repository
+	return defaultTUIServiceWorkspace(environment, testRuntimePlugins(t)), repository
 }
 
 func newTUIWorkspaceDraft(t *testing.T) tuiServiceDraft {
@@ -765,6 +840,10 @@ func newTUIWorkspaceDraft(t *testing.T) tuiServiceDraft {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
+	repositoryScope, err := compose.NewRepositoryScope(repository, repository, gitOpsTestBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
 	path := filepath.Join(gitOpsServicesDirectory, "api.yaml")
 	content := []byte("services:\n  api:\n    image: registry.example/team/api@sha256:" + tuiTestDigest + "\n")
 
@@ -774,8 +853,7 @@ func newTUIWorkspaceDraft(t *testing.T) tuiServiceDraft {
 			runtime: domain.RuntimeDocker, image: "registry.example/team/api@sha256:" + tuiTestDigest,
 			service: applyServiceValue,
 		},
-		repository: repository,
-		branch:     gitOpsTestBranch,
-		base:       base,
+		repository: repository, repositoryScope: repositoryScope,
+		branch: gitOpsTestBranch, base: base,
 	}
 }

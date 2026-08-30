@@ -218,7 +218,7 @@ func (state *model) rail() []string {
 	case confirmationPage:
 		current = 2
 	}
-	if state.busy && state.status == "Applying change" {
+	if state.busy && state.applying {
 		if _, reviewing := state.page.(reviewPage); reviewing {
 			current = 3
 		}
@@ -498,7 +498,7 @@ func (state *model) commitServiceBody(current commitServicePage, width int) []st
 	if current.editing {
 		message += state.symbol("▌", "_")
 	}
-	diff := terminaltext.Wrap(current.staged.Diff, max(width-detailsPadding, 1))
+	diff := stagedServiceDiffLines(current, width)
 	current.scroll = min(current.scroll, max(len(diff)-1, 0))
 	diff = diff[current.scroll:min(current.scroll+diffSummaryRows, len(diff))]
 	lines := make([]string, 0, commitBaseRows+len(diff))
@@ -520,11 +520,20 @@ func (state *model) commitServiceBody(current commitServicePage, width int) []st
 func (state *model) stagedDiffBody(current stagedDiffPage, width int) []string {
 	lines := make([]string, 0, stagedDiffBaseRows)
 	lines = append(lines, state.title("Staged diff"), "This page is read-only.", "")
-	lines = append(lines, terminaltext.Wrap(current.commit.staged.Diff, max(width-detailsPadding, 1))...)
+	lines = append(lines, stagedServiceDiffLines(current.commit, width)...)
 	lines = append(lines, "", state.muted("Up/Down Scroll   d/Esc Back"))
 	current.scroll = min(current.scroll, max(len(lines)-1, 0))
 
 	return lines[current.scroll:]
+}
+
+func stagedServiceDiffLines(current commitServicePage, width int) []string {
+	available := max(width-detailsPadding, 1)
+	if current.diffWidth == available && current.diffLines != nil {
+		return current.diffLines
+	}
+
+	return terminaltext.Wrap(current.staged.Diff, available)
 }
 
 func (state *model) unsignedCommitConfirmationBody(

@@ -109,10 +109,12 @@ type StagedService struct {
 }
 
 // ServiceCommitResult is one proven commit outcome or an explicit unsigned fallback request.
+// ValidationUnavailable means the commit succeeded but no immutable apply request could be prepared.
 type ServiceCommitResult struct {
 	Request               application.Request
 	NeedsUnsignedApproval bool
 	Committed             bool
+	ValidationUnavailable bool
 }
 
 // Target is one validated service that can enter the operation façade.

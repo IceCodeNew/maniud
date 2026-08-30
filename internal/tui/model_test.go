@@ -131,9 +131,17 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	state.handleKey(key("tab"))
 	deliver(t, state, state.handleKey(key("enter")))
 	commit, valid := state.page.(commitServicePage)
-	if !valid || commit.focus != confirmationBack || commit.message != "Add api service" {
+	if !valid || commit.focus != confirmationBack || commit.message != "Add api service" ||
+		commit.diffWidth != state.serviceDiffWidth() || len(commit.diffLines) == 0 {
 		t.Fatalf("commit review = %#v", state.page)
 	}
+	fullWidth := commit.diffWidth
+	state.resize(compactMinimum, compactMinHeight)
+	commit = commitServicePageValue(t, state)
+	if commit.diffWidth != state.serviceDiffWidth() || commit.diffWidth == fullWidth || len(commit.diffLines) == 0 {
+		t.Fatalf("resized commit diff = %#v", commit)
+	}
+	state.resize(defaultWidth, defaultHeight)
 
 	state.handleKey(key("e"))
 	state.handleKey(key("!"))
@@ -185,6 +193,44 @@ func TestModelRejectsCommittedPlanDrift(t *testing.T) {
 	if !errors.Is(state.err, errInvalidInput) || state.status != "Committed service changed during validation" ||
 		!slices.Equal(operations.recordedCalls(), []string{dryRunCall, snapshotCall, evidenceCall}) {
 		t.Fatalf("drift state = %#v, calls = %q", state, operations.recordedCalls())
+	}
+}
+
+func TestModelContainsPartialAndContradictoryCommitResults(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
+	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+
+	state.sequence++
+	state.busy = true
+	state.Update(serviceCommitResultMsg{
+		sequence: state.sequence,
+		commit:   commit,
+		result: ServiceCommitResult{
+			Committed: true, ValidationUnavailable: true,
+		},
+	})
+	home, valid := state.page.(homePage)
+	if !valid || home.catalog.State != CatalogUnavailable ||
+		state.status != "Commit created; validation is unavailable" ||
+		state.mutationOutcome != "Compose commit created" || state.err != nil {
+		t.Fatalf("partial commit result = %#v", state)
+	}
+
+	for _, result := range []ServiceCommitResult{
+		{Committed: true, NeedsUnsignedApproval: true},
+		{ValidationUnavailable: true},
+	} {
+		state.sequence++
+		state.busy = true
+		state.err = nil
+		state.Update(serviceCommitResultMsg{sequence: state.sequence, commit: commit, result: result})
+		if !errors.Is(state.err, errInvalidInput) || state.status != "Commit result could not be verified" {
+			t.Fatalf("contradictory commit result %#v = %#v", result, state)
+		}
 	}
 }
 
@@ -382,6 +428,9 @@ func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
 	operations.cancelObserved = make(chan struct{})
 	review := reviewPage{request: application.Request{Service: testService}, plan: planView{status: statusReady}}
 	command := state.startApply(review)
+	if command == nil || !state.applying {
+		t.Fatalf("started apply state = %#v", state)
+	}
 	result := make(chan tea.Msg, 1)
 	go func() { result <- command() }()
 
@@ -393,7 +442,7 @@ func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
 	}
 	<-operations.cancelObserved
 	state.Update(<-result)
-	if state.busy || state.status != "Cancelled" || state.err != nil {
+	if state.busy || state.applying || state.status != "Cancelled" || state.err != nil {
 		t.Fatalf("cancelled state = %#v", state)
 	}
 

@@ -83,15 +83,23 @@ func (catalog *tuiCatalog) OpenRegistered(ctx context.Context, id string) tui.Op
 	if state != tui.CatalogReady {
 		return tui.OpenResult{Blocker: tui.BlockerUnavailable}
 	}
+	root, _, err := inspectLocalGitOpsCheckout(ctx, registration.Repository, registration.Branch)
+	if err != nil {
+		return tui.OpenResult{Blocker: tui.BlockerUnavailable}
+	}
+	scope, err := gitOpsRepositoryScope(ctx, registration, root)
+	if err != nil {
+		return tui.OpenResult{Blocker: tui.BlockerUnavailable}
+	}
 
-	paths, err := listGitOpsServiceFiles(registration.Repository)
+	paths, err := listGitOpsServiceFiles(root)
 	if err != nil {
 		return tui.OpenResult{Blocker: tui.BlockerUnavailable}
 	}
 	for _, path := range paths {
-		candidate, valid := registeredTUIServiceID(registration.Repository, path)
+		candidate, valid := registeredTUIServiceID(root, path)
 		if valid && candidate == id {
-			result := catalog.openSource(ctx, path)
+			result := catalog.openRepositorySource(ctx, path, root, scope)
 			if result.Blocker != tui.BlockerNone {
 				return result
 			}
@@ -151,6 +159,15 @@ func (catalog *tuiCatalog) registration() (gitOpsRegistration, tui.CatalogState)
 }
 
 func (catalog *tuiCatalog) openSource(ctx context.Context, path string) tui.OpenResult {
+	return catalog.openRepositorySource(ctx, path, "", compose.RepositoryScope{})
+}
+
+func (catalog *tuiCatalog) openRepositorySource(
+	ctx context.Context,
+	path string,
+	root string,
+	scope compose.RepositoryScope,
+) tui.OpenResult {
 	if catalog.loadSource == nil {
 		return tui.OpenResult{Blocker: tui.BlockerUnavailable}
 	}
@@ -167,6 +184,13 @@ func (catalog *tuiCatalog) openSource(ctx context.Context, path string) tui.Open
 			Blocker: tui.BlockerInvalid, Diagnostic: tuiSourceDiagnostic(source, err),
 		}
 	}
+	provenance := compose.RepositoryProvenance{}
+	if scope.Valid() {
+		provenance, err = bindApplyRepositorySource(root, path, scope, source)
+		if err != nil {
+			return tui.OpenResult{Blocker: tui.BlockerInvalid}
+		}
+	}
 
 	names := project.ServiceNames()
 	targets := make([]tui.Target, 0, len(names))
@@ -179,7 +203,7 @@ func (catalog *tuiCatalog) openSource(ctx context.Context, path string) tui.Open
 			Project: project.Name(),
 			Service: name,
 			Runtime: runtimeKind.String(),
-			Request: application.Request{Source: source, Service: name},
+			Request: application.Request{Source: source, Service: name, Repository: provenance},
 		})
 	}
 	if len(targets) == 0 {
