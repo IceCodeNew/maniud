@@ -704,7 +704,7 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name: "create",
+			name: createOperation,
 			configure: func(operations *deploymentEntryOperations) {
 				operations.openFile = func(*os.Root, string, os.FileMode) (*os.File, error) {
 					return nil, errDeploymentCoverage
@@ -770,7 +770,7 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name:      "directory close",
+			name:      testDirectoryClose,
 			published: true,
 			configure: func(operations *deploymentEntryOperations) {
 				calls := 0
@@ -815,7 +815,7 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name:      "root close",
+			name:      testRootClose,
 			published: true,
 			configure: func(operations *deploymentEntryOperations) {
 				operations.closeRoot = func(root *os.Root) error {
