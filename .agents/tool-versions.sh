@@ -23,7 +23,7 @@ if [[ -f "$GO_MOD_PATH" ]]; then
 fi
 readonly GO_VERSION
 # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.*)$
-readonly GOLANGCI_LINT_VERSION='2.13.1'
+readonly GOLANGCI_LINT_VERSION='2.13.2'
 # renovate: datasource=github-releases depName=google/capslock
 readonly CAPSLOCK_VERSION='v0.3.2'
 # Capslock v0.3.2 depends on x/tools v0.43.0, which cannot build SSA for Go
