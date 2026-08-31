@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"net/http"
@@ -49,6 +50,21 @@ func TestProviderConfigurationBoundaries(t *testing.T) {
 				t.Fatalf("Validate() = %v, Origin() = %q", err, test.config.Origin())
 			}
 		})
+	}
+}
+
+func TestConfigIdentityTracksEffectiveSecretAndSource(t *testing.T) {
+	t.Parallel()
+	config := testConfig(ProviderOpenAI, "")
+	identity := config.Identity("current .env")
+	if len(identity) != sha256.Size*2 || identity != config.Identity("current .env") ||
+		strings.Contains(identity, config.APIKey) {
+		t.Fatalf("Identity() = %q", identity)
+	}
+	changedKey := config
+	changedKey.APIKey += "-changed"
+	if identity == changedKey.Identity("current .env") || identity == config.Identity("process environment") {
+		t.Fatal("Identity() did not track effective key or source")
 	}
 }
 

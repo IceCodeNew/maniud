@@ -2,9 +2,10 @@
 package llm
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -16,6 +17,8 @@ const (
 	maximumModelBytes    = 256
 	maximumEndpointBytes = 2048
 )
+
+var identityHMACKey = rand.Text() //nolint:gochecknoglobals // Identities must remain comparable for this process.
 
 // Provider identifies one supported provider route.
 type Provider string
@@ -88,13 +91,14 @@ func (config Config) Origin() string {
 // Identity returns an in-memory digest that invalidates network confirmation
 // when any effective provider setting or key changes.
 func (config Config) Identity(keySource string) string {
-	keyDigest := sha256.Sum256([]byte(config.APIKey))
 	payload := strings.Join([]string{
 		string(config.Provider), config.Model, config.Endpoint,
-		strconv.FormatInt(int64(config.Timeout), 10), keySource, hex.EncodeToString(keyDigest[:]),
+		strconv.FormatInt(int64(config.Timeout), 10), keySource, config.APIKey,
 	}, "\x00")
+	digest := hmac.New(sha256.New, []byte(identityHMACKey))
+	_, _ = digest.Write([]byte(payload))
 
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 // ParseTimeout validates the TUI's whole-second timeout value.
