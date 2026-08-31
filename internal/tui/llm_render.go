@@ -27,9 +27,10 @@ func (state *model) llmPageBody(width int) ([]string, bool) {
 }
 
 func (state *model) llmConfigurationBody(current llmConfigurationPage, width int) []string {
+	position, total := llmStepProgress(current.step, current.draft.Provider)
 	lines := []string{
 		state.title("Configure LLM assistance"),
-		fmt.Sprintf("Step %d of 5", current.step+1),
+		fmt.Sprintf("Step %d of %d", position, total),
 		"",
 	}
 	switch current.step {
@@ -80,6 +81,18 @@ func (state *model) llmConfigurationBody(current llmConfigurationPage, width int
 	}
 
 	return lines
+}
+
+func llmStepProgress(step int, provider string) (int, int) {
+	position, total := step+1, llmStepCount
+	if provider != llmProviderOpenAICompatible {
+		total--
+		if step > llmEndpointStep {
+			position--
+		}
+	}
+
+	return position, total
 }
 
 func llmProviderLabel(provider string) string {

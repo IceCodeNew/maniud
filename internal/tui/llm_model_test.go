@@ -701,6 +701,27 @@ func TestLLMRenderingAndCanonicalizationBoundaries(t *testing.T) {
 	}
 }
 
+func TestLLMStepProgressCountsOnlyVisibleSlides(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		provider string
+		step     int
+		position int
+		total    int
+	}{
+		{provider: llmProviderOpenAI, step: llmTimeoutStep, position: 3, total: 4},
+		{provider: llmProviderDeepSeek, step: llmAPIKeyStep, position: 4, total: 4},
+		{provider: llmProviderOpenAICompatible, step: llmEndpointStep, position: 3, total: 5},
+		{provider: llmProviderOpenAICompatible, step: llmAPIKeyStep, position: 5, total: 5},
+	} {
+		position, total := llmStepProgress(test.step, test.provider)
+		if position != test.position || total != test.total {
+			t.Fatalf("llmStepProgress(%q, %d) = %d/%d", test.provider, test.step, position, total)
+		}
+	}
+}
+
 //nolint:funlen // Each asynchronous save result has a distinct safe recovery destination.
 func TestLLMResultAndResizeInvalidationBoundaries(t *testing.T) {
 	t.Parallel()

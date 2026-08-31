@@ -179,7 +179,8 @@ func localModuleDefinitionTests() []struct {
 		{
 			name: "single and block", content: "module " + projectModule + "\ngo " + testGoDirective +
 				"\nreplace " +
-				projectModule + "/argv => ./argv\nreplace (\n" + projectModule +
+				projectModule + "/argv => ./argv\nreplace " + anyLLMModule + " => " + anyLLMFork + " " +
+				testAnyLLMVersion + "\nreplace (\n" + projectModule +
 				"/imageref => ./imageref\nexample.com/other => ./other\n" + notificationModule + " => " + notificationFork +
 				" " + testNotificationVersion + "\n)\n",
 		},
@@ -345,6 +346,14 @@ func TestInspectSourceModuleRejectsMissingVersions(t *testing.T) {
 		t.Fatalf("inspectSourceModule(incomplete) error = %v", err)
 	}
 	content := "module " + projectModule + "\ngo " + testGoDirective + "\n" +
+		"replace " + notificationModule + " => " + notificationFork + " " + testNotificationVersion + "\n"
+	if err := os.WriteFile(path, []byte(content), generatedFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectSourceModule(root); !errors.Is(err, errInvalidSource) {
+		t.Fatalf("inspectSourceModule(missing any-llm version) error = %v", err)
+	}
+	content = "module " + projectModule + "\ngo " + testGoDirective + "\n" +
 		"replace " + anyLLMModule + " => example.com/any-llm-go " + testAnyLLMVersion + "\n" +
 		"replace " + notificationModule + " => " + notificationFork + " " + testNotificationVersion + "\n"
 	if err := os.WriteFile(path, []byte(content), generatedFileMode); err != nil {

@@ -65,7 +65,15 @@ func (fixture *assistantOperationsFixture) Snapshot(
 	ctx context.Context,
 	request application.Request,
 ) (application.OperationSnapshot, error) {
-	return fixture.snapshot(ctx, request)
+	snapshot, err := fixture.snapshot(ctx, request)
+	if err == nil && snapshot.Plan.Source == (domain.Digest{}) {
+		snapshot.Plan.Source = domain.Hash(request.Source.Content)
+		if request.Source.Repository != nil {
+			snapshot.Plan.Source = request.Source.Repository.Digest
+		}
+	}
+
+	return snapshot, err
 }
 
 func (*assistantOperationsFixture) Evidence(application.OperationSnapshot) (application.EvidenceBundle, error) {

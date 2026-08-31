@@ -21,10 +21,14 @@ func TestRealProviderSmoke(t *testing.T) {
 	if provider == ProviderDeepSeek {
 		key = os.Getenv("DEEPSEEK_API_KEY")
 	}
+	endpoint := ""
+	if provider == ProviderOpenAICompatible {
+		endpoint = os.Getenv("OPENAI_BASE_URL")
+	}
 	config := Config{
 		Provider: provider,
 		Model:    os.Getenv("MANIUD_LLM_MODEL"),
-		Endpoint: os.Getenv("OPENAI_BASE_URL"),
+		Endpoint: endpoint,
 		Timeout:  60 * time.Second,
 		APIKey:   key,
 	}

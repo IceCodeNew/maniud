@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/IceCodeNew/maniud/containerconfig"
+	"github.com/IceCodeNew/maniud/internal/compose"
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const (
@@ -46,6 +48,7 @@ services:
 `)
 	snapshot := validEvidenceTestSnapshot()
 	snapshot.Plan.Platform = snapshot.Runtime.Platform
+	snapshot.Plan.Source = assistSourceDigest(request.Source)
 	projection, err := AssistProjectionFor(t.Context(), request, snapshot)
 	if err != nil {
 		t.Fatalf("AssistProjectionFor() error = %v", err)
@@ -79,6 +82,28 @@ func TestAssistProjectionRejectsMismatchedSnapshot(t *testing.T) {
 	snapshot.Plan.Service = "different"
 	if _, err := AssistProjectionFor(context.Background(), request, snapshot); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("AssistProjectionFor() error = %v", err)
+	}
+}
+
+func TestAssistProjectionRejectsStaleSourceWithStableNames(t *testing.T) {
+	t.Parallel()
+	request := newTestRequest(t)
+	snapshot := validEvidenceTestSnapshot()
+	snapshot.Plan.Source = assistSourceDigest(request.Source)
+	request.Source.Content = append(request.Source.Content, []byte("# changed source\n")...)
+
+	if _, err := AssistProjectionFor(t.Context(), request, snapshot); !errors.Is(err, ErrSnapshotStale) {
+		t.Fatalf("stale source error = %v", err)
+	}
+}
+
+func TestAssistSourceDigestUsesRepositorySnapshot(t *testing.T) {
+	t.Parallel()
+	want := domain.Hash([]byte("committed repository source"))
+	source := compose.Source{Repository: &compose.RepositorySnapshot{Digest: want}}
+
+	if got := assistSourceDigest(source); got != want {
+		t.Fatalf("assistSourceDigest() = %s, want %s", got, want)
 	}
 }
 
@@ -180,6 +205,7 @@ func TestAssistProjectionRejectsInvalidSourceAndStaleProject(t *testing.T) {
 		t.Fatal("invalid source succeeded")
 	}
 	request = newTestRequest(t)
+	snapshot.Plan.Source = assistSourceDigest(request.Source)
 	snapshot.Plan.Project = "different"
 	if _, err := AssistProjectionFor(t.Context(), request, snapshot); !errors.Is(err, ErrSnapshotStale) {
 		t.Fatalf("stale project error = %v", err)

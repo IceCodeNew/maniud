@@ -10,6 +10,7 @@ import (
 
 	"github.com/IceCodeNew/maniud/containerconfig"
 	"github.com/IceCodeNew/maniud/internal/compose"
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
 const (
@@ -58,7 +59,7 @@ func AssistProjectionFor(
 	if err != nil {
 		return empty, fmt.Errorf("load assist projection: %w", err)
 	}
-	if project.Name() != snapshot.Plan.Project {
+	if project.Name() != snapshot.Plan.Project || assistSourceDigest(request.Source) != snapshot.Plan.Source {
 		return empty, ErrSnapshotStale
 	}
 	spec, err := project.ServiceSpec(request.Service)
@@ -74,6 +75,14 @@ func AssistProjectionFor(
 	}
 
 	return finalizeAssistProjection(projection)
+}
+
+func assistSourceDigest(source compose.Source) domain.Digest {
+	if source.Repository != nil {
+		return source.Repository.Digest
+	}
+
+	return domain.Hash(source.Content)
 }
 
 func finalizeAssistProjection(projection AssistProjection) (AssistProjection, error) {

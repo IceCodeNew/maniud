@@ -177,7 +177,7 @@ func moduleSettingsFromFile(file *modfile.File) (moduleSettings, error) {
 		return moduleSettings{}, err
 	}
 	settings.notificationVersion = version
-	if settings.goDirective == "" || settings.notificationVersion == "" {
+	if settings.goDirective == "" || settings.anyLLMVersion == "" || settings.notificationVersion == "" {
 		return moduleSettings{}, fmt.Errorf(
 			"validate custom build source module versions: %w",
 			errInvalidSource,
