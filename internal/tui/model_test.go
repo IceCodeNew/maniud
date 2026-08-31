@@ -758,7 +758,9 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 		registrationConfirmationPage{}, addServicePage{}, servicePreviewPage{},
 		stageServiceConfirmationPage{}, commitServicePage{}, stagedDiffPage{},
 		unsignedCommitConfirmationPage{}, preparationRequiredPage{}, selectServicePage{},
-		reviewPage{}, detailsPage{}, confirmationPage{},
+		reviewPage{}, detailsPage{}, confirmationPage{}, llmConfigurationPage{},
+		llmSaveConfirmationPage{}, llmSaveOutcomeUnknownPage{}, llmQuestionPage{},
+		llmNetworkConfirmationPage{}, llmChoicesPage{},
 	}
 	for _, current := range pages {
 		current.isPage()
