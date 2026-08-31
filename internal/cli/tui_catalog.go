@@ -14,7 +14,7 @@ import (
 type tuiCatalog struct {
 	registrationPath string
 	loadSource       func(context.Context, string) (compose.Source, error)
-	environment      map[string]string
+	setupRepository  func(context.Context, string, tui.RepositorySetupRequest) error
 	suggestedPath    string
 }
 
@@ -35,7 +35,7 @@ func defaultTUICatalog(
 	return &tuiCatalog{
 		registrationPath: gitOpsRegistrationPath(statePath),
 		loadSource:       loadSource,
-		environment:      environment,
+		setupRepository:  setupTUIRepository,
 		suggestedPath:    suggestedPath,
 	}
 }
@@ -128,11 +128,18 @@ func (catalog *tuiCatalog) OpenPath(ctx context.Context, path string) tui.OpenRe
 	return result
 }
 
-func (catalog *tuiCatalog) Register(ctx context.Context, path string) tui.RegistrationResult {
-	err := executeGitOpsInit(ctx, gitOpsInitInvocation{repository: path, branch: defaultGitOpsBranch}, catalog.environment)
+func (catalog *tuiCatalog) Register(
+	ctx context.Context,
+	request tui.RepositorySetupRequest,
+) tui.RegistrationResult {
+	if catalog.setupRepository == nil || catalog.registrationPath == "" {
+		return tui.RegistrationResult{Blocker: tui.BlockerUnavailable}
+	}
+	err := catalog.setupRepository(ctx, catalog.registrationPath, request)
 	if err != nil {
 		blocker := tui.BlockerUnavailable
-		if errors.Is(err, errGitOpsRepositoryInvalid) || errors.Is(err, errGitOpsRegistrationExists) {
+		if errors.Is(err, errGitOpsRepositoryInvalid) || errors.Is(err, errGitOpsRegistrationExists) ||
+			errors.Is(err, compose.ErrInvalidSource) {
 			blocker = tui.BlockerInvalid
 		}
 

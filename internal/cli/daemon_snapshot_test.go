@@ -44,6 +44,13 @@ func TestReconcileGitOpsSnapshotSkipsInvalidSourceAndMutatesValidService(t *test
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
+	if err = os.WriteFile(
+		filepath.Join(root, gitOpsServicesDirectory, ".draft.yaml.swp"),
+		[]byte("services: {}\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
 	counts, err := reconcileGitOpsSnapshotResult(
 		t.Context(), root, state.head, io.Discard, dependencies,
 	)

@@ -104,8 +104,9 @@ func (state *model) fullView(width, height int) []string {
 	bodyWidth := width - fullBodyOffset
 	header := state.header(width)
 	rail := state.rail()
-	body := state.body(bodyWidth)
-	contentHeight := min(max(len(rail), len(body)), max(height-fullFrameRows, 0))
+	contentLimit := max(height-fullFrameRows, 0)
+	body := state.bodyWithin(bodyWidth, contentLimit)
+	contentHeight := min(max(len(rail), len(body)), contentLimit)
 	horizontal := strings.Repeat(state.symbol("─", "-"), width)
 	lines := make([]string, 0, fullFrameRows+contentHeight)
 	lines = append(lines, header, horizontal)
@@ -151,7 +152,7 @@ func (state *model) compactBody(width, height int) []string {
 
 		return append(summary, fixed...)
 	}
-	body := state.body(width)
+	body := state.bodyWithin(width, height)
 
 	return body[:min(len(body), height)]
 }
@@ -166,7 +167,7 @@ func (state *model) hardFloorView(width int) []string {
 	case sourceDiagnosticPage:
 		next = "Up/Down Scroll   Enter Back"
 	case addServicePage, servicePreviewPage, stageServiceConfirmationPage,
-		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage, preparationRequiredPage:
 		next = "Esc Back   q Quit"
 	case selectServicePage:
 		next = "Enter Review   Esc Back"
@@ -221,6 +222,8 @@ func (state *model) serviceWorkspaceLocation() (string, bool) {
 		return "Home / Add service / Preview", true
 	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
 		return "Home / Add service / Commit", true
+	case preparationRequiredPage:
+		return "Home / Add service / Prepare", true
 	default:
 		return "", false
 	}
@@ -256,6 +259,8 @@ func (state *model) serviceWorkspaceRail() ([]string, bool) {
 		current = 1
 	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
 		current = 2
+	case preparationRequiredPage:
+		current = 3
 	}
 	if current < 0 {
 		return nil, false
@@ -286,11 +291,15 @@ func (state *model) flowRail(label string, steps []string, current int) []string
 }
 
 func (state *model) body(width int) []string {
+	return state.bodyWithin(width, int(^uint(0)>>1))
+}
+
+func (state *model) bodyWithin(width, height int) []string {
 	lines, setupPage := state.auxiliaryPageBody(width)
 	if !setupPage {
 		switch current := state.page.(type) {
 		case homePage:
-			lines = state.homeBody(current, width)
+			lines = state.homeBodyWithin(current, width, max(height-state.bodyStateRows(), 0))
 		case openPathPage:
 			lines = state.openPathBody(current, width)
 		case sourceDiagnosticPage:
@@ -307,6 +316,10 @@ func (state *model) body(width int) []string {
 	}
 
 	return state.appendBodyState(lines)
+}
+
+func (state *model) bodyStateRows() int {
+	return len(state.appendBodyState(nil))
 }
 
 func (state *model) appendBodyState(lines []string) []string {
@@ -392,6 +405,8 @@ func (state *model) serviceWorkspacePageBody(width int) ([]string, bool) {
 		return state.stagedDiffBody(current, width), true
 	case unsignedCommitConfirmationPage:
 		return state.unsignedCommitConfirmationBody(current, width), true
+	case preparationRequiredPage:
+		return state.preparationRequiredBody(current, width), true
 	default:
 		return nil, false
 	}
@@ -409,6 +424,12 @@ func (state *model) registrationPageBody(width int) ([]string, bool) {
 }
 
 func (state *model) homeBody(current homePage, width int) []string {
+	return state.homeBodyWithin(current, width, int(^uint(0)>>1))
+}
+
+func (state *model) homeBodyWithin(current homePage, width, height int) []string {
+	const homeActionRows = 3
+
 	lines := []string{
 		state.title("Services"),
 		"Choose a registered service or open a committed Compose file.",
@@ -418,7 +439,15 @@ func (state *model) homeBody(current homePage, width int) []string {
 	if current.catalog.State != CatalogReady || len(current.catalog.Services) == 0 {
 		lines = append(lines, "  "+state.status)
 	}
-	for index, service := range current.catalog.Services {
+	fixedRows := len(lines) + homeActionRows
+	if registrationSetupIndex(current.catalog) >= 0 {
+		fixedRows++
+	}
+	start, end := visibleHomeServices(
+		len(current.catalog.Services), current.cursor, max(height-fixedRows, 0),
+	)
+	for index := start; index < end; index++ {
+		service := current.catalog.Services[index]
 		label := service.Location
 		if service.Blocker == BlockerNone {
 			label += "  " + service.Name + "  " + service.Runtime
@@ -438,6 +467,17 @@ func (state *model) homeBody(current homePage, width int) []string {
 	}
 
 	return lines
+}
+
+func visibleHomeServices(total, cursor, limit int) (int, int) {
+	limit = min(max(limit, 0), total)
+	if limit == total {
+		return 0, total
+	}
+	focus := min(max(cursor, 0), max(total-1, 0))
+	start := min(max(focus-limit+1, 0), total-limit)
+
+	return start, start + limit
 }
 
 func (state *model) addServiceBody(current addServicePage, width int) []string {
@@ -462,9 +502,17 @@ func (state *model) addServiceBody(current addServicePage, width int) []string {
 
 func (state *model) servicePreviewBody(current servicePreviewPage, width int) []string {
 	draft := current.draft
+	title := "Review parsed service"
+	description := "The pasted command was parsed, not run."
+	continueLabel := "Review file mutation"
+	if draft.Recovered {
+		title = "Previous draft found"
+		description = "The saved draft matches this service input. Continue to review and commit it."
+		continueLabel = "Continue saved draft"
+	}
 	lines := []string{
-		state.title("Review parsed service"),
-		"The pasted command was parsed, not run.",
+		state.title(title),
+		description,
 		"",
 		"Runtime   " + terminaltext.Middle(draft.Runtime, max(width-serviceFieldWidth, 1), "…"),
 		"Service   " + terminaltext.Middle(draft.Service, max(width-serviceFieldWidth, 1), "…"),
@@ -479,7 +527,7 @@ func (state *model) servicePreviewBody(current servicePreviewPage, width int) []
 	if draft.WarningCount > 0 {
 		lines = append(lines, fmt.Sprintf("Warnings  %d item(s) require review", draft.WarningCount))
 	}
-	lines = append(lines, "", state.choice(true, "Review file mutation", width), state.muted("Enter Continue   Esc Edit"))
+	lines = append(lines, "", state.choice(true, continueLabel, width), state.muted("Enter Continue   Esc Edit"))
 
 	return lines
 }
@@ -489,9 +537,15 @@ func (state *model) stageServiceConfirmationBody(
 	width int,
 ) []string {
 	draft := current.preview.draft
+	action := "Write and stage files"
+	description := "Write the generated files to the desired-state repository and stage them in Git?"
+	if draft.Recovered {
+		action = "Stage saved draft"
+		description = "Stage the saved draft files in Git?"
+	}
 	lines := []string{
 		state.title("Confirm file mutation"),
-		"Write the generated files to the desired-state repository and stage them in Git?",
+		description,
 		"No commit or runtime operation will run on this page.",
 		"",
 		"Compose   " + terminaltext.Middle(draft.ComposePath, max(width-serviceFieldWidth, 1), "…"),
@@ -504,7 +558,7 @@ func (state *model) stageServiceConfirmationBody(
 	lines = append(lines,
 		"",
 		state.choice(current.focus == confirmationBack, "Back", width),
-		state.choice(current.focus == confirmationApply, "Write and stage files", width),
+		state.choice(current.focus == confirmationApply, action, width),
 		"",
 		state.muted("Tab Change focus   Enter Select   Esc Back"),
 	)
@@ -529,7 +583,7 @@ func (state *model) commitServiceBody(current commitServicePage, width int) []st
 		state.muted("STAGED DIFF"),
 	)
 	lines = append(lines, diff...)
-	lines = append(lines, "", state.choice(current.focus == confirmationBack, "Back and discard staged files", width),
+	lines = append(lines, "", state.choice(current.focus == confirmationBack, "Back and save draft", width),
 		state.choice(current.focus == confirmationApply, "Create signed commit", width), "",
 		state.muted("e Edit message   d Full diff   Up/Down Scroll   Tab Focus   Enter Select"))
 
@@ -575,6 +629,20 @@ func (state *model) unsignedCommitConfirmationBody(
 	}
 }
 
+func (state *model) preparationRequiredBody(current preparationRequiredPage, width int) []string {
+	return []string{
+		state.title("Preparation required"),
+		"The Compose commit was created, but this service needs a host preparation step.",
+		"Apply is disabled for the rest of this TUI session.",
+		"",
+		"Service   " + terminaltext.Middle(current.draft.Service, max(width-serviceFieldWidth, 1), "…"),
+		"Prepare   " + terminaltext.Middle(current.draft.Preparation, max(width-serviceFieldWidth, 1), "…"),
+		"",
+		state.choice(true, "Exit to next steps", width),
+		state.muted("Enter/Esc Exit"),
+	}
+}
+
 func (state *model) openPathBody(current openPathPage, width int) []string {
 	value := current.value
 	if value == "" {
@@ -593,15 +661,46 @@ func (state *model) openPathBody(current openPathPage, width int) []string {
 }
 
 func (state *model) registrationBody(current registrationPage, width int) []string {
-	line := "Path  " + terminaltext.Middle(current.value, max(width-pathLabelWidth, 1), "…")
+	switch current.step {
+	case registrationModeStep:
+		return []string{
+			state.title("Set up repository"),
+			"Choose where the desired-state repository comes from.",
+			"",
+			state.choice(current.cursor == 0, "Create private GitHub repository", width),
+			state.choice(current.cursor == 1, "Use existing Git repository", width),
+			"",
+			state.muted("Up/Down Choose   Enter Continue   Esc Skip"),
+		}
+	case registrationRemoteStep:
+		title := "GitHub repository"
+		description := "Enter OWNER/REPOSITORY. Maniud will invoke gh and create a private repository."
+		label := "Name  "
+		if current.mode == RepositorySetupExisting {
+			title = "Existing Git repository"
+			description = "Enter an HTTPS or file remote. This path uses git and does not invoke gh."
+			label = "Remote  "
+		}
+		line := label + terminaltext.Middle(current.remote, max(width-terminaltext.Width(label), 1), "…")
 
-	return []string{
-		state.title("Set up repository"),
-		"Create or register the desired-state repository used by maniud.",
-		"",
-		line,
-		"",
-		state.muted("Enter Review   Esc Skip"),
+		return []string{
+			state.title(title), description, "", state.accent(line + state.symbol("▌", "_")), "",
+			state.muted("Enter Continue   Esc Back"),
+		}
+	case registrationCheckoutStep:
+		label := "Path  "
+		line := label + terminaltext.Middle(current.checkout, max(width-terminaltext.Width(label), 1), "…")
+
+		return []string{
+			state.title("Local checkout"),
+			"Choose an absolute path for the desired-state checkout.",
+			"",
+			state.accent(line + state.symbol("▌", "_")),
+			"",
+			state.muted("Enter Review   Esc Back"),
+		}
+	default:
+		return []string{state.title("Set up repository"), "", "Repository setup is unavailable"}
 	}
 }
 
@@ -609,16 +708,25 @@ func (state *model) registrationConfirmationBody(
 	current registrationConfirmationPage,
 	width int,
 ) []string {
-	path := terminaltext.Middle(current.registration.value, max(width-pathLabelWidth, 1), "…")
+	request := registrationRequest(current.registration)
+	remote := terminaltext.Middle(request.Remote, max(width-pathLabelWidth, 1), "…")
+	path := terminaltext.Middle(request.Checkout, max(width-pathLabelWidth, 1), "…")
+	description := "Create the private GitHub repository, clone it, and register the checkout?"
+	action := "Create and register"
+	if request.Mode == RepositorySetupExisting {
+		description = "Clone or reuse this Git repository and register the clean checkout?"
+		action = "Clone and register"
+	}
 
 	return []string{
 		state.title("Confirm repository setup"),
-		"Create a Git repository when the path is absent, or register a clean existing checkout.",
+		description,
 		"",
-		"Path  " + path,
+		"Source  " + remote,
+		"Path    " + path,
 		"",
 		state.choice(current.focus == confirmationBack, "Back", width),
-		state.choice(current.focus == confirmationApply, "Set up repository", width),
+		state.choice(current.focus == confirmationApply, action, width),
 		"",
 		state.muted("Tab Change focus   Enter Select   Esc Back"),
 	}
@@ -764,6 +872,8 @@ func (state *model) serviceWorkspaceFooter() (string, bool) {
 		return "e Edit   d Diff   Tab Focus   Enter Choose   q Quit", true
 	case stagedDiffPage:
 		return "Up/Down Scroll   d/Esc Back   q Quit", true
+	case preparationRequiredPage:
+		return "Enter/Esc Exit", true
 	default:
 		return "", false
 	}

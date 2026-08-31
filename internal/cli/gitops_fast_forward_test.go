@@ -12,6 +12,13 @@ func TestFastForwardGitOpsCheckoutSelectsRemoteDescendant(t *testing.T) {
 	t.Parallel()
 
 	checkout, producer, registered := initFastForwardGitOpsTestRepositories(t)
+	if err := os.Mkdir(filepath.Join(checkout, gitOpsServicesDirectory), 0o700); err != nil {
+		t.Fatalf("Mkdir(services) error = %v", err)
+	}
+	draftPath := filepath.Join(checkout, gitOpsServicesDirectory, ".worker.yaml.swp")
+	if err := os.WriteFile(draftPath, []byte("services: {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
 	writeGitOpsTestCommit(t, producer, "services/api.yaml", "services: {}\n", "add api")
 	if _, err := runGit(t.Context(), producer, "push", "--quiet", gitOpsRemoteName, "HEAD:"+gitOpsTestBranch); err != nil {
 		t.Fatalf("git push error = %v", err)
@@ -32,6 +39,10 @@ func TestFastForwardGitOpsCheckoutSelectsRemoteDescendant(t *testing.T) {
 	info, err := os.Stat(filepath.Join(checkout, "services", "api.yaml"))
 	if err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("selected service info = %#v, %v", info, err)
+	}
+	//nolint:gosec // draftPath is created inside the test's private temporary repository.
+	if content, readErr := os.ReadFile(draftPath); readErr != nil || string(content) != "services: {}\n" {
+		t.Fatalf("saved draft = %q, %v", content, readErr)
 	}
 }
 

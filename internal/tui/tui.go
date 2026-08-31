@@ -84,6 +84,23 @@ type CatalogSnapshot struct {
 	SuggestedRepository string
 }
 
+// RepositorySetupMode selects the owned onboarding path for a desired-state checkout.
+type RepositorySetupMode uint8
+
+const (
+	// RepositorySetupCreateGitHub creates a private repository through gh.
+	RepositorySetupCreateGitHub RepositorySetupMode = iota + 1
+	// RepositorySetupExisting clones or reuses an existing Git repository.
+	RepositorySetupExisting
+)
+
+// RepositorySetupRequest is one confirmed repository onboarding effect.
+type RepositorySetupRequest struct {
+	Mode     RepositorySetupMode
+	Remote   string
+	Checkout string
+}
+
 // RegistrationResult is one privacy-safe repository setup result.
 type RegistrationResult struct {
 	Snapshot CatalogSnapshot
@@ -98,6 +115,7 @@ type ServiceDraft struct {
 	ComposePath  string
 	Preparation  string
 	WarningCount int
+	Recovered    bool
 }
 
 // StagedService is the exact Git index projection awaiting commit.
@@ -110,11 +128,13 @@ type StagedService struct {
 
 // ServiceCommitResult is one proven commit outcome or an explicit unsigned fallback request.
 // ValidationUnavailable means the commit succeeded but no immutable apply request could be prepared.
+// PreparationRequired means the committed service cannot be validated or applied in this TUI session.
 type ServiceCommitResult struct {
 	Request               application.Request
 	NeedsUnsignedApproval bool
 	Committed             bool
 	ValidationUnavailable bool
+	PreparationRequired   bool
 }
 
 // Target is one validated service that can enter the operation façade.
@@ -137,7 +157,7 @@ type Catalog interface {
 	Snapshot(ctx context.Context) CatalogSnapshot
 	OpenRegistered(ctx context.Context, id string) OpenResult
 	OpenPath(ctx context.Context, path string) OpenResult
-	Register(ctx context.Context, path string) RegistrationResult
+	Register(ctx context.Context, request RepositorySetupRequest) RegistrationResult
 }
 
 // ServiceWorkspace owns the generated file and Git transaction behind Add service.
@@ -145,7 +165,7 @@ type ServiceWorkspace interface {
 	Preview(ctx context.Context, input string) (ServiceDraft, error)
 	Stage(ctx context.Context) (StagedService, error)
 	Commit(ctx context.Context, message string, unsigned bool) (ServiceCommitResult, error)
-	Discard(ctx context.Context) error
+	Suspend(ctx context.Context) error
 }
 
 // Operations is the mutation façade consumed by the TUI.
@@ -240,16 +260,16 @@ func Run(
 		tea.WithOutput(output),
 		tea.WithWindowSize(defaultWidth, defaultHeight),
 	).Run()
-	discardErr := workspace.Discard(context.WithoutCancel(ctx))
+	suspendErr := workspace.Suspend(context.WithoutCancel(ctx))
 	if err != nil {
-		return errors.Join(fmt.Errorf("run TUI: %w", err), discardErr)
+		return errors.Join(fmt.Errorf("run TUI: %w", err), suspendErr)
 	}
 	if state.err != nil {
-		return errors.Join(fmt.Errorf("run TUI operation: %w", state.err), discardErr)
+		return errors.Join(fmt.Errorf("run TUI operation: %w", state.err), suspendErr)
 	}
 	if err = ctx.Err(); err != nil {
-		return errors.Join(fmt.Errorf("run TUI context: %w", err), discardErr)
+		return errors.Join(fmt.Errorf("run TUI context: %w", err), suspendErr)
 	}
 
-	return errors.Join(discardErr)
+	return errors.Join(suspendErr)
 }

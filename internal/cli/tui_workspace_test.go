@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -24,6 +25,8 @@ const (
 	tuiTestServicePath   = "services/api.yaml"
 	tuiTestCommitMessage = "Add api service"
 	tuiCommand           = "maniud tui"
+	testOpenRootFailure  = "root"
+	testOpenDirFailure   = "directory"
 )
 
 func TestTUIGenInvocationAcceptsOneNonExecutingServiceSource(t *testing.T) {
@@ -60,7 +63,8 @@ func TestTUIGenInvocationRejectsIncompleteOrAmbiguousInput(t *testing.T) {
 	}
 }
 
-func TestTUIWorkspaceStagesActualDiffAndDiscardsOwnedFiles(t *testing.T) {
+//nolint:cyclop // Assertions jointly prove the draft, staging, and diff boundaries.
+func TestTUIWorkspaceStagesActualDiffAndSavesDraft(t *testing.T) {
 	t.Parallel()
 
 	draft := newTUIWorkspaceDraft(t)
@@ -73,15 +77,18 @@ func TestTUIWorkspaceStagesActualDiffAndDiscardsOwnedFiles(t *testing.T) {
 	if !verifyTUIStagedState(t.Context(), *workspace.staged) {
 		t.Fatal("Stage() did not preserve its proven index state")
 	}
-	if err = workspace.Discard(t.Context()); err != nil {
-		t.Fatalf("Discard() error = %v", err)
+	if err = workspace.Suspend(t.Context()); err != nil {
+		t.Fatalf("Suspend() error = %v", err)
 	}
-	state, err := cleanGitTree(t.Context(), draft.repository)
-	if err != nil || state != draft.base {
-		t.Fatalf("discarded state = %#v, %v", state, err)
+	if !verifyTUIBaseState(t.Context(), draft) || !verifyTUIDraftState(t.Context(), draft) {
+		t.Fatal("Suspend() did not restore the proven draft state")
 	}
 	if _, err = os.Stat(draft.generated.absolutePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("discarded file error = %v", err)
+		t.Fatalf("suspended final file error = %v", err)
+	}
+	draftContent, err := os.ReadFile(tuiDraftPath(draft.generated.absolutePath))
+	if err != nil || !bytes.Equal(draftContent, draft.generated.content) {
+		t.Fatalf("saved draft = %q, %v", draftContent, err)
 	}
 }
 
@@ -246,7 +253,7 @@ func TestTUIWorkspaceProvesCommitAfterCallerCancellation(t *testing.T) {
 	}
 }
 
-func TestTUIWorkspaceRefusesToDiscardChangedGeneratedFile(t *testing.T) {
+func TestTUIWorkspaceRefusesToSuspendChangedGeneratedFile(t *testing.T) {
 	t.Parallel()
 
 	draft := newTUIWorkspaceDraft(t)
@@ -258,8 +265,8 @@ func TestTUIWorkspaceRefusesToDiscardChangedGeneratedFile(t *testing.T) {
 	if err := os.WriteFile(draft.generated.absolutePath, changed, 0o600); err != nil {
 		t.Fatalf("WriteFile(changed) error = %v", err)
 	}
-	if err := workspace.Discard(t.Context()); !errors.Is(err, compose.ErrInvalidSource) {
-		t.Fatalf("Discard(changed) error = %v", err)
+	if err := workspace.Suspend(t.Context()); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("Suspend(changed) error = %v", err)
 	}
 	content, err := os.ReadFile(draft.generated.absolutePath)
 	if err != nil || !bytes.Equal(content, changed) {
@@ -267,7 +274,7 @@ func TestTUIWorkspaceRefusesToDiscardChangedGeneratedFile(t *testing.T) {
 	}
 }
 
-func TestRemoveGeneratedFileRequiresMatchingRegularFile(t *testing.T) {
+func TestRestoreTUIDraftFilesRequiresMatchingRegularFile(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -275,11 +282,12 @@ func TestRemoveGeneratedFileRequiresMatchingRegularFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("actual\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if err := removeGeneratedFile(generatedArtifact{path: path, content: []byte("expected\n")}); !errors.Is(
+	generated := generatedCompose{absolutePath: path, content: []byte("expected\n")}
+	if err := restoreTUIDraftFiles(generated); !errors.Is(
 		err,
 		compose.ErrInvalidSource,
 	) {
-		t.Fatalf("removeGeneratedFile(mismatch) error = %v", err)
+		t.Fatalf("restoreTUIDraftFiles(mismatch) error = %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("mismatched file was removed: %v", err)
@@ -321,6 +329,71 @@ func TestTUIWorkspacePreviewsRegisteredRepositoryWithoutExecutingInput(t *testin
 	workspace.staged = &tuiStagedService{}
 	if _, err = workspace.Preview(t.Context(), "docker://"+image); !errors.Is(err, runtimeargv.ErrInvalid) {
 		t.Fatalf("Preview(staged) error = %v", err)
+	}
+}
+
+func TestTUIWorkspaceKeepsIndependentServiceDrafts(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	other := draft
+	other.generated.service = "worker"
+	other.generated.path = "services/worker.yaml"
+	other.generated.absolutePath = filepath.Join(draft.repository, other.generated.path)
+	other.generated.content = bytes.ReplaceAll(draft.generated.content, []byte("api"), []byte("worker"))
+	if err := writeTUIDraftFiles(draft.generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles(api) error = %v", err)
+	}
+	if err := writeTUIDraftFiles(other.generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles(worker) error = %v", err)
+	}
+	if !verifyTUIDraftState(t.Context(), draft) || !verifyTUIDraftState(t.Context(), other) {
+		t.Fatal("independent service drafts were not both accepted")
+	}
+
+	workspace := &tuiServiceWorkspace{draft: &draft}
+	if _, err := workspace.Stage(t.Context()); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	if err := workspace.Suspend(t.Context()); err != nil {
+		t.Fatalf("Suspend() error = %v", err)
+	}
+	if !verifyTUIDraftState(t.Context(), draft) || !verifyTUIDraftState(t.Context(), other) {
+		t.Fatal("staging one service changed another saved draft")
+	}
+}
+
+func TestTUIWorkspaceRecoversInterruptedDraftPublication(t *testing.T) {
+	t.Parallel()
+
+	workspace, repository := newRegisteredTUIWorkspace(t)
+	image := "registry.example/team/api@sha256:" + tuiTestDigest
+	generated := generatedCompose{
+		content: []byte("services:\n  api:\n    image: " + image + "\n"),
+		path:    tuiTestServicePath, absolutePath: filepath.Join(repository, tuiTestServicePath),
+		runtime: domain.RuntimeDocker, image: image, service: applyServiceValue,
+	}
+	workspace.render = func(context.Context, genInvocation, genDependencies) (generatedCompose, error) {
+		return generated, nil
+	}
+	if _, err := workspace.Preview(t.Context(), "docker://"+image); err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if err := os.Link(tuiDraftPath(generated.absolutePath), generated.absolutePath); err != nil {
+		t.Fatalf("Link(partial publication) error = %v", err)
+	}
+
+	restarted := defaultTUIServiceWorkspace(workspace.environment, workspace.runtimes)
+	restarted.render = workspace.render
+	draft, err := restarted.Preview(t.Context(), "docker://"+image)
+	if err != nil || !draft.Recovered {
+		t.Fatalf("Preview(restarted) = %#v, %v", draft, err)
+	}
+	if _, err = os.Lstat(generated.absolutePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial final file still exists: %v", err)
+	}
+	if !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("recovered swap file does not match generated content")
 	}
 }
 
@@ -366,6 +439,176 @@ func TestTUIWorkspaceContainsPreviewPreparationFailures(t *testing.T) {
 		t.Context(), "docker://registry.example/team/api@sha256:"+tuiTestDigest,
 	); !errors.Is(err, runtimeargv.ErrInvalid) {
 		t.Fatalf("Preview(invalid generation) error = %v", err)
+	}
+}
+
+//nolint:funlen // Subtests exercise independent saved-draft containment boundaries.
+func TestTUIWorkspaceContainsSavedDraftPreparationFailures(t *testing.T) {
+	t.Parallel()
+
+	newWorkspace := func(t *testing.T) (*tuiServiceWorkspace, generatedCompose) {
+		t.Helper()
+		workspace, repository := newRegisteredTUIWorkspace(t)
+		image := "registry.example/team/api@sha256:" + tuiTestDigest
+		generated := generatedCompose{
+			content: []byte("services:\n  api:\n    image: " + image + "\n"),
+			path:    tuiTestServicePath, absolutePath: filepath.Join(repository, tuiTestServicePath),
+			runtime: domain.RuntimeDocker, image: image, service: applyServiceValue,
+		}
+		workspace.render = func(context.Context, genInvocation, genDependencies) (generatedCompose, error) {
+			return generated, nil
+		}
+
+		return workspace, generated
+	}
+
+	t.Run("foreign partial publication", func(t *testing.T) {
+		t.Parallel()
+		workspace, generated := newWorkspace(t)
+		if _, err := workspace.Preview(t.Context(), "docker://"+generated.image); err != nil {
+			t.Fatalf("Preview() error = %v", err)
+		}
+		if err := os.WriteFile(generated.absolutePath, generated.content, 0o600); err != nil {
+			t.Fatalf("WriteFile(final) error = %v", err)
+		}
+		restarted := defaultTUIServiceWorkspace(workspace.environment, workspace.runtimes)
+		restarted.render = workspace.render
+		if _, err := restarted.Preview(t.Context(), "docker://"+generated.image); !errors.Is(
+			err,
+			compose.ErrInvalidSource,
+		) {
+			t.Fatalf("Preview(foreign publication) error = %v", err)
+		}
+	})
+
+	t.Run("unrelated dirty file", func(t *testing.T) {
+		t.Parallel()
+		workspace, generated := newWorkspace(t)
+		if err := os.WriteFile(
+			filepath.Join(filepath.Dir(filepath.Dir(generated.absolutePath)), "dirty"),
+			[]byte("x"),
+			0o600,
+		); err != nil {
+			t.Fatalf("WriteFile(dirty) error = %v", err)
+		}
+		if _, err := workspace.Preview(t.Context(), "docker://"+generated.image); !errors.Is(
+			err,
+			compose.ErrInvalidSource,
+		) {
+			t.Fatalf("Preview(dirty) error = %v", err)
+		}
+	})
+
+	t.Run("mismatched saved draft", func(t *testing.T) {
+		t.Parallel()
+		workspace, generated := newWorkspace(t)
+		if err := os.WriteFile(tuiDraftPath(generated.absolutePath), []byte("foreign\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(draft) error = %v", err)
+		}
+		if _, err := workspace.Preview(t.Context(), "docker://"+generated.image); err == nil {
+			t.Fatal("Preview(mismatched draft) succeeded")
+		}
+	})
+}
+
+//nolint:paralleltest,cyclop,funlen // This test owns PATH while exercising independent Git proof failures.
+func TestTUIWorkspaceContainsGitProofFailures(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("LookPath(git) error = %v", err)
+	}
+
+	branchWorkspace, branchRepository := newRegisteredTUIWorkspace(t)
+	if _, err = runGit(t.Context(), branchRepository, "switch", "--quiet", "-c", "other"); err != nil {
+		t.Fatalf("git switch error = %v", err)
+	}
+	if _, _, _, err = registeredTUIWorkspace(
+		t.Context(), branchWorkspace.registrationPath,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("registeredTUIWorkspace(branch drift) error = %v", err)
+	}
+
+	workspace, repository := newRegisteredTUIWorkspace(t)
+	image := "registry.example/team/api@sha256:" + tuiTestDigest
+	generated := generatedCompose{
+		content: []byte("services:\n  api:\n    image: " + image + "\n"),
+		path:    tuiTestServicePath, absolutePath: filepath.Join(repository, tuiTestServicePath),
+		runtime: domain.RuntimeDocker, image: image, service: applyServiceValue,
+	}
+	workspace.render = func(context.Context, genInvocation, genDependencies) (generatedCompose, error) {
+		return generated, nil
+	}
+	gitPath := installFakeGit(t)
+	counter := filepath.Join(t.TempDir(), "status-count")
+	writeFakeGit(t, gitPath, fmt.Sprintf(`
+case "$*" in
+  *"status --porcelain=v1"*)
+    count=$(cat %q 2>/dev/null || printf 0)
+    count=$((count + 1))
+    printf '%%s\n' "$count" > %q
+    if test "$count" -eq 4; then exit 1; fi ;;
+esac
+exec %q "$@"
+`, counter, counter, realGit))
+	if _, err = workspace.Preview(t.Context(), "docker://"+image); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("Preview(final draft proof failure) error = %v", err)
+	}
+	if !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("failed final proof removed the saved draft")
+	}
+
+	writeFakeGit(t, gitPath, fmt.Sprintf(`
+case "$*" in
+  *"HEAD^{commit}"*) exit 1 ;;
+esac
+exec %q "$@"
+`, realGit))
+	if _, _, _, err = registeredTUIWorkspace(
+		t.Context(), workspace.registrationPath,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("registeredTUIWorkspace(HEAD failure) error = %v", err)
+	}
+	if _, err = gitTreeAllowingTUIDrafts(t.Context(), repository); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("gitTreeAllowingTUIDrafts(HEAD failure) error = %v", err)
+	}
+
+	writeFakeGit(t, gitPath, fmt.Sprintf(`
+case "$*" in
+  *"^{tree}"*) exit 1 ;;
+esac
+exec %q "$@"
+`, realGit))
+	if _, _, _, err = registeredTUIWorkspace(
+		t.Context(), workspace.registrationPath,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("registeredTUIWorkspace(tree failure) error = %v", err)
+	}
+	if _, err = gitTreeAllowingTUIDrafts(t.Context(), repository); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("gitTreeAllowingTUIDrafts(tree failure) error = %v", err)
+	}
+
+	writeFakeGit(t, gitPath, fmt.Sprintf(`
+case "$*" in
+  *"status --porcelain=v1"*) printf malformed; exit 0 ;;
+esac
+exec %q "$@"
+`, realGit))
+	if gitStatusMatchesWithTUIDrafts(t.Context(), repository, nil) {
+		t.Fatal("malformed Git status was accepted")
+	}
+	if err = recoverPartialTUIDraftPublication(
+		t.Context(), repository, generated,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("recoverPartialTUIDraftPublication(malformed status) error = %v", err)
 	}
 }
 
@@ -431,8 +674,8 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 	if _, err := workspace.Commit(t.Context(), "", false); !errors.Is(err, runtimeargv.ErrInvalid) {
 		t.Fatalf("Commit(no stage) error = %v", err)
 	}
-	if err := workspace.Discard(t.Context()); err != nil {
-		t.Fatalf("Discard(no stage) error = %v", err)
+	if err := workspace.Suspend(t.Context()); err != nil {
+		t.Fatalf("Suspend(no stage) error = %v", err)
 	}
 
 	if exactStagedPaths(t.Context(), draft.repository, []string{testMissingName}) {
@@ -471,43 +714,34 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // Assertions cover the owned-file removal contract and its resulting instructions.
-func TestTUIWorkspaceRemovesOwnedArtifactsAndBuildsInstructions(t *testing.T) {
+//nolint:cyclop // Assertions cover draft publication, restoration, and resulting instructions.
+func TestTUIWorkspaceMovesDraftArtifactsAndBuildsInstructions(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	missing := filepath.Join(root, testMissingName)
-	if err := removeGeneratedFile(generatedArtifact{path: missing, content: []byte("expected")}); err != nil {
-		t.Fatalf("removeGeneratedFile(missing) error = %v", err)
-	}
-	directory := filepath.Join(root, "directory")
-	if err := os.Mkdir(directory, 0o700); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
-	}
-	if err := removeGeneratedFile(generatedArtifact{path: directory}); !errors.Is(err, compose.ErrInvalidSource) {
-		t.Fatalf("removeGeneratedFile(directory) error = %v", err)
-	}
-	path := filepath.Join(root, "owned")
-	content := []byte("owned\n")
-	if err := os.WriteFile(path, content, 0o600); err != nil {
-		t.Fatalf("WriteFile(owned) error = %v", err)
-	}
-	if err := removeGeneratedFile(generatedArtifact{path: path, content: content}); err != nil {
-		t.Fatalf("removeGeneratedFile(owned) error = %v", err)
-	}
-
 	generated := generatedCompose{
-		absolutePath: path, content: content,
+		absolutePath: filepath.Join(root, "api.yaml"), content: []byte("services: {}\n"),
 		preparationAbsolute: filepath.Join(root, "prepare.sh"), preparation: []byte("prepare\n"),
 	}
-	if err := os.WriteFile(generated.absolutePath, generated.content, 0o600); err != nil {
-		t.Fatalf("WriteFile(compose) error = %v", err)
+	if err := writeTUIDraftFiles(generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles() error = %v", err)
 	}
-	if err := os.WriteFile(generated.preparationAbsolute, generated.preparation, 0o600); err != nil {
-		t.Fatalf("WriteFile(preparation) error = %v", err)
+	if !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("generatedTUIDraftFilesMatch() = false")
 	}
-	if err := removeGeneratedFiles(generated); err != nil {
-		t.Fatalf("removeGeneratedFiles() error = %v", err)
+	if err := promoteTUIDraftFiles(generated); err != nil {
+		t.Fatalf("promoteTUIDraftFiles() error = %v", err)
+	}
+	for _, artifact := range generatedTUIArtifacts(generated) {
+		if !generatedArtifactMatches(artifact) {
+			t.Fatalf("published artifact %q does not match", artifact.path)
+		}
+	}
+	if err := restoreTUIDraftFiles(generated); err != nil {
+		t.Fatalf("restoreTUIDraftFiles() error = %v", err)
+	}
+	if !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("restored draft files do not match")
 	}
 
 	draft := tuiServiceDraft{generated: generated, repository: root, branch: "feature's"}
@@ -622,10 +856,91 @@ func TestTUIWorkspaceContainsStableStageFailures(t *testing.T) {
 			t.Fatalf("stageTUIServiceWith(write-tree failure) error = %v", err)
 		}
 	})
+
+	t.Run("base branch drift", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		if _, err := runGit(t.Context(), draft.repository, "switch", "--quiet", "-c", "other"); err != nil {
+			t.Fatalf("git switch error = %v", err)
+		}
+		if _, _, _, err := stageTUIService(t.Context(), draft); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("stageTUIService(branch drift) error = %v", err)
+		}
+	})
+
+	t.Run("missing recovered draft", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		draft.recovered = true
+		if _, _, _, err := stageTUIService(t.Context(), draft); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("stageTUIService(missing recovered draft) error = %v", err)
+		}
+	})
+
+	t.Run("existing final", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		if err := writeTUIDraftFiles(draft.generated); err != nil {
+			t.Fatalf("writeTUIDraftFiles() error = %v", err)
+		}
+		if err := os.WriteFile(draft.generated.absolutePath, []byte("foreign\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(final) error = %v", err)
+		}
+		if _, _, _, err := stageTUIService(t.Context(), draft); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("stageTUIService(existing final) error = %v", err)
+		}
+	})
+
+	t.Run("final staged proof", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		if _, _, _, err := stageTUIServiceWith(
+			t.Context(), draft, stagedTUIDiff,
+			func(ctx context.Context, repository string) (string, error) {
+				tree, err := writeGitTree(ctx, repository)
+				if err != nil {
+					return "", fmt.Errorf("write test tree: %w", err)
+				}
+				if err = os.WriteFile(filepath.Join(repository, "extra"), []byte("x"), 0o600); err != nil {
+					return "", fmt.Errorf("write staged drift: %w", err)
+				}
+				_, err = runGit(ctx, repository, "add", "--", "extra")
+
+				return tree, err
+			},
+		); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("stageTUIServiceWith(final proof drift) error = %v", err)
+		}
+	})
+
+	t.Run("draft publication", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		if err := writeTUIDraftFiles(draft.generated); err != nil {
+			t.Fatalf("writeTUIDraftFiles() error = %v", err)
+		}
+		services := filepath.Dir(draft.generated.absolutePath)
+		if err := os.Chmod(services, 0o500); err != nil { //nolint:gosec // The test removes parent write access.
+			t.Fatalf("Chmod(services) error = %v", err)
+		}
+		workspace := &tuiServiceWorkspace{draft: &draft}
+		_, stageErr := workspace.Stage(t.Context())
+		if err := os.Chmod(services, 0o700); err != nil { //nolint:gosec // Restore private owner access.
+			t.Fatalf("restore services mode error = %v", err)
+		}
+		if stageErr == nil || workspace.draft == nil || !workspace.draft.recovered {
+			t.Fatalf("Stage(publication failure) error = %v, workspace = %#v", stageErr, workspace)
+		}
+	})
 }
 
-//nolint:cyclop,funlen // Subtests exercise independent Git commit and discard failure boundaries.
-func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
+//nolint:cyclop,funlen,gocognit // Subtests exercise independent Git commit and draft suspension failure boundaries.
+func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 	t.Parallel()
 
 	t.Run("committed source", func(t *testing.T) {
@@ -700,7 +1015,7 @@ func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("discard removal", func(t *testing.T) {
+	t.Run("draft restoration", func(t *testing.T) {
 		t.Parallel()
 
 		draft := newTUIWorkspaceDraft(t)
@@ -715,18 +1030,61 @@ func TestTUIWorkspaceContainsCommitAndDiscardBoundaryFailures(t *testing.T) {
 		t.Cleanup(func() {
 			_ = os.Chmod(services, 0o700) //nolint:gosec // Cleanup restores private owner access.
 		})
-		if err := workspace.Discard(t.Context()); err == nil {
-			t.Fatal("Discard(read-only generated file) succeeded")
+		if err := workspace.Suspend(t.Context()); err == nil {
+			t.Fatal("Suspend(read-only generated file) succeeded")
 		}
 	})
 
-	t.Run("discard checkout drift", func(t *testing.T) {
+	t.Run("suspend checkout drift", func(t *testing.T) {
 		t.Parallel()
 
 		draft := newTUIWorkspaceDraft(t)
 		writeGitOpsTestCommit(t, draft.repository, "drift", "drift\n", "advance checkout")
-		if err := discardTUIStaged(t.Context(), draft, nil); !errors.Is(err, compose.ErrInvalidSource) {
-			t.Fatalf("discardTUIStaged(checkout drift) error = %v", err)
+		if err := suspendTUIStaged(t.Context(), draft, nil); !errors.Is(err, compose.ErrInvalidSource) {
+			t.Fatalf("suspendTUIStaged(checkout drift) error = %v", err)
+		}
+	})
+
+	t.Run("preparation commit", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		draft.generated.preparationPath = "services/api.prepare.sh"
+		draft.generated.preparationAbsolute = filepath.Join(draft.repository, draft.generated.preparationPath)
+		draft.generated.preparation = []byte("#!/bin/sh\n")
+		workspace := &tuiServiceWorkspace{draft: &draft}
+		if _, err := workspace.Stage(t.Context()); err != nil {
+			t.Fatalf("Stage() error = %v", err)
+		}
+		result, err := workspace.Commit(t.Context(), tuiTestCommitMessage, true)
+		if err != nil || !result.Committed || !result.PreparationRequired || result.ValidationUnavailable {
+			t.Fatalf("Commit(preparation) = %#v, %v", result, err)
+		}
+	})
+
+	t.Run("commit branch drift", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		staged, head := committedTUIStagedFixture(t, draft)
+		if _, err := runGit(t.Context(), draft.repository, "switch", "--quiet", "-c", "other"); err != nil {
+			t.Fatalf("git switch error = %v", err)
+		}
+		if proveNewTUICommit(t.Context(), staged, head, tuiTestCommitMessage, false) {
+			t.Fatal("proveNewTUICommit(branch drift) succeeded")
+		}
+	})
+
+	t.Run("reset failure", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newTUIWorkspaceDraft(t)
+		lockPath := filepath.Join(draft.repository, ".git", "index.lock")
+		if err := os.WriteFile(lockPath, []byte("locked"), 0o600); err != nil {
+			t.Fatalf("WriteFile(index.lock) error = %v", err)
+		}
+		if err := suspendTUIStaged(t.Context(), draft, []string{draft.generated.path}); err == nil {
+			t.Fatal("suspendTUIStaged(index lock) succeeded")
 		}
 	})
 }
@@ -869,34 +1227,59 @@ func committedTUIStagedFixture(t *testing.T, draft tuiServiceDraft) (tuiStagedSe
 	return staged, head
 }
 
-//nolint:cyclop // Assertions exercise each generated-file identity and removal boundary.
-func TestTUIWorkspaceContainsGeneratedFileRemovalFailures(t *testing.T) {
+//nolint:cyclop,funlen // Assertions exercise each draft publication and file-identity boundary.
+func TestTUIWorkspaceContainsDraftPublicationFailures(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := removeGeneratedFile(generatedArtifact{
-		path: filepath.Join(root, testMissingName, "api.yaml"), content: []byte(applyServiceValue),
-	}); err == nil {
-		t.Fatal("removeGeneratedFile(missing parent) succeeded")
+	other := t.TempDir()
+	if err := moveTUIArtifact(filepath.Join(root, "draft"), filepath.Join(other, "final")); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifact(different directories) error = %v", err)
+	}
+	if err := moveTUIArtifact(
+		filepath.Join(root, testMissingName, "draft"),
+		filepath.Join(root, testMissingName, "final"),
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("moveTUIArtifact(missing parent) error = %v", err)
 	}
 
-	locked := filepath.Join(root, "locked")
-	if err := os.Mkdir(locked, 0o700); err != nil {
-		t.Fatalf("Mkdir(locked) error = %v", err)
+	generated := generatedCompose{
+		absolutePath: filepath.Join(root, "api.yaml"), content: []byte("services: {}\n"),
 	}
-	lockedPath := filepath.Join(locked, "api.yaml")
-	lockedContent := []byte("api\n")
-	if err := os.WriteFile(lockedPath, lockedContent, 0o600); err != nil {
-		t.Fatalf("WriteFile(locked) error = %v", err)
+	if err := writeTUIDraftFiles(generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles() error = %v", err)
 	}
-	if err := os.Chmod(locked, 0o500); err != nil { //nolint:gosec // The test removes parent write access.
-		t.Fatalf("Chmod(locked) error = %v", err)
+	if err := os.WriteFile(generated.absolutePath, generated.content, 0o600); err != nil {
+		t.Fatalf("WriteFile(final) error = %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.Chmod(locked, 0o700) //nolint:gosec // Cleanup restores private owner access.
-	})
-	if err := removeGeneratedFile(generatedArtifact{path: lockedPath, content: lockedContent}); err == nil {
-		t.Fatal("removeGeneratedFile(read-only parent) succeeded")
+	if err := promoteTUIDraftFiles(generated); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("promoteTUIDraftFiles(existing final) error = %v", err)
+	}
+	if err := restoreTUIDraftFiles(generated); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("restoreTUIDraftFiles(foreign final) error = %v", err)
+	}
+	if !generatedArtifactMatches(generatedArtifact{
+		path: generated.absolutePath, content: generated.content,
+	}) || !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("foreign final or saved draft was removed")
+	}
+	if err := os.Remove(generated.absolutePath); err != nil {
+		t.Fatalf("Remove(final) error = %v", err)
+	}
+	if err := os.Link(tuiDraftPath(generated.absolutePath), generated.absolutePath); err != nil {
+		t.Fatalf("Link(partial publication) error = %v", err)
+	}
+	if err := restoreTUIDraftFiles(generated); err != nil {
+		t.Fatalf("restoreTUIDraftFiles(partial publication) error = %v", err)
+	}
+	if !generatedTUIDraftFilesMatch(generated) {
+		t.Fatal("partial publication did not restore the draft")
+	}
+	if _, err := os.Lstat(generated.absolutePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial final still exists: %v", err)
 	}
 
 	first := filepath.Join(root, "first")
@@ -921,6 +1304,252 @@ func TestTUIWorkspaceContainsGeneratedFileRemovalFailures(t *testing.T) {
 	}
 	if matches, err := generatedFileMatches(opened, "second", info, []byte("same")); err != nil || matches {
 		t.Fatalf("generatedFileMatches(identity mismatch) = %t, %v", matches, err)
+	}
+}
+
+//nolint:cyclop,funlen // Assertions cover independent draft-name, status, and artifact validation boundaries.
+func TestTUIDraftValidationBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for name, want := range map[string]bool{
+		".api.yaml.swp":         true,
+		".api.prepare.sh.swp":   true,
+		"api.yaml.swp":          false,
+		".api.yaml":             false,
+		".swp":                  false,
+		".api.txt.swp":          false,
+		".api\n.prepare.sh.swp": false,
+	} {
+		if got := validTUIDraftName(name); got != want {
+			t.Fatalf("validTUIDraftName(%q) = %t, want %t", name, got, want)
+		}
+	}
+
+	root := t.TempDir()
+	if validTUIDraftStatusEntry(root, "M  services/.api.yaml.swp") ||
+		validTUIDraftStatusEntry(root, "?? nested/.api.yaml.swp") ||
+		validTUIDraftStatusEntry(root, "?? services/.api.yaml.swp") {
+		t.Fatal("invalid or missing draft status entry was accepted")
+	}
+	if err := os.Mkdir(filepath.Join(root, gitOpsServicesDirectory), 0o700); err != nil {
+		t.Fatalf("Mkdir(services) error = %v", err)
+	}
+	draftPath := filepath.Join(root, gitOpsServicesDirectory, ".api.yaml.swp")
+	if err := os.Symlink("missing", draftPath); err != nil {
+		t.Fatalf("Symlink(draft) error = %v", err)
+	}
+	if validTUIDraftStatusEntry(root, "?? services/.api.yaml.swp") {
+		t.Fatal("symlink draft status entry was accepted")
+	}
+
+	repository := initGitOpsTestRepository(t)
+	if gitStatusMatchesWithTUIDrafts(t.Context(), repository, []string{"?? duplicate", "?? duplicate"}) {
+		t.Fatal("duplicate expected status entries were accepted")
+	}
+	generated := generatedCompose{
+		absolutePath: filepath.Join(repository, "missing", "api.yaml"), content: []byte("services: {}\n"),
+	}
+	if generatedTUIDraftFilesMatch(generated) || generatedArtifactMatches(generatedArtifact{
+		path: generated.absolutePath, content: generated.content,
+	}) {
+		t.Fatal("missing generated draft artifact matched")
+	}
+	if err := promoteTUIDraftFiles(generated); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("promoteTUIDraftFiles(missing draft) error = %v", err)
+	}
+	if err := removeMatchingTUIArtifact(generatedArtifact{
+		path: generated.absolutePath, content: generated.content,
+	}); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("removeMatchingTUIArtifact(missing) error = %v", err)
+	}
+	if tuiArtifactsShareIdentity(
+		filepath.Join(repository, "missing", "first"),
+		filepath.Join(repository, "missing", "second"),
+	) {
+		t.Fatal("missing artifacts shared identity")
+	}
+	if tuiArtifactsShareIdentity(
+		filepath.Join(repository, "first", "artifact"),
+		filepath.Join(repository, "second", "artifact"),
+	) {
+		t.Fatal("artifacts in different directories shared identity")
+	}
+	if err := recoverPartialTUIDraftPublication(
+		t.Context(), filepath.Join(repository, "missing"), generated,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("recoverPartialTUIDraftPublication(missing repository) error = %v", err)
+	}
+}
+
+func TestRecoverPartialTUIDraftRejectsForeignPublication(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	if err := writeTUIDraftFiles(draft.generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles() error = %v", err)
+	}
+	if err := os.WriteFile(draft.generated.absolutePath, draft.generated.content, 0o600); err != nil {
+		t.Fatalf("WriteFile(final) error = %v", err)
+	}
+	if err := recoverPartialTUIDraftPublication(
+		t.Context(), draft.repository, draft.generated,
+	); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("recoverPartialTUIDraftPublication(foreign) error = %v", err)
+	}
+}
+
+func TestRecoverPartialTUIDraftIgnoresTrackedChanges(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	if err := os.WriteFile(
+		filepath.Join(draft.repository, "compose.yaml"),
+		[]byte("services:\n  changed: {}\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile(tracked change) error = %v", err)
+	}
+	if err := recoverPartialTUIDraftPublication(
+		t.Context(), draft.repository, draft.generated,
+	); err != nil {
+		t.Fatalf("recoverPartialTUIDraftPublication(tracked change) error = %v", err)
+	}
+}
+
+func TestRecoverPartialTUIDraftContainsRemovalFailure(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	if err := writeTUIDraftFiles(draft.generated); err != nil {
+		t.Fatalf("writeTUIDraftFiles() error = %v", err)
+	}
+	if err := os.Link(tuiDraftPath(draft.generated.absolutePath), draft.generated.absolutePath); err != nil {
+		t.Fatalf("Link(partial publication) error = %v", err)
+	}
+	services := filepath.Dir(draft.generated.absolutePath)
+	if err := os.Chmod(services, 0o500); err != nil { //nolint:gosec // The test removes parent write access.
+		t.Fatalf("Chmod(services) error = %v", err)
+	}
+	recoverErr := recoverPartialTUIDraftPublication(t.Context(), draft.repository, draft.generated)
+	if err := os.Chmod(services, 0o700); err != nil { //nolint:gosec // Restore private owner access.
+		t.Fatalf("restore services mode error = %v", err)
+	}
+	if recoverErr == nil {
+		t.Skip("filesystem allowed artifact removal in a read-only directory")
+	}
+	if !errors.Is(recoverErr, compose.ErrInvalidSource) {
+		t.Fatalf("recoverPartialTUIDraftPublication(read-only) error = %v", recoverErr)
+	}
+}
+
+func TestTUIDraftMoveContainsFilesystemFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*generatedComposeOperations)
+	}{
+		{testOpenRootFailure, func(operations *generatedComposeOperations) {
+			operations.openRoot = func(string) (*os.Root, error) { return nil, errGeneratedComposeTest }
+		}},
+		{testOpenDirFailure, func(operations *generatedComposeOperations) {
+			operations.openDirectory = func(*os.Root) (*os.File, error) { return nil, errGeneratedComposeTest }
+		}},
+		{"link", func(operations *generatedComposeOperations) {
+			operations.link = func(*os.Root, string, string) error { return errGeneratedComposeTest }
+		}},
+		{"first sync", func(operations *generatedComposeOperations) {
+			operations.syncDirectory = func(*os.File) error { return errGeneratedComposeTest }
+		}},
+		{"source remove", func(operations *generatedComposeOperations) {
+			operations.remove = func(*os.Root, string) error { return errGeneratedComposeTest }
+		}},
+		{"second sync", func(operations *generatedComposeOperations) {
+			calls := 0
+			operations.syncDirectory = func(file *os.File) error {
+				calls++
+				if calls == 2 {
+					return errGeneratedComposeTest
+				}
+
+				return file.Sync()
+			}
+		}},
+		{"directory close", func(operations *generatedComposeOperations) {
+			operations.closeFile = func(file *os.File) error {
+				return errors.Join(file.Close(), errGeneratedComposeTest)
+			}
+		}},
+		{"root close", func(operations *generatedComposeOperations) {
+			operations.closeRoot = func(root *os.Root) error {
+				return errors.Join(root.Close(), errGeneratedComposeTest)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			from := filepath.Join(root, "draft")
+			to := filepath.Join(root, "final")
+			if err := os.WriteFile(from, []byte("draft"), 0o600); err != nil {
+				t.Fatalf("WriteFile(draft) error = %v", err)
+			}
+			operations := generatedComposeDefaultOperations()
+			test.configure(&operations)
+			if err := moveTUIArtifactWithOperations(from, to, operations); err == nil {
+				t.Fatal("moveTUIArtifactWithOperations() succeeded")
+			}
+		})
+	}
+}
+
+func TestTUIDraftRemovalContainsFilesystemFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*generatedComposeOperations)
+	}{
+		{testOpenRootFailure, func(operations *generatedComposeOperations) {
+			operations.openRoot = func(string) (*os.Root, error) { return nil, errGeneratedComposeTest }
+		}},
+		{testOpenDirFailure, func(operations *generatedComposeOperations) {
+			operations.openDirectory = func(*os.Root) (*os.File, error) { return nil, errGeneratedComposeTest }
+		}},
+		{"remove", func(operations *generatedComposeOperations) {
+			operations.remove = func(*os.Root, string) error { return errGeneratedComposeTest }
+		}},
+		{"sync", func(operations *generatedComposeOperations) {
+			operations.syncDirectory = func(*os.File) error { return errGeneratedComposeTest }
+		}},
+		{"directory close", func(operations *generatedComposeOperations) {
+			operations.closeFile = func(file *os.File) error {
+				return errors.Join(file.Close(), errGeneratedComposeTest)
+			}
+		}},
+		{"root close", func(operations *generatedComposeOperations) {
+			operations.closeRoot = func(root *os.Root) error {
+				return errors.Join(root.Close(), errGeneratedComposeTest)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "draft")
+			content := []byte("draft")
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatalf("WriteFile(draft) error = %v", err)
+			}
+			operations := generatedComposeDefaultOperations()
+			test.configure(&operations)
+			if err := removeMatchingTUIArtifactWithOperations(generatedArtifact{
+				path: path, content: content,
+			}, operations); err == nil {
+				t.Fatal("removeMatchingTUIArtifactWithOperations() succeeded")
+			}
+		})
 	}
 }
 

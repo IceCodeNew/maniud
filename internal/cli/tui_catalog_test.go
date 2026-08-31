@@ -39,28 +39,48 @@ func TestDefaultTUICatalogReportsRegistrationState(t *testing.T) {
 	}
 }
 
-func TestTUICatalogRegistersDefaultRepository(t *testing.T) {
+func TestTUICatalogRegistersExistingRepository(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
-	repository := filepath.Join(home, "desired-state")
+	source := initGitOpsTestRepository(t)
+	remote := filepath.Join(home, "desired-state.git")
+	if _, err := runGit(t.Context(), home, "clone", "--quiet", "--bare", "--", source, remote); err != nil {
+		t.Fatalf("create bare remote: %v", err)
+	}
+	remoteURL := "file://" + remote
+	checkout := filepath.Join(home, "desired-state")
 	catalog := defaultTUICatalog(
 		map[string]string{homeKey: home, "XDG_STATE_HOME": filepath.Join(home, "state")},
 		func(context.Context, string) (compose.Source, error) { return compose.Source{}, nil },
 	)
-	result := catalog.Register(t.Context(), repository)
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupExisting, Remote: remoteURL, Checkout: checkout,
+	}
+	result := catalog.Register(t.Context(), request)
 	if result.Blocker != tui.BlockerNone || result.Snapshot.State != tui.CatalogReady {
 		t.Fatalf("Register() = %#v", result)
 	}
-	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(checkout, ".git")); err != nil {
 		t.Fatalf("registered repository: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(checkout, gitOpsServicesDirectory)); err != nil {
+		t.Fatalf("registered services directory: %v", err)
+	}
 
-	invalid := catalog.Register(t.Context(), testRelativePath)
+	invalid := catalog.Register(t.Context(), tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupExisting, Remote: remoteURL, Checkout: testRelativePath,
+	})
 	if invalid.Blocker != tui.BlockerInvalid {
 		t.Fatalf("Register(relative) = %#v", invalid)
 	}
-	unavailable := (&tuiCatalog{}).Register(t.Context(), filepath.Join(t.TempDir(), "desired-state"))
+	catalog.setupRepository = func(context.Context, string, tui.RepositorySetupRequest) error {
+		return errGeneratedComposeTest
+	}
+	if failed := catalog.Register(t.Context(), request); failed.Blocker != tui.BlockerUnavailable {
+		t.Fatalf("Register(repository failure) = %#v", failed)
+	}
+	unavailable := (&tuiCatalog{}).Register(t.Context(), request)
 	if unavailable.Blocker != tui.BlockerUnavailable {
 		t.Fatalf("Register(unavailable state) = %#v", unavailable)
 	}

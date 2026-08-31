@@ -50,7 +50,9 @@ func registeredGitOpsCheckout(
 		return "", "", errGitOpsRepositoryInvalid
 	}
 
-	root, before, err := inspectGitOpsCheckout(ctx, path, branch)
+	root, before, err := inspectGitOpsCheckoutWithState(
+		ctx, path, branch, gitTreeAllowingTUIDrafts,
+	)
 	if err != nil || requireFastForward(ctx, root, registeredCommit, before.head) != nil {
 		return "", "", errGitOpsRepositoryInvalid
 	}
@@ -102,7 +104,7 @@ func advanceGitOpsCheckout(ctx context.Context, root, before, upstream string) e
 		}
 	}
 
-	after, err := cleanGitTree(ctx, root)
+	after, err := gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || after.head != upstream {
 		return errGitOpsRepositoryInvalid
 	}

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -21,28 +22,31 @@ var (
 )
 
 const (
-	testProject         = "project"
-	testService         = "service"
-	testRuntime         = "docker"
-	testPlatform        = "linux/amd64"
-	testUpgrade         = "upgrade"
-	testAPI             = "api"
-	testWorker          = "worker"
-	dryRunCall          = "dry-run"
-	snapshotCall        = "snapshot"
-	evidenceCall        = "evidence"
-	registeredAPIID     = "services/api.yaml"
-	testServicePath     = "services/service.yaml"
-	testComposePath     = "compose.yaml"
-	testImage           = "image"
-	testRuntimeCommand  = "docker run image"
-	testRepositoryPath  = "/tmp/repository"
-	testApplyCompleted  = "Apply completed"
-	testBlockerMessage  = "Compose source did not pass validation"
-	testCommitMessage   = "message"
-	testStableStatus    = "stable"
-	testDiff            = "diff"
-	testPlaceholderPath = "path"
+	testProject          = "project"
+	testService          = "service"
+	testRuntime          = "docker"
+	testPlatform         = "linux/amd64"
+	testUpgrade          = "upgrade"
+	testAPI              = "api"
+	testWorker           = "worker"
+	dryRunCall           = "dry-run"
+	snapshotCall         = "snapshot"
+	evidenceCall         = "evidence"
+	registeredAPIID      = "services/api.yaml"
+	testServicePath      = "services/service.yaml"
+	testComposePath      = "compose.yaml"
+	testImage            = "image"
+	testRuntimeCommand   = "docker run image"
+	testRepositoryPath   = "/tmp/repository"
+	testGitHubRepository = "owner/desired-state"
+	testExistingRemote   = "https://example.com/desired-state.git"
+	testApplyCompleted   = "Apply completed"
+	testBlockerMessage   = "Compose source did not pass validation"
+	testCommitMessage    = "message"
+	testStableStatus     = "stable"
+	testDiff             = "diff"
+	testPlaceholderPath  = "path"
+	renderSyncTimeout    = 5 * time.Second
 )
 
 type catalogFixture struct {
@@ -77,8 +81,8 @@ func (fixture *catalogFixture) OpenPath(_ context.Context, path string) OpenResu
 	return fixture.pathResult
 }
 
-func (fixture *catalogFixture) Register(_ context.Context, path string) RegistrationResult {
-	fixture.record("register:" + path)
+func (fixture *catalogFixture) Register(_ context.Context, request RepositorySetupRequest) RegistrationResult {
+	fixture.record(fmt.Sprintf("register:%d:%s:%s", request.Mode, request.Remote, request.Checkout))
 
 	return fixture.registration
 }
@@ -123,7 +127,7 @@ type workspaceFixture struct {
 	previewErr error
 	stageErr   error
 	commitErr  error
-	discardErr error
+	suspendErr error
 	calls      []string
 }
 
@@ -149,10 +153,10 @@ func (fixture *workspaceFixture) Commit(
 	return fixture.commit, fixture.commitErr
 }
 
-func (fixture *workspaceFixture) Discard(context.Context) error {
-	fixture.record("discard")
+func (fixture *workspaceFixture) Suspend(context.Context) error {
+	fixture.record("suspend")
 
-	return fixture.discardErr
+	return fixture.suspendErr
 }
 
 func (fixture *workspaceFixture) record(call string) {
@@ -348,6 +352,17 @@ func homePageValue(t *testing.T, state *model) homePage {
 	return value
 }
 
+func registrationPageValue(t *testing.T, state *model) registrationPage {
+	t.Helper()
+
+	value, valid := state.page.(registrationPage)
+	if !valid {
+		t.Fatalf("page = %T, want registrationPage", state.page)
+	}
+
+	return value
+}
+
 func commitServicePageValue(t *testing.T, state *model) commitServicePage {
 	t.Helper()
 
@@ -476,7 +491,7 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Run(success) error = %v", err)
 	}
-	if !slices.Equal(workspace.recordedCalls(), []string{"discard"}) {
+	if !slices.Equal(workspace.recordedCalls(), []string{"suspend"}) {
 		t.Fatalf("Run(success) workspace calls = %q", workspace.recordedCalls())
 	}
 
@@ -555,7 +570,9 @@ func (reader *phasedReader) Read(destination []byte) (int, error) {
 		return 0, io.EOF
 	}
 	phase := &reader.phases[0]
-	<-phase.ready
+	if err := waitForRenderSignal(phase.ready); err != nil {
+		return 0, err
+	}
 	count := copy(destination, phase.content)
 	phase.content = phase.content[count:]
 	if len(phase.content) == 0 {
@@ -571,7 +588,9 @@ type signalReader struct {
 }
 
 func (reader *signalReader) Read(destination []byte) (int, error) {
-	<-reader.ready
+	if err := waitForRenderSignal(reader.ready); err != nil {
+		return 0, err
+	}
 	if len(reader.content) == 0 {
 		return 0, io.EOF
 	}
@@ -587,9 +606,20 @@ type failingReader struct {
 }
 
 func (reader failingReader) Read([]byte) (int, error) {
-	<-reader.ready
+	if err := waitForRenderSignal(reader.ready); err != nil {
+		return 0, err
+	}
 
 	return 0, errTestTUI
+}
+
+func waitForRenderSignal(ready <-chan struct{}) error {
+	select {
+	case <-ready:
+		return nil
+	case <-time.After(renderSyncTimeout):
+		return fmt.Errorf("wait for TUI render: %w", context.DeadlineExceeded)
+	}
 }
 
 func TestSignalReaderDrainsContent(t *testing.T) {

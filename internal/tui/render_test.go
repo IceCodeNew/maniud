@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -136,9 +137,14 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 				File: testServicePath, Reason: DiagnosticComposeValidation,
 			},
 		}, contains: "Compose validation failed"},
-		{page: registrationPage{value: "/home/user/maniud-desired-state"}, contains: "Set up repository"},
+		{page: newRegistrationPage("/home/user/maniud-desired-state"), contains: "Set up repository"},
+		{page: registrationPage{step: ^registrationStep(0)}, contains: "Repository setup is unavailable"},
 		{page: registrationConfirmationPage{
-			registration: registrationPage{value: "/home/user/maniud-desired-state"}, focus: confirmationBack,
+			registration: registrationPage{
+				step: registrationCheckoutStep, mode: RepositorySetupCreateGitHub,
+				remote: testGitHubRepository, checkout: "/home/user/maniud-desired-state",
+			},
+			focus: confirmationBack,
 		}, contains: "Confirm repository setup"},
 		{page: addServicePage{value: testRuntimeCommand}, contains: testAddServiceMessage},
 		{page: preview, contains: "parsed, not run"},
@@ -148,6 +154,9 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		{page: stagedDiffPage{commit: commit}, contains: "This page is read-only"},
 		{page: unsignedCommitConfirmationPage{commit: commit, focus: confirmationBack},
 			contains: "Confirm unsigned commit"},
+		{page: preparationRequiredPage{draft: ServiceDraft{
+			Service: testService, Preparation: "services/service.prepare.sh",
+		}}, contains: "Preparation required"},
 		{page: selectServicePage{choices: []serviceChoice{{
 			project: testProject, service: testService, runtime: testRuntime,
 		}}},
@@ -198,6 +207,29 @@ func TestRenderHelpersRespectCellsAndLayoutBoundaries(t *testing.T) {
 		diffWidth: 4, diffLines: cached,
 	}, 4+detailsPadding); !slices.Equal(lines, cached) {
 		t.Fatalf("stagedServiceDiffLines(cached) = %q", lines)
+	}
+	if start, end := visibleHomeServices(20, 15, 4); start != 12 || end != 16 {
+		t.Fatalf("visibleHomeServices() = %d:%d, want 12:16", start, end)
+	}
+}
+
+func TestHomeServiceWindowFollowsCursor(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	services := make([]Service, 20)
+	for index := range services {
+		services[index] = Service{
+			ID:       fmt.Sprintf("services/service-%02d.yaml", index),
+			Location: fmt.Sprintf("services/service-%02d.yaml", index),
+			Name:     fmt.Sprintf("service-%02d", index), Runtime: testRuntime,
+		}
+	}
+	state.page = homePage{catalog: CatalogSnapshot{State: CatalogReady, Services: services}, cursor: 15}
+	state.resize(compactMinimum, compactMinHeight)
+	content := state.View().Content
+	if !strings.Contains(content, "service-15") || strings.Contains(content, "service-00") {
+		t.Fatalf("cursor-following home window = %q", content)
 	}
 }
 
@@ -253,6 +285,7 @@ func TestRenderConditionalStatePaths(t *testing.T) {
 		commitServicePage{},
 		stagedDiffPage{},
 		unsignedCommitConfirmationPage{},
+		preparationRequiredPage{},
 		selectServicePage{},
 		reviewPage{},
 		detailsPage{},
@@ -292,6 +325,43 @@ func TestRenderConditionalStatePaths(t *testing.T) {
 		draft: ServiceDraft{ComposePath: testComposePath},
 	}}, defaultWidth); len(lines) == 0 {
 		t.Fatal("minimal stage confirmation body is empty")
+	}
+	recovered := servicePreviewPage{draft: ServiceDraft{
+		Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testComposePath,
+		Recovered: true,
+	}}
+	if lines := state.servicePreviewBody(recovered, defaultWidth); !strings.Contains(
+		strings.Join(lines, "\n"),
+		"Previous draft found",
+	) {
+		t.Fatalf("recovered service preview = %q", lines)
+	}
+	if lines := state.stageServiceConfirmationBody(stageServiceConfirmationPage{
+		preview: recovered,
+	}, defaultWidth); !strings.Contains(strings.Join(lines, "\n"), "Stage saved draft") {
+		t.Fatalf("recovered stage confirmation = %q", lines)
+	}
+	if lines := state.preparationRequiredBody(preparationRequiredPage{draft: ServiceDraft{
+		Service: testService, Preparation: "services/service.prepare.sh",
+	}}, defaultWidth); len(lines) == 0 {
+		t.Fatal("preparationRequiredBody() is empty")
+	}
+	for _, registration := range []registrationPage{
+		{step: registrationRemoteStep, mode: RepositorySetupCreateGitHub, remote: "owner/repository"},
+		{step: registrationRemoteStep, mode: RepositorySetupExisting, remote: "https://example.com/repository.git"},
+		{step: registrationCheckoutStep, checkout: testRepositoryPath},
+	} {
+		if lines := state.registrationBody(registration, defaultWidth); len(lines) == 0 {
+			t.Fatalf("registrationBody(%#v) is empty", registration)
+		}
+	}
+	if lines := state.registrationConfirmationBody(registrationConfirmationPage{
+		registration: registrationPage{
+			step: registrationCheckoutStep, mode: RepositorySetupExisting,
+			remote: "https://example.com/repository.git", checkout: testRepositoryPath,
+		},
+	}, defaultWidth); !strings.Contains(strings.Join(lines, "\n"), "Clone and register") {
+		t.Fatalf("existing registration confirmation = %q", lines)
 	}
 	if lines := state.detailsBody(detailsPage{review: reviewPage{plan: planView{
 		current: "current", proposed: "proposed",

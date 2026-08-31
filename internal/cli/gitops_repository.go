@@ -40,7 +40,16 @@ func proveGitOpsCheckoutWithFinalCheck(
 }
 
 func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
-	root, state, err := inspectLocalGitOpsCheckout(ctx, path, branch)
+	return inspectGitOpsCheckoutWithState(ctx, path, branch, cleanGitTree)
+}
+
+func inspectGitOpsCheckoutWithState(
+	ctx context.Context,
+	path string,
+	branch string,
+	stateFor func(context.Context, string) (gitTreeState, error),
+) (string, gitTreeState, error) {
+	root, state, err := inspectLocalGitOpsCheckoutWithState(ctx, path, branch, stateFor)
 	if err != nil {
 		return "", gitTreeState{}, err
 	}
@@ -54,13 +63,22 @@ func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gi
 }
 
 func inspectLocalGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
+	return inspectLocalGitOpsCheckoutWithState(ctx, path, branch, cleanGitTree)
+}
+
+func inspectLocalGitOpsCheckoutWithState(
+	ctx context.Context,
+	path string,
+	branch string,
+	stateFor func(context.Context, string) (gitTreeState, error),
+) (string, gitTreeState, error) {
 	var empty gitTreeState
 	root, err := resolveGitOpsRepository(ctx, path)
 	if err != nil {
 		return "", empty, err
 	}
 
-	state, err := cleanGitTree(ctx, root)
+	state, err := stateFor(ctx, root)
 	if err != nil {
 		return "", empty, errGitOpsRepositoryInvalid
 	}

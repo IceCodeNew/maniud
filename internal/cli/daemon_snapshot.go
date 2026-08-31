@@ -106,7 +106,7 @@ func recoverGitOpsSnapshotResult(
 }
 
 func verifyGitOpsCheckout(ctx context.Context, root string, selectedCommit string) error {
-	state, err := cleanGitTree(ctx, root)
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return errGitOpsRepositoryInvalid
 	}
@@ -279,7 +279,7 @@ func prepareGitOpsSnapshot(
 		}
 		services = append(services, prepared...)
 	}
-	state, err := cleanGitTree(ctx, root)
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return gitOpsPreparedSnapshot{}, errGitOpsRepositoryInvalid
 	}
@@ -303,7 +303,7 @@ func captureGitOpsSourcesWithLocation(
 	dependencies applyDependencies,
 	locationFor func(string, string, compose.RepositoryScope) (domain.Digest, error),
 ) ([]gitOpsSourceSnapshot, error) {
-	state, err := cleanGitTree(ctx, root)
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return nil, errGitOpsRepositoryInvalid
 	}
@@ -326,7 +326,7 @@ func captureGitOpsSourcesWithLocation(
 		sources = append(sources, source)
 	}
 
-	state, err = cleanGitTree(ctx, root)
+	state, err = gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return nil, errGitOpsRepositoryInvalid
 	}

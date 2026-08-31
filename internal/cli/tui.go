@@ -93,14 +93,12 @@ func executeProductionTUIWith(
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes)
 
-	err = runtimes.Classify(run(
+	runErr := runtimes.Classify(run(
 		ctx, input, output, catalog, workspace, dependencies, tuiEvents, tuiOptions(environment),
 	))
-	if err != nil {
-		return errors.Join(err)
-	}
+	instructionErr := writeTUIInstructions(output, workspace.Instructions())
 
-	return writeTUIInstructions(output, workspace.Instructions())
+	return errors.Join(runErr, instructionErr)
 }
 
 func writeTUIInstructions(output io.Writer, instructions []string) error {

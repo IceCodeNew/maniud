@@ -88,13 +88,19 @@ func (events *gitOpsSourceBlockerEvents) observe(
 }
 
 func (events *gitOpsSourceBlockerEvents) observeSources(current []gitOpsSkippedSource) {
+	activeSet := make(map[gitOpsSkippedSource]struct{}, len(events.activeSources))
+	for _, blocker := range events.activeSources {
+		activeSet[blocker] = struct{}{}
+	}
+	currentSet := make(map[gitOpsSkippedSource]struct{}, len(current))
 	for _, blocker := range current {
-		if !slices.Contains(events.activeSources, blocker) {
+		currentSet[blocker] = struct{}{}
+		if _, active := activeSet[blocker]; !active {
 			events.publish(application.EventGitOpsSourceBlocked, blocker)
 		}
 	}
 	for _, blocker := range events.activeSources {
-		if !slices.Contains(current, blocker) {
+		if _, active := currentSet[blocker]; !active {
 			events.publish(application.EventGitOpsSourceRecovered, blocker)
 		}
 	}

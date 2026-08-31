@@ -25,6 +25,7 @@ const (
 	maximumTUICommitMessage = 200
 	maximumTUIServiceInput  = 64 << 10
 	minimumRuntimeArguments = 3
+	tuiDraftSuffix          = ".swp"
 )
 
 type tuiServiceDraft struct {
@@ -33,6 +34,7 @@ type tuiServiceDraft struct {
 	repositoryScope compose.RepositoryScope
 	branch          string
 	base            gitTreeState
+	recovered       bool
 }
 
 type tuiStagedService struct {
@@ -123,11 +125,30 @@ func prepareTUIServiceDraft(
 	if err != nil || !validGeneratedTUIService(generated) {
 		return tuiServiceDraft{}, errors.Join(err, runtimeargv.ErrInvalid)
 	}
-
-	return tuiServiceDraft{
+	draft := tuiServiceDraft{
 		generated: generated, repository: repository, repositoryScope: repositoryScope,
 		branch: registration.Branch, base: base,
-	}, nil
+	}
+	if err = recoverPartialTUIDraftPublication(ctx, repository, generated); err != nil {
+		return tuiServiceDraft{}, err
+	}
+	state, err := gitTreeAllowingTUIDrafts(ctx, repository)
+	if err != nil || state != base {
+		return tuiServiceDraft{}, compose.ErrInvalidSource
+	}
+	if verifyTUIDraftState(ctx, draft) {
+		draft.recovered = true
+
+		return draft, nil
+	}
+	if err = writeTUIDraftFiles(generated); err != nil {
+		return tuiServiceDraft{}, err
+	}
+	if !verifyTUIDraftState(context.WithoutCancel(ctx), draft) {
+		return tuiServiceDraft{}, compose.ErrInvalidSource
+	}
+
+	return draft, nil
 }
 
 func registeredTUIWorkspace(
@@ -138,12 +159,24 @@ func registeredTUIWorkspace(
 	if err != nil {
 		return gitOpsRegistration{}, "", gitTreeState{}, compose.ErrInvalidSource
 	}
-	repository, base, err := inspectLocalGitOpsCheckout(ctx, registration.Repository, registration.Branch)
+	repository, err := resolveGitOpsRepository(ctx, registration.Repository)
 	if err != nil {
 		return gitOpsRegistration{}, "", gitTreeState{}, err
 	}
+	branch, err := currentGitBranch(ctx, repository)
+	if err != nil || branch != registration.Branch {
+		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
+	}
+	head, err := resolveGitObject(ctx, repository, "HEAD^{commit}")
+	if err != nil {
+		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
+	}
+	tree, err := resolveGitObject(ctx, repository, "HEAD^{tree}")
+	if err != nil {
+		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
+	}
 
-	return registration, repository, base, nil
+	return registration, repository, gitTreeState{head: head, tree: tree}, nil
 }
 
 func validGeneratedTUIService(generated generatedCompose) bool {
@@ -228,6 +261,7 @@ func publicServiceDraft(draft tuiServiceDraft) tui.ServiceDraft {
 		ComposePath:  filepath.ToSlash(draft.generated.path),
 		Preparation:  filepath.ToSlash(draft.generated.preparationPath),
 		WarningCount: len(draft.generated.warnings),
+		Recovered:    draft.recovered,
 	}
 }
 
@@ -241,6 +275,11 @@ func (workspace *tuiServiceWorkspace) Stage(ctx context.Context) (tui.StagedServ
 	draft := *workspace.draft
 	paths, diff, expectedTree, err := stageTUIService(ctx, draft)
 	if err != nil {
+		if verifyTUIDraftState(context.WithoutCancel(ctx), draft) {
+			draft.recovered = true
+			workspace.draft = &draft
+		}
+
 		return tui.StagedService{}, err
 	}
 	staged := tuiStagedService{draft: draft, paths: paths, expectedTree: expectedTree}
@@ -264,27 +303,42 @@ func stageTUIServiceWith(
 	diffStaged func(context.Context, string, []string) ([]byte, error),
 	writeTree func(context.Context, string) (string, error),
 ) ([]string, []byte, string, error) {
-	state, err := cleanGitTree(ctx, draft.repository)
-	if err != nil || state != draft.base {
+	if !verifyTUIBaseState(ctx, draft) {
 		return nil, nil, "", compose.ErrInvalidSource
 	}
-	if err = writeGeneratedFiles(draft.generated); err != nil {
-		return nil, nil, "", err
-	}
 	paths := generatedRelativePaths(draft.generated)
-	if _, err = runGit(ctx, draft.repository, append([]string{"add", "--"}, paths...)...); err != nil {
-		return nil, nil, "", errors.Join(err, discardTUIStaged(ctx, draft, paths))
+	if !verifyTUIDraftState(ctx, draft) {
+		if draft.recovered {
+			return nil, nil, "", compose.ErrInvalidSource
+		}
+		state, err := gitTreeAllowingTUIDrafts(ctx, draft.repository)
+		if err != nil || state != draft.base {
+			return nil, nil, "", compose.ErrInvalidSource
+		}
+		if err = writeTUIDraftFiles(draft.generated); err != nil {
+			return nil, nil, "", err
+		}
+	}
+	if err := promoteTUIDraftFiles(draft.generated); err != nil {
+		return nil, nil, "", errors.Join(err, restoreTUIDraftFiles(draft.generated))
+	}
+	if _, err := runGit(ctx, draft.repository, append([]string{"add", "--"}, paths...)...); err != nil {
+		return nil, nil, "", errors.Join(err, suspendTUIStaged(ctx, draft, paths))
 	}
 	if !exactStagedPaths(ctx, draft.repository, paths) {
-		return nil, nil, "", errors.Join(compose.ErrInvalidSource, discardTUIStaged(ctx, draft, paths))
+		return nil, nil, "", errors.Join(compose.ErrInvalidSource, suspendTUIStaged(ctx, draft, paths))
 	}
 	diff, err := diffStaged(ctx, draft.repository, paths)
 	if err != nil {
-		return nil, nil, "", errors.Join(err, discardTUIStaged(ctx, draft, paths))
+		return nil, nil, "", errors.Join(err, suspendTUIStaged(ctx, draft, paths))
 	}
 	expectedTree, err := writeTree(ctx, draft.repository)
 	if err != nil {
-		return nil, nil, "", errors.Join(err, discardTUIStaged(ctx, draft, paths))
+		return nil, nil, "", errors.Join(err, suspendTUIStaged(ctx, draft, paths))
+	}
+	staged := tuiStagedService{draft: draft, paths: paths, expectedTree: expectedTree}
+	if !verifyTUIStagedState(ctx, staged) {
+		return nil, nil, "", errors.Join(compose.ErrInvalidSource, suspendTUIStaged(ctx, draft, paths))
 	}
 
 	return paths, diff, expectedTree, nil
@@ -313,7 +367,54 @@ func generatedRelativePaths(generated generatedCompose) []string {
 	return paths
 }
 
-func exactStagedPaths(ctx context.Context, repository string, paths []string) bool {
+func verifyTUIBaseState(ctx context.Context, draft tuiServiceDraft) bool {
+	branch, err := currentGitBranch(ctx, draft.repository)
+	if err != nil || branch != draft.branch {
+		return false
+	}
+	head, err := resolveGitObject(ctx, draft.repository, "HEAD^{commit}")
+	if err != nil || head != draft.base.head {
+		return false
+	}
+	tree, err := resolveGitObject(ctx, draft.repository, "HEAD^{tree}")
+
+	return err == nil && tree == draft.base.tree
+}
+
+func verifyTUIDraftState(ctx context.Context, draft tuiServiceDraft) bool {
+	paths := generatedTUIDraftRelativePaths(draft.generated)
+
+	return verifyTUIBaseState(ctx, draft) &&
+		exactTUIDraftPaths(ctx, draft.repository, paths) &&
+		generatedTUIDraftFilesMatch(draft.generated)
+}
+
+func exactTUIDraftPaths(ctx context.Context, repository string, paths []string) bool {
+	expected := make([]string, len(paths))
+	for index, path := range paths {
+		expected[index] = "?? " + filepath.ToSlash(path)
+	}
+
+	return gitStatusMatchesWithTUIDrafts(ctx, repository, expected)
+}
+
+func gitTreeAllowingTUIDrafts(ctx context.Context, repository string) (gitTreeState, error) {
+	if !gitStatusMatchesWithTUIDrafts(ctx, repository, nil) {
+		return gitTreeState{}, compose.ErrInvalidSource
+	}
+	head, err := resolveGitObject(ctx, repository, "HEAD^{commit}")
+	if err != nil {
+		return gitTreeState{}, compose.ErrInvalidSource
+	}
+	tree, err := resolveGitObject(ctx, repository, head+"^{tree}")
+	if err != nil {
+		return gitTreeState{}, compose.ErrInvalidSource
+	}
+
+	return gitTreeState{head: head, tree: tree}, nil
+}
+
+func gitStatusMatchesWithTUIDrafts(ctx context.Context, repository string, expected []string) bool {
 	status, err := runGit(
 		ctx,
 		repository,
@@ -323,20 +424,320 @@ func exactStagedPaths(ctx context.Context, repository string, paths []string) bo
 		return false
 	}
 	entries, valid := splitNullTerminated(status)
-	if !valid || len(entries) != len(paths) {
+	if !valid {
 		return false
 	}
+	remaining := make(map[string]struct{}, len(expected))
+	for _, entry := range expected {
+		if _, duplicate := remaining[entry]; duplicate {
+			return false
+		}
+		remaining[entry] = struct{}{}
+	}
+	for _, raw := range entries {
+		entry := string(raw)
+		if _, found := remaining[entry]; found {
+			delete(remaining, entry)
+
+			continue
+		}
+		if !validTUIDraftStatusEntry(repository, entry) {
+			return false
+		}
+	}
+
+	return len(remaining) == 0
+}
+
+func validTUIDraftStatusEntry(repository, entry string) bool {
+	const untrackedPrefix = "?? "
+	path, found := strings.CutPrefix(entry, untrackedPrefix)
+	if !found {
+		return false
+	}
+	path = filepath.FromSlash(path)
+	if filepath.Dir(path) != gitOpsServicesDirectory || !validTUIDraftName(filepath.Base(path)) {
+		return false
+	}
+	root, err := os.OpenRoot(filepath.Join(repository, gitOpsServicesDirectory))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(filepath.Base(path))
+
+	return err == nil && info != nil && info.Mode().IsRegular()
+}
+
+func validTUIDraftName(name string) bool {
+	if !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, tuiDraftSuffix) {
+		return false
+	}
+	final := strings.TrimSuffix(strings.TrimPrefix(name, "."), tuiDraftSuffix)
+	service := strings.TrimSuffix(final, ".yaml")
+	if service == final {
+		service = strings.TrimSuffix(final, ".prepare.sh")
+	}
+
+	return service != "" && service != final && !strings.ContainsAny(service, "\x00\r\n")
+}
+
+func generatedTUIArtifacts(generated generatedCompose) []generatedArtifact {
+	artifacts := []generatedArtifact{{path: generated.absolutePath, content: generated.content}}
+	if generated.preparationAbsolute != "" {
+		artifacts = append(artifacts, generatedArtifact{
+			path: generated.preparationAbsolute, content: generated.preparation,
+		})
+	}
+
+	return artifacts
+}
+
+func generatedTUIDraftArtifacts(generated generatedCompose) []generatedArtifact {
+	artifacts := generatedTUIArtifacts(generated)
+	for index := range artifacts {
+		artifacts[index].path = tuiDraftPath(artifacts[index].path)
+	}
+
+	return artifacts
+}
+
+func generatedTUIDraftRelativePaths(generated generatedCompose) []string {
+	paths := generatedRelativePaths(generated)
+	for index := range paths {
+		paths[index] = tuiDraftPath(paths[index])
+	}
+	slices.Sort(paths)
+
+	return paths
+}
+
+func tuiDraftPath(path string) string {
+	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+tuiDraftSuffix)
+}
+
+func writeTUIDraftFiles(generated generatedCompose) error {
+	return writeGeneratedArtifacts(generatedTUIDraftArtifacts(generated), generatedComposeDefaultOperations())
+}
+
+func generatedTUIDraftFilesMatch(generated generatedCompose) bool {
+	artifacts := generatedTUIDraftArtifacts(generated)
+	for _, artifact := range artifacts {
+		if !generatedArtifactMatches(artifact) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func promoteTUIDraftFiles(generated generatedCompose) error {
+	for _, artifact := range generatedTUIArtifacts(generated) {
+		if !generatedArtifactMatches(generatedArtifact{
+			path: tuiDraftPath(artifact.path), content: artifact.content,
+		}) {
+			return compose.ErrInvalidSource
+		}
+		if err := moveTUIArtifact(tuiDraftPath(artifact.path), artifact.path); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func restoreTUIDraftFiles(generated generatedCompose) error {
+	var result error
+	for _, artifact := range generatedTUIArtifacts(generated) {
+		draft := generatedArtifact{path: tuiDraftPath(artifact.path), content: artifact.content}
+		finalMatches := generatedArtifactMatches(artifact)
+		draftMatches := generatedArtifactMatches(draft)
+		switch {
+		case draftMatches && !finalMatches:
+			continue
+		case !draftMatches && finalMatches:
+			result = errors.Join(result, moveTUIArtifact(artifact.path, draft.path))
+		case draftMatches && finalMatches:
+			if !tuiArtifactsShareIdentity(artifact.path, draft.path) {
+				result = errors.Join(result, compose.ErrInvalidSource)
+
+				continue
+			}
+			result = errors.Join(result, removeMatchingTUIArtifact(artifact))
+		default:
+			result = errors.Join(result, compose.ErrInvalidSource)
+		}
+	}
+
+	return result
+}
+
+func recoverPartialTUIDraftPublication(
+	ctx context.Context,
+	repository string,
+	generated generatedCompose,
+) error {
+	status, err := runGit(
+		ctx,
+		repository,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none",
+	)
+	if err != nil {
+		return compose.ErrInvalidSource
+	}
+	entries, valid := splitNullTerminated(status)
+	if !valid {
+		return compose.ErrInvalidSource
+	}
+	untracked := untrackedTUIPaths(entries)
+	for _, artifact := range generatedTUIArtifacts(generated) {
+		final, _ := filepath.Rel(repository, artifact.path)
+		final = filepath.ToSlash(final)
+		draft := filepath.ToSlash(tuiDraftPath(final))
+		_, finalUntracked := untracked[final]
+		_, draftUntracked := untracked[draft]
+		if !finalUntracked || !draftUntracked {
+			continue
+		}
+		if !generatedArtifactMatches(artifact) ||
+			!generatedArtifactMatches(generatedArtifact{path: tuiDraftPath(artifact.path), content: artifact.content}) ||
+			!tuiArtifactsShareIdentity(artifact.path, tuiDraftPath(artifact.path)) {
+			return compose.ErrInvalidSource
+		}
+		if err = removeMatchingTUIArtifact(artifact); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func untrackedTUIPaths(entries [][]byte) map[string]struct{} {
+	const untrackedPrefix = "?? "
+
+	untracked := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if path, found := strings.CutPrefix(string(entry), untrackedPrefix); found {
+			untracked[path] = struct{}{}
+		}
+	}
+
+	return untracked
+}
+
+func moveTUIArtifact(from, to string) (returnErr error) {
+	return moveTUIArtifactWithOperations(from, to, generatedComposeDefaultOperations())
+}
+
+func moveTUIArtifactWithOperations(
+	from string,
+	to string,
+	operations generatedComposeOperations,
+) (returnErr error) {
+	if filepath.Dir(from) != filepath.Dir(to) {
+		return compose.ErrInvalidSource
+	}
+	root, err := operations.openRoot(filepath.Dir(from))
+	if err != nil {
+		return compose.ErrInvalidSource
+	}
+	defer func() { returnErr = errors.Join(returnErr, operations.closeRoot(root)) }()
+	directory, err := operations.openDirectory(root)
+	if err != nil {
+		return compose.ErrInvalidSource
+	}
+	defer func() { returnErr = errors.Join(returnErr, operations.closeFile(directory)) }()
+	fromName := filepath.Base(from)
+	toName := filepath.Base(to)
+	if err = operations.link(root, fromName, toName); err != nil {
+		return compose.ErrInvalidSource
+	}
+	if err = operations.syncDirectory(directory); err != nil {
+		return errors.Join(compose.ErrInvalidSource, err)
+	}
+	if err = operations.remove(root, fromName); err != nil {
+		removeErr := operations.remove(root, toName)
+		syncErr := operations.syncDirectory(directory)
+
+		return errors.Join(compose.ErrInvalidSource, err, removeErr, syncErr)
+	}
+	if err = operations.syncDirectory(directory); err != nil {
+		return errors.Join(compose.ErrInvalidSource, err)
+	}
+
+	return nil
+}
+
+func removeMatchingTUIArtifact(artifact generatedArtifact) (returnErr error) {
+	return removeMatchingTUIArtifactWithOperations(artifact, generatedComposeDefaultOperations())
+}
+
+func removeMatchingTUIArtifactWithOperations(
+	artifact generatedArtifact,
+	operations generatedComposeOperations,
+) (returnErr error) {
+	if !generatedArtifactMatches(artifact) {
+		return compose.ErrInvalidSource
+	}
+	root, err := operations.openRoot(filepath.Dir(artifact.path))
+	if err != nil {
+		return compose.ErrInvalidSource
+	}
+	defer func() { returnErr = errors.Join(returnErr, operations.closeRoot(root)) }()
+	directory, err := operations.openDirectory(root)
+	if err != nil {
+		return compose.ErrInvalidSource
+	}
+	defer func() { returnErr = errors.Join(returnErr, operations.closeFile(directory)) }()
+	if err := operations.remove(root, filepath.Base(artifact.path)); err != nil {
+		return compose.ErrInvalidSource
+	}
+	if err := operations.syncDirectory(directory); err != nil {
+		return errors.Join(compose.ErrInvalidSource, err)
+	}
+
+	return nil
+}
+
+func tuiArtifactsShareIdentity(first, second string) bool {
+	if filepath.Dir(first) != filepath.Dir(second) {
+		return false
+	}
+	root, err := os.OpenRoot(filepath.Dir(first))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	firstInfo, firstErr := root.Lstat(filepath.Base(first))
+	secondInfo, secondErr := root.Lstat(filepath.Base(second))
+
+	return firstErr == nil && secondErr == nil && firstInfo != nil && secondInfo != nil && firstInfo.Mode().IsRegular() &&
+		secondInfo.Mode().IsRegular() && os.SameFile(firstInfo, secondInfo)
+}
+
+func generatedArtifactMatches(artifact generatedArtifact) bool {
+	root, err := os.OpenRoot(filepath.Dir(artifact.path))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(artifact.path)
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	matched, err := generatedFileMatches(root, name, info, artifact.content)
+
+	return err == nil && matched
+}
+
+func exactStagedPaths(ctx context.Context, repository string, paths []string) bool {
 	expected := make([]string, len(paths))
 	for index, path := range paths {
 		expected[index] = "A  " + filepath.ToSlash(path)
 	}
-	actual := make([]string, len(entries))
-	for index, entry := range entries {
-		actual[index] = string(entry)
-	}
-	slices.Sort(actual)
 
-	return slices.Equal(actual, expected)
+	return gitStatusMatchesWithTUIDrafts(ctx, repository, expected)
 }
 
 func writeGitTree(ctx context.Context, repository string) (string, error) {
@@ -399,6 +800,9 @@ func (workspace *tuiServiceWorkspace) settleCommit(
 		workspace.staged = nil
 		workspace.draft = nil
 		workspace.instructions = commitInstructions(staged.draft)
+		if staged.draft.generated.preparationAbsolute != "" {
+			return tui.ServiceCommitResult{Committed: true, PreparationRequired: true}, nil
+		}
 		request, requestErr := committedTUIRequest(
 			proofCtx, staged, committedHead, workspace.environment, workspace.runtimeBase,
 		)
@@ -451,8 +855,7 @@ func validTUICommitMessage(message string) bool {
 }
 
 func verifyTUIStagedState(ctx context.Context, staged tuiStagedService) bool {
-	head, err := resolveGitObject(ctx, staged.draft.repository, "HEAD^{commit}")
-	if err != nil || head != staged.draft.base.head ||
+	if !verifyTUIBaseState(ctx, staged.draft) ||
 		!exactStagedPaths(ctx, staged.draft.repository, staged.paths) {
 		return false
 	}
@@ -491,7 +894,11 @@ func proveNewTUICommit(
 	if !matchesTUICommit(ctx, staged, head, message, requireSignature) {
 		return false
 	}
-	state, err := cleanGitTree(ctx, staged.draft.repository)
+	branch, err := currentGitBranch(ctx, staged.draft.repository)
+	if err != nil || branch != staged.draft.branch {
+		return false
+	}
+	state, err := gitTreeAllowingTUIDrafts(ctx, staged.draft.repository)
 
 	return err == nil && state.head == head && state.tree == staged.expectedTree
 }
@@ -544,7 +951,7 @@ func committedTUIRequest(
 ) (application.Request, error) {
 	entry := filepath.ToSlash(staged.draft.generated.path)
 	if !validGitObjectID(head) || !validGitObjectID(staged.expectedTree) ||
-		!staged.draft.repositoryScope.Valid() {
+		!staged.draft.repositoryScope.Valid() || !onTUIBranch(ctx, staged.draft) {
 		return application.Request{}, compose.ErrInvalidSource
 	}
 	source, err := compose.CaptureRepositorySource(
@@ -561,8 +968,9 @@ func committedTUIRequest(
 	if err != nil {
 		return application.Request{}, compose.ErrInvalidSource
 	}
-	after, err := cleanGitTree(ctx, staged.draft.repository)
-	if err != nil || after != (gitTreeState{head: head, tree: staged.expectedTree}) {
+	after, err := gitTreeAllowingTUIDrafts(ctx, staged.draft.repository)
+	if err != nil || after != (gitTreeState{head: head, tree: staged.expectedTree}) ||
+		!onTUIBranch(ctx, staged.draft) {
 		return application.Request{}, compose.ErrInvalidSource
 	}
 	source, err = compose.PinRepositoryRuntime(source, runtimeBase)
@@ -584,7 +992,13 @@ func committedTUIRequest(
 	}, nil
 }
 
-func (workspace *tuiServiceWorkspace) Discard(ctx context.Context) error {
+func onTUIBranch(ctx context.Context, draft tuiServiceDraft) bool {
+	branch, err := currentGitBranch(ctx, draft.repository)
+
+	return err == nil && branch == draft.branch
+}
+
+func (workspace *tuiServiceWorkspace) Suspend(ctx context.Context) error {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 
@@ -595,66 +1009,39 @@ func (workspace *tuiServiceWorkspace) Discard(ctx context.Context) error {
 	if !verifyTUIStagedState(ctx, staged) {
 		return compose.ErrInvalidSource
 	}
-	if err := discardTUIStaged(ctx, staged.draft, staged.paths); err != nil {
+	if err := suspendTUIStaged(ctx, staged.draft, staged.paths); err != nil {
 		return err
 	}
+	staged.draft.recovered = true
+	workspace.draft = &staged.draft
 	workspace.staged = nil
 
 	return nil
 }
 
-func discardTUIStaged(
+func suspendTUIStaged(
 	ctx context.Context,
 	draft tuiServiceDraft,
 	paths []string,
 ) error {
-	_, resetErr := runGit(ctx, draft.repository, append([]string{"reset", "--quiet", "HEAD", "--"}, paths...)...)
-	removeErr := removeGeneratedFiles(draft.generated)
-	state, stateErr := cleanGitTree(ctx, draft.repository)
-	if stateErr == nil && state != draft.base {
-		stateErr = compose.ErrInvalidSource
-	}
-
-	return errors.Join(resetErr, removeErr, stateErr)
-}
-
-func removeGeneratedFiles(generated generatedCompose) error {
-	artifacts := []generatedArtifact{{path: generated.absolutePath, content: generated.content}}
-	if generated.preparationAbsolute != "" {
-		artifacts = append(artifacts, generatedArtifact{
-			path: generated.preparationAbsolute, content: generated.preparation,
-		})
-	}
-	var result error
-	for _, artifact := range artifacts {
-		result = errors.Join(result, removeGeneratedFile(artifact))
-	}
-
-	return result
-}
-
-func removeGeneratedFile(artifact generatedArtifact) (returnErr error) {
-	root, err := os.OpenRoot(filepath.Dir(artifact.path))
-	if err != nil {
-		return fmt.Errorf("open generated file directory: %w", err)
-	}
-	defer func() {
-		returnErr = errors.Join(returnErr, root.Close())
-	}()
-	name := filepath.Base(artifact.path)
-	info, err := root.Lstat(name)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil || !info.Mode().IsRegular() {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
+	defer cancel()
+	if !verifyTUIBaseState(cleanupCtx, draft) {
 		return compose.ErrInvalidSource
 	}
-	matched, err := generatedFileMatches(root, name, info, artifact.content)
-	if err != nil || !matched {
-		return errors.Join(err, compose.ErrInvalidSource)
+	_, resetErr := runGit(
+		cleanupCtx,
+		draft.repository,
+		append([]string{"reset", "--quiet", "HEAD", "--"}, paths...)...,
+	)
+	if resetErr != nil {
+		return resetErr
 	}
-	if err := root.Remove(name); err != nil {
-		return fmt.Errorf("remove generated file: %w", err)
+	if err := restoreTUIDraftFiles(draft.generated); err != nil {
+		return err
+	}
+	if !verifyTUIDraftState(cleanupCtx, draft) {
+		return compose.ErrInvalidSource
 	}
 
 	return nil

@@ -36,6 +36,7 @@ const (
 	maximumStagedDiffBytes    = 1 << 20
 	maximumStagedDiffLines    = 16 << 10
 	homeActionCount           = 2
+	repositorySetupModeCount  = 2
 )
 
 func displayLimits() terminaltext.Limits {
@@ -59,6 +60,7 @@ type openResultMsg struct {
 
 type registrationResultMsg struct {
 	sequence uint64
+	request  RepositorySetupRequest
 	result   RegistrationResult
 }
 
@@ -83,7 +85,7 @@ type serviceCommitResultMsg struct {
 	err      error
 }
 
-type serviceDiscardResultMsg struct {
+type serviceSuspendResultMsg struct {
 	sequence uint64
 	preview  servicePreviewPage
 	err      error
@@ -131,8 +133,21 @@ type sourceDiagnosticPage struct {
 
 func (sourceDiagnosticPage) isPage() {}
 
+type registrationStep uint8
+
+const (
+	registrationModeStep registrationStep = iota
+	registrationRemoteStep
+	registrationCheckoutStep
+)
+
 type registrationPage struct {
-	value string
+	step          registrationStep
+	mode          RepositorySetupMode
+	remote        string
+	checkout      string
+	suggestedPath string
+	cursor        int
 }
 
 func (registrationPage) isPage() {}
@@ -190,6 +205,12 @@ type unsignedCommitConfirmationPage struct {
 }
 
 func (unsignedCommitConfirmationPage) isPage() {}
+
+type preparationRequiredPage struct {
+	draft ServiceDraft
+}
+
+func (preparationRequiredPage) isPage() {}
 
 type serviceChoice struct {
 	project string
@@ -266,6 +287,7 @@ type model struct {
 	err                error
 	quitAfterOperation bool
 	registrationSeen   bool
+	applyBlocked       bool
 }
 
 func newModel(
@@ -395,8 +417,8 @@ func (state *model) handleServiceWorkspaceMessage(message tea.Msg) (tea.Cmd, boo
 		return state.handleServiceStageResult(message), true
 	case serviceCommitResultMsg:
 		return state.handleServiceCommitResult(message), true
-	case serviceDiscardResultMsg:
-		return state.handleServiceDiscardResult(message), true
+	case serviceSuspendResultMsg:
+		return state.handleServiceSuspendResult(message), true
 	default:
 		return nil, false
 	}
@@ -476,6 +498,8 @@ func (state *model) handleServiceWorkspacePageKey(message tea.KeyPressMsg) (tea.
 		return state.handleStagedDiffKey(current, message.String()), true
 	case unsignedCommitConfirmationPage:
 		return state.handleUnsignedCommitConfirmationKey(current, message.String()), true
+	case preparationRequiredPage:
+		return state.handlePreparationRequiredKey(message.String()), true
 	default:
 		return nil, false
 	}
@@ -543,8 +567,8 @@ func (state *model) activateHomeItem(current homePage, setupIndex int) tea.Cmd {
 
 		return nil
 	case setupIndex:
-		state.page = registrationPage{value: current.catalog.SuggestedRepository}
-		state.status = "Review the desired-state repository path"
+		state.page = newRegistrationPage(current.catalog.SuggestedRepository)
+		state.status = "Choose how to set up the desired-state repository"
 
 		return nil
 	}
@@ -592,7 +616,7 @@ func (state *model) activateAddService(catalog CatalogSnapshot) tea.Cmd {
 	}
 	state.status = "Set up a desired-state repository before adding a service"
 	if catalog.SuggestedRepository != "" {
-		state.page = registrationPage{value: catalog.SuggestedRepository}
+		state.page = newRegistrationPage(catalog.SuggestedRepository)
 	}
 
 	return nil
@@ -656,10 +680,31 @@ func (state *model) handleOpenPathKey(current openPathPage, message tea.KeyPress
 }
 
 func (state *model) handleRegistrationKey(current registrationPage, message tea.KeyPressMsg) {
+	if current.step == registrationModeStep {
+		state.handleRegistrationModeKey(current, message.String())
+
+		return
+	}
+
 	switch message.String() {
 	case keyEnter:
-		if current.value == "" {
-			state.status = "Enter a repository path"
+		if current.step == registrationRemoteStep {
+			if current.remote == "" {
+				state.status = "Enter a repository name or remote URL"
+
+				return
+			}
+			current.step = registrationCheckoutStep
+			if current.checkout == "" {
+				current.checkout = current.suggestedPath
+			}
+			state.page = current
+			state.status = "Choose where to store the local checkout"
+
+			return
+		}
+		if current.checkout == "" {
+			state.status = "Enter a local checkout path"
 
 			return
 		}
@@ -668,17 +713,60 @@ func (state *model) handleRegistrationKey(current registrationPage, message tea.
 
 		return
 	case keyEscape:
+		if current.step == registrationCheckoutStep {
+			current.step = registrationRemoteStep
+			state.page = current
+			state.status = "Enter the repository source"
+
+			return
+		}
+		current.step = registrationModeStep
+		state.page = current
+		state.status = "Choose how to set up the desired-state repository"
+
+		return
+	}
+
+	if current.step == registrationRemoteStep {
+		current.remote = editSingleLine(current.remote, message)
+	} else {
+		current.checkout = editSingleLine(current.checkout, message)
+	}
+	state.page = current
+}
+
+func (state *model) handleRegistrationModeKey(current registrationPage, key string) {
+	switch key {
+	case "up", "k", keyDown, "j", keyTab:
+		current.cursor = (current.cursor + 1) % repositorySetupModeCount
+	case keyEnter:
+		current.mode = RepositorySetupCreateGitHub
+		if current.cursor == 1 {
+			current.mode = RepositorySetupExisting
+		}
+		current.step = registrationRemoteStep
+		state.page = current
+		state.status = "Enter the repository source"
+
+		return
+	case keyEscape:
 		state.registrationSeen = true
 		state.page = homePage{catalog: CatalogSnapshot{
-			State: CatalogMissing, SuggestedRepository: current.value,
+			State: CatalogMissing, SuggestedRepository: current.suggestedPath,
 		}}
 		state.status = "No registered repository"
 
 		return
 	}
-
-	current.value = editSingleLine(current.value, message)
 	state.page = current
+}
+
+func newRegistrationPage(suggestedPath string) registrationPage {
+	return registrationPage{step: registrationModeStep, suggestedPath: suggestedPath}
+}
+
+func registrationRequest(current registrationPage) RepositorySetupRequest {
+	return RepositorySetupRequest{Mode: current.mode, Remote: current.remote, Checkout: current.checkout}
 }
 
 func editSingleLine(value string, message tea.KeyPressMsg) string {
@@ -812,12 +900,12 @@ func (state *model) handleCommitReviewKey(current commitServicePage, key string)
 		state.status = "Edit the commit message"
 	case keyEnter:
 		if current.focus == confirmationBack {
-			return state.startServiceDiscard(current.preview)
+			return state.startServiceSuspend(current.preview)
 		}
 
 		return state.startServiceCommit(current, false)
 	case keyEscape:
-		return state.startServiceDiscard(current.preview)
+		return state.startServiceSuspend(current.preview)
 	case keyQuit:
 		return tea.Quit
 	}
@@ -896,6 +984,15 @@ func (state *model) handleUnsignedCommitConfirmationKey(
 	return nil
 }
 
+func (state *model) handlePreparationRequiredKey(key string) tea.Cmd {
+	switch key {
+	case keyEnter, keyEscape, keyQuit:
+		return tea.Quit
+	default:
+		return nil
+	}
+}
+
 func (state *model) handleRegistrationConfirmationKey(
 	current registrationConfirmationPage,
 	key string,
@@ -913,15 +1010,15 @@ func (state *model) handleRegistrationConfirmationKey(
 	case keyEnter:
 		if current.focus == confirmationBack {
 			state.page = current.registration
-			state.status = "Review repository path"
+			state.status = "Review repository setup"
 
 			return nil
 		}
 
-		return state.startRegistration(current.registration.value)
+		return state.startRegistration(registrationRequest(current.registration))
 	case keyEscape:
 		state.page = current.registration
-		state.status = "Review repository path"
+		state.status = "Review repository setup"
 
 		return nil
 	case keyQuit:
@@ -1088,12 +1185,14 @@ func (state *model) startOpenPath(path string) tea.Cmd {
 	})
 }
 
-func (state *model) startRegistration(path string) tea.Cmd {
+func (state *model) startRegistration(request RepositorySetupRequest) tea.Cmd {
 	return state.begin("Setting up repository", func(ctx context.Context, sequence uint64) tea.Cmd {
 		catalog := state.catalog
 
 		return func() tea.Msg {
-			return registrationResultMsg{sequence: sequence, result: catalog.Register(ctx, path)}
+			return registrationResultMsg{
+				sequence: sequence, request: request, result: catalog.Register(ctx, request),
+			}
 		}
 	})
 }
@@ -1136,12 +1235,12 @@ func (state *model) startServiceCommit(commit commitServicePage, unsigned bool) 
 	})
 }
 
-func (state *model) startServiceDiscard(preview servicePreviewPage) tea.Cmd {
-	return state.begin("Discarding staged files", func(ctx context.Context, sequence uint64) tea.Cmd {
+func (state *model) startServiceSuspend(preview servicePreviewPage) tea.Cmd {
+	return state.begin("Saving draft", func(ctx context.Context, sequence uint64) tea.Cmd {
 		workspace := state.workspace
 
 		return func() tea.Msg {
-			return serviceDiscardResultMsg{sequence: sequence, preview: preview, err: workspace.Discard(ctx)}
+			return serviceSuspendResultMsg{sequence: sequence, preview: preview, err: workspace.Suspend(ctx)}
 		}
 	})
 }
@@ -1188,6 +1287,11 @@ func (state *model) startCommittedSnapshot(request application.Request) tea.Cmd 
 }
 
 func (state *model) startApply(review reviewPage) tea.Cmd {
+	if state.applyBlocked {
+		state.status = "Exit, run the preparation step, then start maniud tui again"
+
+		return nil
+	}
 	state.page = review
 
 	command := state.begin("Applying change", func(ctx context.Context, sequence uint64) tea.Cmd {
@@ -1213,8 +1317,8 @@ func (state *model) handleCatalogResult(result catalogResultMsg) tea.Cmd {
 	snapshot := canonicalCatalog(result.snapshot)
 	if snapshot.State == CatalogMissing && snapshot.SuggestedRepository != "" && !state.registrationSeen {
 		state.registrationSeen = true
-		state.page = registrationPage{value: snapshot.SuggestedRepository}
-		state.status = "Set up a desired-state repository or press Esc to skip"
+		state.page = newRegistrationPage(snapshot.SuggestedRepository)
+		state.status = "Choose a repository setup method or press Esc to skip"
 
 		return command
 	}
@@ -1234,11 +1338,13 @@ func (state *model) handleRegistrationResult(result registrationResultMsg) tea.C
 
 		return command
 	}
-
 	snapshot := canonicalCatalog(result.result.Snapshot)
 	state.page = homePage{catalog: snapshot}
 	state.status = "Repository ready"
-	state.mutationOutcome = "Repository created"
+	state.mutationOutcome = "Repository registered"
+	if result.request.Mode == RepositorySetupCreateGitHub {
+		state.mutationOutcome = "Private GitHub repository created"
+	}
 
 	return command
 }
@@ -1291,7 +1397,9 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 		return command
 	}
 	if result.result.Committed && result.result.NeedsUnsignedApproval ||
-		result.result.ValidationUnavailable && !result.result.Committed {
+		result.result.ValidationUnavailable && !result.result.Committed ||
+		result.result.PreparationRequired &&
+			(!result.result.Committed || result.result.ValidationUnavailable || result.result.NeedsUnsignedApproval) {
 		state.err = errInvalidInput
 		state.status = "Commit result could not be verified"
 
@@ -1310,6 +1418,13 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 		return command
 	}
 	state.mutationOutcome = "Compose commit created"
+	if result.result.PreparationRequired {
+		state.applyBlocked = true
+		state.page = preparationRequiredPage{draft: result.commit.preview.draft}
+		state.status = "Preparation is required before validation"
+
+		return command
+	}
 	if result.result.ValidationUnavailable {
 		state.page = homePage{catalog: CatalogSnapshot{State: CatalogUnavailable}}
 		state.status = "Commit created; validation is unavailable"
@@ -1320,13 +1435,13 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 	return tea.Batch(command, state.startCommittedSnapshot(result.result.Request))
 }
 
-func (state *model) handleServiceDiscardResult(result serviceDiscardResultMsg) tea.Cmd {
+func (state *model) handleServiceSuspendResult(result serviceSuspendResultMsg) tea.Cmd {
 	accepted, command := state.completeOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
 	state.page = result.preview
-	state.status = "Staged files discarded"
+	state.status = "Draft saved for this service"
 	state.mutationOutcome = ""
 
 	return command

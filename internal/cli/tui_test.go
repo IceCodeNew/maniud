@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
@@ -216,6 +218,51 @@ func TestExecuteProductionTUIRunsHomeAndClassifiesCancellation(t *testing.T) {
 	}
 }
 
+func TestExecuteProductionTUIWritesPostCommitInstructionsAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	workingDirectory := t.TempDir()
+	environment := map[string]string{
+		homeKey: workingDirectory, xdgStateHomeKey: filepath.Join(workingDirectory, "state"),
+		testTermEnvironment: testTerminalName, "LANG": "C.UTF-8",
+	}
+	output := new(bytes.Buffer)
+	var notifications processNotifications
+	err := executeProductionTUIWith(
+		t.Context(),
+		terminalFixture{Reader: bytes.NewReader([]byte("q")), descriptor: 1},
+		terminalFixture{Writer: output, descriptor: 2},
+		io.Discard,
+		environment,
+		func() (string, error) { return workingDirectory, nil },
+		testRuntimePlugins(t),
+		&notifications,
+		func(uintptr) bool { return true },
+		func(
+			_ context.Context,
+			_ io.Reader,
+			_ io.Writer,
+			_ tui.Catalog,
+			workspace tui.ServiceWorkspace,
+			_ applyDependencies,
+			_ *tui.EventStream,
+			_ tui.Options,
+		) error {
+			serviceWorkspace, valid := workspace.(*tuiServiceWorkspace)
+			if !valid {
+				return errApplyTest
+			}
+			serviceWorkspace.instructions = []string{tuiCommand}
+
+			return errApplyTest
+		},
+	)
+	notifications.Close()
+	if !errors.Is(err, errApplyTest) || output.String() != "Next steps:\n$ "+tuiCommand+"\n" {
+		t.Fatalf("executeProductionTUI(post-commit failure) = %q, %v", output.String(), err)
+	}
+}
+
 func productionTUIRunner(result error) tuiRunner {
 	return func(
 		context.Context,
@@ -253,7 +300,7 @@ func (*tuiCatalogFixture) OpenPath(context.Context, string) tui.OpenResult {
 	return tui.OpenResult{Blocker: tui.BlockerNotFound}
 }
 
-func (fixture *tuiCatalogFixture) Register(context.Context, string) tui.RegistrationResult {
+func (fixture *tuiCatalogFixture) Register(context.Context, tui.RepositorySetupRequest) tui.RegistrationResult {
 	return tui.RegistrationResult{Snapshot: fixture.snapshot}
 }
 
@@ -271,7 +318,7 @@ func (*tuiWorkspaceFixture) Commit(context.Context, string, bool) (tui.ServiceCo
 	return tui.ServiceCommitResult{}, nil
 }
 
-func (*tuiWorkspaceFixture) Discard(context.Context) error {
+func (*tuiWorkspaceFixture) Suspend(context.Context) error {
 	return nil
 }
 
@@ -405,7 +452,11 @@ type tuiSignalReader struct {
 }
 
 func (reader *tuiSignalReader) Read(destination []byte) (int, error) {
-	<-reader.ready
+	select {
+	case <-reader.ready:
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("wait for TUI render: %w", context.DeadlineExceeded)
+	}
 	if len(reader.content) == 0 {
 		return 0, io.EOF
 	}

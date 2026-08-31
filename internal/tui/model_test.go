@@ -284,10 +284,15 @@ func TestModelConfirmsFirstRunRepositorySetup(t *testing.T) {
 	catalog.registration = RegistrationResult{Snapshot: CatalogSnapshot{State: CatalogReady}}
 	deliver(t, state, state.startCatalog())
 	registration, valid := state.page.(registrationPage)
-	if !valid || registration.value != repository {
+	if !valid || registration.step != registrationModeStep || registration.suggestedPath != repository {
 		t.Fatalf("first-run page = %#v", state.page)
 	}
 
+	state.handleKey(key("enter"))
+	registration = registrationPageValue(t, state)
+	registration.remote = testGitHubRepository
+	state.page = registration
+	state.handleKey(key("enter"))
 	state.handleKey(key("enter"))
 	confirmation, valid := state.page.(registrationConfirmationPage)
 	if !valid || confirmation.focus != confirmationBack {
@@ -302,8 +307,10 @@ func TestModelConfirmsFirstRunRepositorySetup(t *testing.T) {
 	state.handleKey(key("tab"))
 	deliver(t, state, state.handleKey(key("enter")))
 	if home, homeValid := state.page.(homePage); !homeValid || home.catalog.State != CatalogReady ||
-		state.mutationOutcome != "Repository created" ||
-		!slices.Equal(catalog.recordedCalls(), []string{snapshotCall, "register:" + repository}) {
+		state.mutationOutcome != "Private GitHub repository created" ||
+		!slices.Equal(catalog.recordedCalls(), []string{
+			snapshotCall, "register:1:" + testGitHubRepository + ":" + repository,
+		}) {
 		t.Fatalf("registered state = %#v, calls = %q", state, catalog.recordedCalls())
 	}
 }
@@ -323,8 +330,123 @@ func TestModelCanSkipAndReopenRepositorySetup(t *testing.T) {
 	state.handleKey(key("down"))
 	state.handleKey(key("down"))
 	state.handleKey(key("enter"))
-	if registration, valid := state.page.(registrationPage); !valid || registration.value != repository {
+	if registration, valid := state.page.(registrationPage); !valid ||
+		registration.step != registrationModeStep || registration.suggestedPath != repository {
 		t.Fatalf("reopened setup = %#v", state.page)
+	}
+}
+
+//nolint:cyclop,funlen // One state-machine scenario checks each setup slide and back-navigation boundary.
+func TestModelNavigatesRepositorySetupSlidesAndPreparationExit(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	for _, name := range []string{"up", "k", "j", keyTab} {
+		state.page = newRegistrationPage(testRepositoryPath)
+		state.handleKey(key(name))
+		registration := registrationPageValue(t, state)
+		if registration.cursor != 1 {
+			t.Fatalf("registration mode key %q cursor = %d", name, registration.cursor)
+		}
+	}
+	state.page = newRegistrationPage(testRepositoryPath)
+	state.handleKey(key("down"))
+	state.handleKey(key("enter"))
+	registration := registrationPageValue(t, state)
+	if registration.mode != RepositorySetupExisting || registration.step != registrationRemoteStep {
+		t.Fatalf("existing repository mode = %#v", registration)
+	}
+	registration.remote = testExistingRemote
+	state.page = registration
+	state.handleKey(key("enter"))
+	registration = registrationPageValue(t, state)
+	if registration.step != registrationCheckoutStep || registration.checkout != testRepositoryPath {
+		t.Fatalf("checkout slide = %#v", registration)
+	}
+	state.handleKey(key("esc"))
+	registration = registrationPageValue(t, state)
+	if registration.step != registrationRemoteStep {
+		t.Fatalf("checkout back = %#v", registration)
+	}
+	registration.checkout = "/tmp/custom-checkout"
+	state.page = registration
+	state.handleKey(key("enter"))
+	registration = registrationPageValue(t, state)
+	if registration.step != registrationCheckoutStep || registration.checkout != "/tmp/custom-checkout" {
+		t.Fatalf("revisited checkout slide = %#v", registration)
+	}
+	state.handleKey(key("esc"))
+	state.handleKey(key("esc"))
+	registration = registrationPageValue(t, state)
+	if registration.step != registrationModeStep {
+		t.Fatalf("remote back = %#v", registration)
+	}
+	state.handleKey(key("x"))
+	if _, valid := state.page.(registrationPage); !valid {
+		t.Fatalf("unknown mode key changed page to %T", state.page)
+	}
+
+	state.page = registrationPage{
+		step: registrationCheckoutStep, mode: RepositorySetupExisting,
+		remote: testExistingRemote,
+	}
+	state.handleKey(key("enter"))
+	if state.status != "Enter a local checkout path" {
+		t.Fatalf("empty checkout status = %q", state.status)
+	}
+	state.handleKey(key("x"))
+	registration = registrationPageValue(t, state)
+	if registration.checkout != "x" {
+		t.Fatalf("edited checkout = %#v", registration)
+	}
+	state.sequence++
+	state.busy = true
+	state.Update(registrationResultMsg{
+		sequence: state.sequence,
+		request:  registrationRequest(registration),
+		result: RegistrationResult{Snapshot: CatalogSnapshot{
+			State: CatalogReady,
+		}},
+	})
+	if state.mutationOutcome != "Repository registered" {
+		t.Fatalf("existing repository result = %#v", state)
+	}
+
+	state.page = preparationRequiredPage{draft: ServiceDraft{Service: testService}}
+	if command := state.handleKey(key("x")); command != nil {
+		t.Fatal("unknown preparation key quit")
+	}
+	for _, name := range []string{keyEnter, keyEscape, keyQuit} {
+		state.page = preparationRequiredPage{draft: ServiceDraft{Service: testService}}
+		if command := state.handleKey(key(name)); command == nil {
+			t.Fatalf("preparation key %q did not quit", name)
+		}
+	}
+}
+
+func TestModelBlocksApplyAfterPreparationCommit(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	workspace := workspaceFixtureValue(t, state)
+	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
+	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	state.sequence++
+	state.busy = true
+	state.Update(serviceCommitResultMsg{
+		sequence: state.sequence,
+		commit:   commit,
+		result: ServiceCommitResult{
+			Committed: true, PreparationRequired: true,
+		},
+	})
+	if _, valid := state.page.(preparationRequiredPage); !valid || !state.applyBlocked ||
+		state.status != "Preparation is required before validation" {
+		t.Fatalf("preparation commit state = %#v", state)
+	}
+	if command := state.startApply(reviewPage{}); command != nil ||
+		state.status != "Exit, run the preparation step, then start maniud tui again" {
+		t.Fatalf("blocked apply = %#v", state)
 	}
 }
 
@@ -635,7 +757,8 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 		homePage{}, openPathPage{}, sourceDiagnosticPage{}, registrationPage{},
 		registrationConfirmationPage{}, addServicePage{}, servicePreviewPage{},
 		stageServiceConfirmationPage{}, commitServicePage{}, stagedDiffPage{},
-		unsignedCommitConfirmationPage{}, selectServicePage{}, reviewPage{}, detailsPage{}, confirmationPage{},
+		unsignedCommitConfirmationPage{}, preparationRequiredPage{}, selectServicePage{},
+		reviewPage{}, detailsPage{}, confirmationPage{},
 	}
 	for _, current := range pages {
 		current.isPage()
@@ -648,6 +771,7 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 		commit,
 		stagedDiffPage{commit: commit},
 		unsignedCommitConfirmationPage{commit: commit},
+		preparationRequiredPage{},
 		registrationConfirmationPage{},
 		selectServicePage{choices: []serviceChoice{{request: application.Request{Service: testAPI}}}},
 		review,
@@ -712,16 +836,16 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	}
 	state.finishOperation()
 
-	state.page = registrationPage{}
+	state.page = registrationPage{step: registrationRemoteStep, mode: RepositorySetupExisting}
 	state.handleKey(key("enter"))
-	if state.status != "Enter a repository path" {
+	if state.status != "Enter a repository name or remote URL" {
 		t.Fatalf("empty registration status = %q", state.status)
 	}
 	state.handleKey(key("backspace"))
 	state.handleKey(key("x"))
 	state.handleKey(key("backspace"))
 	registration, valid := state.page.(registrationPage)
-	if !valid || registration.value != "" {
+	if !valid || registration.remote != "" {
 		t.Fatalf("edited registration page = %#v", state.page)
 	}
 
@@ -812,7 +936,7 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	state.page = commit
 	deliver(t, state, state.handleKey(key("esc")))
 	if _, valid := state.page.(servicePreviewPage); !valid {
-		t.Fatalf("discarded commit page = %T", state.page)
+		t.Fatalf("saved-draft commit page = %T", state.page)
 	}
 
 	state.page = stagedDiffPage{commit: commit, scroll: 1}
@@ -848,7 +972,10 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 		t.Fatal("unsigned confirmation quit command is nil")
 	}
 
-	registration = registrationPage{value: testRepositoryPath}
+	registration = registrationPage{
+		step: registrationCheckoutStep, mode: RepositorySetupExisting,
+		remote: testExistingRemote, checkout: testRepositoryPath,
+	}
 	state.resize(hardMinimumWidth, hardMinimumHeight)
 	state.page = registrationConfirmationPage{registration: registration, focus: confirmationApply}
 	state.handleKey(key("enter"))
@@ -944,7 +1071,7 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 		servicePreviewResultMsg{sequence: 9, err: errTestTUI},
 		serviceStageResultMsg{sequence: 9, err: errTestTUI},
 		serviceCommitResultMsg{sequence: 9, err: errTestTUI},
-		serviceDiscardResultMsg{sequence: 9, err: errTestTUI},
+		serviceSuspendResultMsg{sequence: 9, err: errTestTUI},
 		registrationResultMsg{sequence: 9, result: RegistrationResult{Blocker: BlockerInvalid}},
 	} {
 		state.Update(message)
@@ -964,7 +1091,7 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 			return serviceCommitResultMsg{sequence: sequence, err: errTestTUI}
 		},
 		func(sequence uint64) tea.Msg {
-			return serviceDiscardResultMsg{sequence: sequence, err: errTestTUI}
+			return serviceSuspendResultMsg{sequence: sequence, err: errTestTUI}
 		},
 	} {
 		state.sequence++
@@ -996,14 +1123,14 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 
 	state.sequence++
 	state.busy = true
-	state.Update(serviceDiscardResultMsg{sequence: state.sequence, preview: preview})
-	if _, valid := state.page.(servicePreviewPage); !valid || state.status != "Staged files discarded" {
-		t.Fatalf("discard result = %#v", state)
+	state.Update(serviceSuspendResultMsg{sequence: state.sequence, preview: preview})
+	if _, valid := state.page.(servicePreviewPage); !valid || state.status != "Draft saved for this service" {
+		t.Fatalf("suspend result = %#v", state)
 	}
-	workspace.discardErr = errTestTUI
-	deliver(t, state, state.startServiceDiscard(preview))
+	workspace.suspendErr = errTestTUI
+	deliver(t, state, state.startServiceSuspend(preview))
 	if !errors.Is(state.err, errTestTUI) || state.status != "Operation failed" {
-		t.Fatalf("discard failure = %#v", state)
+		t.Fatalf("suspend failure = %#v", state)
 	}
 
 	state.sequence++
@@ -1167,7 +1294,10 @@ func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
 	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
-	registration := registrationPage{value: testRepositoryPath}
+	registration := registrationPage{
+		step: registrationCheckoutStep, mode: RepositorySetupExisting,
+		remote: testExistingRemote, checkout: testRepositoryPath,
+	}
 
 	state.page = registrationConfirmationPage{registration: registration}
 	state.invalidateConfirmation()
@@ -1206,10 +1336,10 @@ func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
 	state.page = commit
 	command := state.handleKey(key("enter"))
 	if command == nil {
-		t.Fatalf("Back-and-discard command is nil: %#v", state)
+		t.Fatalf("Back-and-save command is nil: %#v", state)
 	}
 	deliver(t, state, command)
 	if _, valid := state.page.(servicePreviewPage); !valid {
-		t.Fatalf("Back-and-discard page = %T", state.page)
+		t.Fatalf("Back-and-save page = %T", state.page)
 	}
 }
