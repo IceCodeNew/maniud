@@ -150,7 +150,7 @@ func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 		t.Fatalf("WriteFile(.gitconfig) error = %v", err)
 	}
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv(xdgConfigHomeEnvironment, filepath.Join(home, "config"))
 	t.Setenv("SSH_AUTH_SOCK", "")
 
 	draft := newTUIWorkspaceDraft(t)
@@ -173,7 +173,7 @@ func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 func TestTUIWorkspaceOffersUnsignedFallbackOnlyForUnchangedStage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv(xdgConfigHomeEnvironment, filepath.Join(home, "config"))
 	t.Setenv("GNUPGHOME", filepath.Join(home, "gnupg"))
 	t.Setenv("GPG_TTY", "")
 	t.Setenv("SSH_AUTH_SOCK", "")

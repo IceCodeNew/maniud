@@ -107,7 +107,7 @@ func userConfiguredGitEnvironment() []string {
 		"LC_ALL=C",
 	}
 	for _, name := range []string{
-		"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "GNUPGHOME", "GPG_TTY", "SSH_AUTH_SOCK",
+		"PATH", "HOME", xdgConfigHomeEnvironment, "XDG_RUNTIME_DIR", "GNUPGHOME", "GPG_TTY", "SSH_AUTH_SOCK",
 	} {
 		if value, found := os.LookupEnv(name); found {
 			environment = append(environment, name+"="+value)

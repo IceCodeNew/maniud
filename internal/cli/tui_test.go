@@ -134,6 +134,7 @@ func TestWriteTUIInstructionsUsesShellReadyLines(t *testing.T) {
 	}
 }
 
+//nolint:funlen // Each setup dependency has a distinct contained failure fixture.
 func TestExecuteProductionTUIContainsSetupFailures(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +170,22 @@ func TestExecuteProductionTUIContainsSetupFailures(t *testing.T) {
 			name: "dependencies", environment: environment,
 			workingDir: func() (string, error) { return "", io.ErrClosedPipe },
 			terminal:   terminal, wantError: io.ErrClosedPipe,
+		},
+		{
+			name: "assistant working directory", environment: environment,
+			workingDir: func() func() (string, error) {
+				calls := 0
+
+				return func() (string, error) {
+					calls++
+					if calls == 2 {
+						return "", io.ErrClosedPipe
+					}
+
+					return workingDirectory, nil
+				}
+			}(),
+			terminal: terminal, wantError: io.ErrClosedPipe,
 		},
 	}
 	for _, test := range tests {
@@ -276,6 +293,7 @@ func productionTUIRunner(result error) tuiRunner {
 		tui.Catalog,
 		tui.ServiceWorkspace,
 		tui.DeploymentWorkspace,
+		tui.Assistant,
 		applyDependencies,
 		*tui.EventStream,
 		tui.Options,

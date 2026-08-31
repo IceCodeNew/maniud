@@ -30,6 +30,31 @@
 
 TUI 不会显示配置值、原始 YAML、解析器消息、依赖库错误或绝对路径。`Position: Unavailable` 表示 Compose 验证在 YAML 解析之后发现问题，此时 maniud 无法确定可信的来源位置。
 
+## LLM assistance 结果
+
+TUI 使用下列稳定 code 处理配置和 provider 失败。界面不会显示 provider body、依赖错误、credential、私有路径或被拒绝的值。
+
+| Code | 处理方式 |
+| --- | --- |
+| `llm_config_invalid` | 检查 provider、model、endpoint、timeout 和实际生效的 key。 |
+| `llm_config_path_invalid` | 移除 symlink，并把 `$XDG_CONFIG_HOME/maniud` 下目录和文件恢复为当前用户所有的 `0700`/`0600`。 |
+| `config_save_stale` | 重新加载当前配置，检查后再保存。 |
+| `config_save_outcome_unknown` | 检查界面显示的配置和 key source，再选择 **Retry Save**。该操作不会连接 provider。 |
+| `llm_question_invalid` | 缩短或修正问题后重新发送。 |
+| `llm_forbidden_value` | 从问题中移除 credential、私有路径、完整镜像地址、command、port、mount、device 或 runtime ID。 |
+| `llm_authentication_failed` | 检查实际生效的 API key。 |
+| `llm_rate_limited` | 等待后再发送新的计费请求。 |
+| `llm_context_limit` | 缩短问题。 |
+| `llm_refused` | 修改问题。Maniud 不显示 provider refusal body。 |
+| `llm_empty_response` | 只有接受再次计费时才重新发送。 |
+| `llm_truncated` | 只有接受再次计费时才重新发送。 |
+| `llm_invalid_response` | 修改问题或改用其他受支持 model；本次没有创建 candidate。 |
+| `llm_model_unavailable` | 检查 model 名称和 provider。 |
+| `llm_timeout` | 再次发送计费请求前，检查 timeout 和 provider 可用性。 |
+| `llm_cancelled` | 需要发起新请求时返回问题页。 |
+| `llm_provider_failed` | 再次发送计费请求前检查 provider 可用性。 |
+| `llm_context_stale` | 检查当前 Compose source 和配置后重新发送。 |
+
 ## 通知失败
 
 Bark 通知需要设置 `BARK_DEVICE_KEY`。需要加密时，再设置 `BARK_ENCRYPTION_KEY`，它要与 Bark app 中的 16、24 或 32 字符 ASCII 密钥一致。Telegram 需要同时设置 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`。

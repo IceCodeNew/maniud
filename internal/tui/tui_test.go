@@ -535,13 +535,15 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	ready := make(chan struct{})
 	catalog := &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
 	workspace := newWorkspaceFixture()
-	if err := Run(
+	assistant := &assistantFixture{}
+	if err := RunWithAssistant(
 		t.Context(),
 		&signalReader{ready: ready, content: []byte("q")},
 		io.Discard,
 		catalog,
 		workspace,
 		&deploymentWorkspaceFixture{},
+		assistant,
 		newOperationsFixture(),
 		NewEventStream(),
 		Options{},
@@ -550,6 +552,9 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	}
 	if !slices.Equal(workspace.recordedCalls(), []string{"suspend"}) {
 		t.Fatalf("Run(success) workspace calls = %q", workspace.recordedCalls())
+	}
+	if assistant.closed != 1 {
+		t.Fatalf("RunWithAssistant() closes = %d", assistant.closed)
 	}
 
 	ready = make(chan struct{})

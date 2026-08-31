@@ -194,6 +194,78 @@ func NewDeploymentPatch(field DeploymentField, value DeploymentValue) (Deploymen
 	return DeploymentPatch{field: field, value: value}, nil
 }
 
+// ParseDeploymentPatch parses one external field/value pair into the same
+// typed patch used by manual and LLM-assisted deployment edits.
+func ParseDeploymentPatch(fieldID string, value string, unset bool) (DeploymentPatch, error) {
+	field, err := ParseDeploymentField(fieldID)
+	if err != nil {
+		return DeploymentPatch{}, ErrInvalidDeploymentPatch
+	}
+	if unset {
+		return NewDeploymentPatch(field, DeploymentUnset{})
+	}
+	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
+		return DeploymentPatch{}, ErrInvalidDeploymentPatch
+	}
+
+	return parseDeploymentPatchValue(field, value)
+}
+
+//nolint:cyclop,funlen // Every closed field owns one external value grammar.
+func parseDeploymentPatchValue(field DeploymentField, value string) (DeploymentPatch, error) {
+	var parsed DeploymentValue
+	switch field {
+	case DeploymentCPUs:
+		number, parseErr := strconv.ParseFloat(value, 32)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentCPU(number)
+	case DeploymentMemory, DeploymentSharedMemory:
+		number, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentBytes(number)
+	case DeploymentPIDs:
+		number, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentInteger(number)
+	case DeploymentHealthRetries:
+		number, parseErr := strconv.Atoi(value)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentRetries(number)
+	case DeploymentRestart:
+		parsed = DeploymentRestartPolicy(value)
+	case DeploymentStopGrace, DeploymentHealthInterval, DeploymentHealthTimeout,
+		DeploymentHealthStartPeriod, DeploymentHealthStartInterval:
+		duration, parseErr := time.ParseDuration(value)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentDuration(duration)
+	case DeploymentNoNewPrivileges:
+		if value != "true" {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentEnabled{}
+	case DeploymentInit, DeploymentReadOnly:
+		enabled, parseErr := strconv.ParseBool(value)
+		if parseErr != nil {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+		parsed = DeploymentBoolean(enabled)
+	default:
+		return DeploymentPatch{}, ErrInvalidDeploymentPatch
+	}
+
+	return NewDeploymentPatch(field, parsed)
+}
+
 // Field returns the field changed by the patch.
 func (patch DeploymentPatch) Field() DeploymentField {
 	return patch.field

@@ -27,6 +27,7 @@ type tuiRunner func(
 	tui.Catalog,
 	tui.ServiceWorkspace,
 	tui.DeploymentWorkspace,
+	tui.Assistant,
 	applyDependencies,
 	*tui.EventStream,
 	tui.Options,
@@ -43,12 +44,29 @@ func executeTUI(
 	events *tui.EventStream,
 	options tui.Options,
 ) error {
+	return executeTUIWithAssistant(
+		ctx, input, output, catalog, workspace, deployments, nil, dependencies, events, options,
+	)
+}
+
+func executeTUIWithAssistant(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	catalog tui.Catalog,
+	workspace tui.ServiceWorkspace,
+	deployments tui.DeploymentWorkspace,
+	assistant tui.Assistant,
+	dependencies applyDependencies,
+	events *tui.EventStream,
+	options tui.Options,
+) error {
 	if catalog == nil || workspace == nil || deployments == nil || dependencies.operations == nil || events == nil {
 		return errInvalidArguments
 	}
 
-	return errors.Join(tui.Run(
-		ctx, input, output, catalog, workspace, deployments, dependencies.operations, events, options,
+	return errors.Join(tui.RunWithAssistant(
+		ctx, input, output, catalog, workspace, deployments, assistant, dependencies.operations, events, options,
 	))
 }
 
@@ -63,7 +81,7 @@ func executeProductionTUI(
 ) error {
 	return executeProductionTUIWith(
 		ctx, input, output, stderr, environment, getWorkingDirectory, runtimes, notifications,
-		tui.IsTerminal, executeTUI,
+		tui.IsTerminal, executeTUIWithAssistant,
 	)
 }
 
@@ -97,9 +115,15 @@ func executeProductionTUIWith(
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes)
 	deployments := defaultTUIDeploymentWorkspace(environment)
+	workingDirectory, err := getWorkingDirectory()
+	if err != nil {
+		return err
+	}
+	assistant := defaultTUIAssistant(environment, workingDirectory, deployments, dependencies.operations)
 
 	runErr := runtimes.Classify(run(
-		ctx, input, output, catalog, workspace, deployments, dependencies, tuiEvents, tuiOptions(environment),
+		ctx, input, output, catalog, workspace, deployments, assistant,
+		dependencies, tuiEvents, tuiOptions(environment),
 	))
 	instructionErr := writeTUIInstructions(output, workspace.Instructions())
 

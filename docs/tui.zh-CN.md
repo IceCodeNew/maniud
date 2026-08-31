@@ -57,9 +57,22 @@ Review 页对比当前镜像身份和建议镜像身份。较长的镜像地址�
 
 按 `h` 可以查看当前 Compose 文件在 first-parent 历史中最近 100 个相关提交。History 页只说明提交中是否存在签名，不验证签名者。选择较早的文件版本后，`maniud` 会重新构建并验证 candidate；确认后创建新的 restore commit，不改写 Git 历史。当前文件版本不能创建无内容的 restore commit。
 
+### 询问 LLM 部署参数建议
+
+在 Review 页按 `a` 可以配置 LLM assistance 或输入部署问题。配置 slides 支持 OpenAI、DeepSeek 和 OpenAI-compatible HTTPS endpoint，并依次收集 model、5–120 秒的单次请求超时与 API key。保存只修改 `$XDG_CONFIG_HOME/maniud/.env`，不会连接 provider。
+
+Maniud 按字段依次读取 process environment、当前目录的 `.env`、`$XDG_CONFIG_HOME/maniud/.env`。高优先级来源中的空 API-key assignment 会屏蔽低优先级 key。当前目录的文件包含 API key 时，文件必须属于当前用户，且 group 和 other 不能拥有权限。XDG 目录与文件分别使用 `0700` 和 `0600`，路径中不能含 symlink。
+
+发送前，确认页会显示 provider、model、origin 和 key source。Provider 会收到长度受限的问题，以及包含受支持部署参数和少量 service、runtime、platform、action 元数据的 projection。Process environment、credential、私有路径、Compose 原文、runtime object ID 和完整镜像地址不会进入请求。问题中包含上述已知值时，Maniud 会在本地拒绝发送。
+
+请求使用 non-streaming 模式，最多执行三次 HTTP attempt。返回内容必须通过严格 JSON、字段、citation 和 Compose 参数验证。Provider 返回多个有效 choice 时，TUI 最多显示三个 choice，并等待你明确选择，Maniud 不会代选。选择后仍要经过 Compose preview、暂存确认、diff 和 commit 流程，provider 不能直接写入或提交文件。
+
+保存结果的持久性无法确认时，TUI 会显示当前可见的非敏感配置和 key source。选择 **Retry Save** 只会重新写入受保护的配置，不会连接 provider。Provider 请求失败后，界面会返回问题页并显示稳定的处理提示。重试 provider 请求可能再次计费。
+
 Review 页支持这些操作：
 
 - Enter 打开 apply 确认页。
+- `a` 打开 LLM assistance。
 - `e` 打开部署参数编辑页。
 - `h` 打开部署历史。
 - `d` 打开 Details。

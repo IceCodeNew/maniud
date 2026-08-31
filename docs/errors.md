@@ -30,6 +30,31 @@ When a committed Compose source fails validation, `maniud tui` shows its reposit
 
 The TUI does not show source values, raw YAML, parser messages, vendor errors, or absolute paths. `Position: Unavailable` means Compose validation found the problem after YAML parsing, so maniud cannot identify one trustworthy source location.
 
+## LLM assistance outcomes
+
+The TUI maps configuration and provider failures to the stable codes below. It does not display provider bodies, dependency errors, credentials, private paths, or rejected values.
+
+| Code | What to do |
+| --- | --- |
+| `llm_config_invalid` | Review the provider, model, endpoint, timeout, and effective key. |
+| `llm_config_path_invalid` | Remove symlinks and restore current-user `0700`/`0600` ownership and permissions under `$XDG_CONFIG_HOME/maniud`. |
+| `config_save_stale` | Reload the current configuration, review it, and save again. |
+| `config_save_outcome_unknown` | Check the visible configuration and key source, then use **Retry Save**. This action does not contact the provider. |
+| `llm_question_invalid` | Shorten or correct the question before sending it again. |
+| `llm_forbidden_value` | Remove credentials, private paths, full image references, commands, ports, mounts, devices, or runtime IDs from the question. |
+| `llm_authentication_failed` | Review the effective API key. |
+| `llm_rate_limited` | Wait before sending another billed request. |
+| `llm_context_limit` | Shorten the question. |
+| `llm_refused` | Revise the question. Maniud does not display a provider refusal body. |
+| `llm_empty_response` | Ask again only if another billed request is acceptable. |
+| `llm_truncated` | Ask again only if another billed request is acceptable. |
+| `llm_invalid_response` | Revise the question or use another supported model; no candidate was created. |
+| `llm_model_unavailable` | Review the model name and provider. |
+| `llm_timeout` | Review the timeout and provider availability before another billed request. |
+| `llm_cancelled` | Return to the question page when you want to start a new request. |
+| `llm_provider_failed` | Check provider availability before another billed request. |
+| `llm_context_stale` | Review the current Compose source and configuration before sending again. |
+
 ## Notification failures
 
 Bark requires `BARK_DEVICE_KEY`. To encrypt messages, also set `BARK_ENCRYPTION_KEY` to the 16-, 24-, or 32-character ASCII key configured in the Bark app. Telegram requires both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.

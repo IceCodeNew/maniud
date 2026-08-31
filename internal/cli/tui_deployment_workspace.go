@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +49,12 @@ type tuiDeploymentWorkspace struct {
 	staged           *tuiStagedDeployment
 }
 
+type tuiAssistContext struct {
+	projection application.AssistProjection
+	identity   string
+	forbidden  map[string][]string
+}
+
 func defaultTUIDeploymentWorkspace(environment map[string]string) *tuiDeploymentWorkspace {
 	statePath, err := defaultStatePath(environment)
 	if err != nil {
@@ -58,6 +66,102 @@ func defaultTUIDeploymentWorkspace(environment map[string]string) *tuiDeployment
 		environment:      environment,
 		runtimeBase:      filepath.Dir(statePath),
 	}
+}
+
+//nolint:cyclop,funcorder // Source, runtime snapshot, projection, and postflight freeze one network context.
+func (workspace *tuiDeploymentWorkspace) assistContext(
+	ctx context.Context,
+	request application.Request,
+	operations tui.Operations,
+) (tuiAssistContext, error) {
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	if operations == nil || workspace.draft != nil || workspace.staged != nil {
+		return tuiAssistContext{}, errDeploymentEditInvalid
+	}
+	source, repository, _, base, err := workspace.openRequest(ctx, request)
+	if err != nil {
+		return tuiAssistContext{}, err
+	}
+	snapshot, err := operations.Snapshot(ctx, request)
+	if err != nil {
+		return tuiAssistContext{}, fmt.Errorf("capture deployment snapshot for LLM projection: %w", err)
+	}
+	projection, err := application.AssistProjectionFor(ctx, request, snapshot)
+	if err != nil {
+		return tuiAssistContext{}, fmt.Errorf("build LLM deployment projection: %w", err)
+	}
+	forbidden, err := assistForbiddenValues(ctx, source, request.Service, snapshot)
+	if err != nil {
+		return tuiAssistContext{}, err
+	}
+	_, rereadRepository, _, rereadBase, err := workspace.openRequest(ctx, request)
+	if err != nil || rereadRepository != repository || rereadBase != base {
+		return tuiAssistContext{}, errDeploymentEditInvalid
+	}
+	stableSnapshot := snapshot
+	stableSnapshot.CapturedAt = time.Time{}
+	stableSnapshot.DroppedEvents = 0
+	snapshotJSON, _ := json.Marshal(&stableSnapshot, json.Deterministic(true))
+	payload := strings.Join([]string{
+		base.head, base.tree, request.Source.Repository.Digest.String(), projection.Identity, string(snapshotJSON),
+	}, "\x00")
+
+	return tuiAssistContext{
+		projection: projection, identity: fmt.Sprintf("%x", sha256.Sum256([]byte(payload))),
+		forbidden: forbidden,
+	}, nil
+}
+
+//nolint:cyclop // This inventory collects each allowlisted private Compose/runtime value before network dispatch.
+func assistForbiddenValues(
+	ctx context.Context,
+	source compose.Source,
+	service string,
+	snapshot application.OperationSnapshot,
+) (map[string][]string, error) {
+	project, err := compose.Load(ctx, source)
+	if err != nil {
+		return nil, errDeploymentEditInvalid
+	}
+	spec, err := project.ServiceSpec(service)
+	if err != nil {
+		return nil, errDeploymentEditInvalid
+	}
+	forbidden := map[string][]string{
+		"command":    append(append([]string(nil), spec.Entrypoint...), spec.Command...),
+		"runtime ID": {snapshot.Plan.Observation.ID},
+	}
+	if spec.Healthcheck != nil {
+		forbidden["command"] = append(forbidden["command"], spec.Healthcheck.Test...)
+	}
+	if source.Repository != nil {
+		forbidden["private path"] = append(forbidden["private path"], source.Repository.Root)
+	}
+	if image, imageErr := project.ImageInput(service); imageErr == nil {
+		if registry, found := image.RegistrySource(); found {
+			forbidden["image reference"] = append(forbidden["image reference"], registry.String())
+		}
+	}
+	for _, port := range spec.Ports {
+		forbidden["port"] = append(forbidden["port"],
+			port.HostIP,
+			strconv.FormatUint(uint64(port.PublishedPort), 10),
+			strconv.FormatUint(uint64(port.TargetPort), 10),
+			fmt.Sprintf("%s:%d:%d/%s", port.HostIP, port.PublishedPort, port.TargetPort, port.Protocol),
+		)
+	}
+	for _, mount := range spec.Mounts {
+		forbidden["mount"] = append(forbidden["mount"], mount.Source, mount.Target)
+	}
+	for _, device := range spec.Devices {
+		forbidden["device"] = append(forbidden["device"], device.Source, device.Target)
+	}
+	for _, mount := range snapshot.Plan.Observation.RuntimeMounts {
+		forbidden["runtime ID"] = append(forbidden["runtime ID"], mount.Name, mount.Source)
+	}
+
+	return forbidden, nil
 }
 
 func (workspace *tuiDeploymentWorkspace) Fields(
@@ -109,11 +213,48 @@ func (workspace *tuiDeploymentWorkspace) Preview(
 	if err != nil {
 		return tui.DeploymentEditPreview{}, err
 	}
+
+	return workspace.previewPatches(ctx, request, []application.DeploymentPatch{patch})
+}
+
+func (workspace *tuiDeploymentWorkspace) PreviewRecommendation(
+	ctx context.Context,
+	request application.Request,
+	changes []tui.LLMChange,
+) (tui.DeploymentEditPreview, error) {
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	if workspace.staged != nil || len(changes) == 0 || len(changes) > len(application.DeploymentFields()) {
+		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+	}
+	patches := make([]application.DeploymentPatch, 0, len(changes))
+	seen := make(map[string]struct{}, len(changes))
+	for _, change := range changes {
+		if _, duplicate := seen[change.FieldID]; duplicate {
+			return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		}
+		patch, err := application.ParseDeploymentPatch(change.FieldID, change.Value, change.Unset)
+		if err != nil {
+			return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		}
+		seen[change.FieldID] = struct{}{}
+		patches = append(patches, patch)
+	}
+
+	return workspace.previewPatches(ctx, request, patches)
+}
+
+//nolint:funcorder // Preview and PreviewRecommendation share this private transaction boundary.
+func (workspace *tuiDeploymentWorkspace) previewPatches(
+	ctx context.Context,
+	request application.Request,
+	patches []application.DeploymentPatch,
+) (tui.DeploymentEditPreview, error) {
 	source, repository, entry, base, err := workspace.openRequest(ctx, request)
 	if err != nil {
 		return tui.DeploymentEditPreview{}, err
 	}
-	candidate, err := prepareDeploymentEdit(ctx, source, request.Service, []application.DeploymentPatch{patch})
+	candidate, err := prepareDeploymentEdit(ctx, source, request.Service, patches)
 	if err != nil || len(candidate.fields) == 0 {
 		return tui.DeploymentEditPreview{}, errors.Join(err, errDeploymentEditInvalid)
 	}
@@ -130,68 +271,15 @@ func (workspace *tuiDeploymentWorkspace) Preview(
 	return publicDeploymentPreview(draft), nil
 }
 
-//nolint:cyclop,funlen // The closed field catalog parses into one application-owned value family.
 func parseDeploymentPatch(
 	field application.DeploymentField,
 	value string,
 	unset bool,
 ) (application.DeploymentPatch, error) {
-	if unset {
-		patch, err := application.NewDeploymentPatch(field, application.DeploymentUnset{})
-		if err != nil {
-			return application.DeploymentPatch{}, errDeploymentEditInvalid
-		}
-
-		return patch, nil
-	}
-	if value == "" || len(value) > maximumTUICommitMessage || strings.TrimSpace(value) != value ||
-		strings.ContainsAny(value, "\x00\r\n") {
+	if len(value) > maximumTUICommitMessage {
 		return application.DeploymentPatch{}, errDeploymentEditInvalid
 	}
-
-	var parsed application.DeploymentValue
-	var err error
-	switch field {
-	case application.DeploymentCPUs:
-		var number float64
-		number, err = strconv.ParseFloat(value, 32)
-		parsed = application.DeploymentCPU(number)
-	case application.DeploymentMemory, application.DeploymentSharedMemory:
-		var number int64
-		number, err = strconv.ParseInt(value, 10, 64)
-		parsed = application.DeploymentBytes(number)
-	case application.DeploymentPIDs:
-		var number int64
-		number, err = strconv.ParseInt(value, 10, 64)
-		parsed = application.DeploymentInteger(number)
-	case application.DeploymentHealthRetries:
-		var number int
-		number, err = strconv.Atoi(value)
-		parsed = application.DeploymentRetries(number)
-	case application.DeploymentRestart:
-		parsed = application.DeploymentRestartPolicy(value)
-	case application.DeploymentStopGrace, application.DeploymentHealthInterval,
-		application.DeploymentHealthTimeout, application.DeploymentHealthStartPeriod,
-		application.DeploymentHealthStartInterval:
-		var duration time.Duration
-		duration, err = time.ParseDuration(value)
-		parsed = application.DeploymentDuration(duration)
-	case application.DeploymentInit, application.DeploymentReadOnly:
-		var enabled bool
-		enabled, err = strconv.ParseBool(value)
-		parsed = application.DeploymentBoolean(enabled)
-	case application.DeploymentNoNewPrivileges:
-		if value != "true" {
-			err = errDeploymentEditInvalid
-		}
-		parsed = application.DeploymentEnabled{}
-	default:
-		err = errDeploymentEditInvalid
-	}
-	if err != nil {
-		return application.DeploymentPatch{}, errDeploymentEditInvalid
-	}
-	patch, err := application.NewDeploymentPatch(field, parsed)
+	patch, err := application.ParseDeploymentPatch(field.ID(), value, unset)
 	if err != nil {
 		return application.DeploymentPatch{}, errDeploymentEditInvalid
 	}

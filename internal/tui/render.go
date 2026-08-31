@@ -170,7 +170,9 @@ func (state *model) hardFloorView(width int) []string {
 		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage,
 		deploymentFieldsPage, deploymentValuePage, deploymentPreviewPage,
 		stageDeploymentConfirmationPage, deploymentHistoryPage,
-		restoreDeploymentConfirmationPage, preparationRequiredPage:
+		restoreDeploymentConfirmationPage, preparationRequiredPage, llmConfigurationPage,
+		llmSaveConfirmationPage, llmSaveOutcomeUnknownPage, llmQuestionPage, llmNetworkConfirmationPage,
+		llmChoicesPage:
 		next = "Esc Back   q Quit"
 	case selectServicePage:
 		next = "Enter Review   Esc Back"
@@ -218,6 +220,9 @@ func (state *model) locationLine() string {
 }
 
 func (state *model) workspaceLocation() (string, bool) {
+	if location, valid := state.llmWorkspaceLocation(); valid {
+		return location, true
+	}
 	if location, valid := state.deploymentWorkspaceLocation(); valid {
 		return location, true
 	}
@@ -272,6 +277,9 @@ func (state *model) deploymentCommitPage() bool {
 }
 
 func (state *model) rail() []string {
+	if lines, valid := state.llmWorkspaceRail(); valid {
+		return lines
+	}
 	if lines, valid := state.deploymentWorkspaceRail(); valid {
 		return lines
 	}
@@ -405,7 +413,7 @@ func (state *model) appendBodyState(lines []string) []string {
 
 func (state *model) sourceDiagnosticBody(current sourceDiagnosticPage, width int) []string {
 	diagnostic := current.diagnostic
-	position := "Unavailable"
+	position := displayUnavailable
 	if diagnostic.Line > 0 {
 		position = fmt.Sprintf("line %d", diagnostic.Line)
 		if diagnostic.Column > 0 {
@@ -452,6 +460,9 @@ func sourceDiagnosticText(reason SourceDiagnosticReason) (string, string) {
 }
 
 func (state *model) auxiliaryPageBody(width int) ([]string, bool) {
+	if lines, valid := state.llmPageBody(width); valid {
+		return lines, true
+	}
 	if lines, valid := state.registrationPageBody(width); valid {
 		return lines, true
 	}
@@ -856,7 +867,7 @@ func (state *model) reviewStatusBody(plan planView, width int, compact bool) []s
 	}
 	lines = append(lines, state.choice(true, "Continue to confirmation", width))
 	if !compact {
-		lines = append(lines, state.muted("e Edit deployment   h History   d Details   r Refresh   Esc Back"))
+		lines = append(lines, state.muted("a Recommend   e Edit deployment   h History   d Details   r Refresh   Esc Back"))
 	}
 
 	return lines
@@ -909,6 +920,9 @@ func (state *model) confirmationBody(current confirmationPage, width int) []stri
 }
 
 func (state *model) footer(width int) string {
+	if keys, valid := state.llmWorkspaceFooter(); valid {
+		return state.muted(terminaltext.Clip(keys, width))
+	}
 	if keys, valid := state.deploymentWorkspaceFooter(); valid {
 		return state.muted(terminaltext.Clip(keys, width))
 	}
@@ -918,7 +932,7 @@ func (state *model) footer(width int) string {
 	keys := "↑/↓ Navigate   Enter Select   q Quit"
 	switch state.page.(type) {
 	case reviewPage:
-		keys = "Enter Continue   e Edit   h History   d Details   r Refresh   Esc Back   q Quit"
+		keys = "Enter Continue   a Recommend   e Edit   h History   d Details   r Refresh   Esc Back   q Quit"
 	case detailsPage:
 		keys = "↑/↓ Scroll   d/Esc Back   q Quit"
 	case confirmationPage:

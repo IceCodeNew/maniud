@@ -49,7 +49,7 @@ func TestRunGitWithUserConfigPreservesSigningEnvironment(t *testing.T) {
 	gitPath := installFakeGit(t)
 	home := t.TempDir()
 	for name, value := range map[string]string{
-		"HOME": home, "XDG_CONFIG_HOME": home + "/config", "XDG_RUNTIME_DIR": home + "/runtime",
+		"HOME": home, xdgConfigHomeEnvironment: home + "/config", "XDG_RUNTIME_DIR": home + "/runtime",
 		"GNUPGHOME": home + "/gnupg", "GPG_TTY": "/dev/ttys001", "SSH_AUTH_SOCK": home + "/agent.sock",
 		"GIT_DIR": "hostile", "GIT_CONFIG_GLOBAL": "hostile",
 	} {

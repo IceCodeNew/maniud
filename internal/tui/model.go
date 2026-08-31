@@ -274,6 +274,7 @@ type model struct {
 	catalog     Catalog
 	workspace   ServiceWorkspace
 	deployments DeploymentWorkspace
+	assistant   Assistant
 	operations  Operations
 	events      *EventStream
 	options     Options
@@ -314,9 +315,24 @@ func newModelWithDeployments(
 	events *EventStream,
 	options Options,
 ) *model {
+	return newModelWithCapabilities(
+		ctx, catalog, workspace, deployments, nil, operations, events, options,
+	)
+}
+
+func newModelWithCapabilities(
+	ctx context.Context,
+	catalog Catalog,
+	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
+	assistant Assistant,
+	operations Operations,
+	events *EventStream,
+	options Options,
+) *model {
 	return &model{
 		ctx: ctx, catalog: catalog, workspace: workspace, deployments: deployments,
-		operations: operations, events: events, options: options,
+		assistant: assistant, operations: operations, events: events, options: options,
 		page: homePage{catalog: CatalogSnapshot{State: CatalogMissing}}, status: "Loading services",
 	}
 }
@@ -365,6 +381,9 @@ func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:iret
 }
 
 func (state *model) handleWorkspaceMessage(message tea.Msg) (tea.Cmd, bool) {
+	if command, handled := state.handleLLMMessage(message); handled {
+		return command, true
+	}
 	if command, handled := state.handleServiceWorkspaceMessage(message); handled {
 		return command, true
 	}
@@ -450,6 +469,9 @@ func (state *model) handleServiceWorkspaceMessage(message tea.Msg) (tea.Cmd, boo
 }
 
 func (state *model) invalidateConfirmation() {
+	if state.invalidateLLMConfirmation() {
+		return
+	}
 	switch current := state.page.(type) {
 	case confirmationPage:
 		state.page = current.review
@@ -508,6 +530,9 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 }
 
 func (state *model) handleAuxiliaryPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
+	if command, handled := state.handleLLMPageKey(message); handled {
+		return command, true
+	}
 	if command, handled := state.handleRegistrationPageKey(message); handled {
 		return command, true
 	}
@@ -1124,6 +1149,8 @@ func (state *model) handleReviewKey(current reviewPage, key string) tea.Cmd {
 		return state.startDeploymentFields(current)
 	case "h":
 		return state.startDeploymentHistory(current)
+	case "a":
+		return state.startLLMConfiguration(current)
 	case keyEscape:
 		return state.startCatalog()
 	case keyQuit:

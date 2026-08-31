@@ -54,7 +54,7 @@ func (state *model) deploymentFieldsBody(current deploymentFieldsPage, width int
 			value = field.Value
 		}
 		if !field.Available {
-			value = "Unavailable"
+			value = displayUnavailable
 		}
 		label := deploymentFieldLabel(field.ID) + "  " + value
 		lines = append(lines, state.choice(index == current.cursor, label, width))

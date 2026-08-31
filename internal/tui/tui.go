@@ -176,6 +176,95 @@ type DeploymentHistoryEntry struct {
 	SignaturePresent bool
 }
 
+// LLMConfiguration is the privacy-safe effective provider configuration.
+type LLMConfiguration struct {
+	Provider      string
+	Model         string
+	Endpoint      string
+	Timeout       string
+	Origin        string
+	KeySource     string
+	KeyConfigured bool
+	Complete      bool
+	Identity      string
+	Warnings      []string
+}
+
+// LLMSettings is one TUI configuration draft. An empty APIKey preserves the
+// current protected value; ClearAPIKey explicitly removes it from XDG config.
+type LLMSettings struct {
+	Provider    string
+	Model       string
+	Endpoint    string
+	Timeout     string
+	APIKey      string
+	ClearAPIKey bool
+}
+
+// LLMChange is one locally validated field mutation in a provider choice.
+type LLMChange struct {
+	FieldID string
+	Value   string
+	Unset   bool
+}
+
+// LLMRecommendation is one provider choice that still requires user selection.
+type LLMRecommendation struct {
+	Summary string
+	Changes []LLMChange
+}
+
+// LLMResult is one bounded completion result. Token is opaque to the TUI.
+type LLMResult struct {
+	Token          string
+	RequestedModel string
+	ReportedModel  string
+	ModelWarning   bool
+	Choices        []LLMRecommendation
+}
+
+// LLMActionCode is one privacy-safe assistant or configuration outcome.
+type LLMActionCode string
+
+// Stable LLM action codes returned through the Assistant role.
+const (
+	LLMConfigInvalid        LLMActionCode = "llm_config_invalid"
+	LLMConfigPathInvalid    LLMActionCode = "llm_config_path_invalid"
+	LLMConfigSaveStale      LLMActionCode = "config_save_stale"
+	LLMConfigSaveUnknown    LLMActionCode = "config_save_outcome_unknown"
+	LLMQuestionInvalid      LLMActionCode = "llm_question_invalid"
+	LLMForbiddenValue       LLMActionCode = "llm_forbidden_value"
+	LLMAuthenticationFailed LLMActionCode = "llm_authentication_failed"
+	LLMRateLimited          LLMActionCode = "llm_rate_limited"
+	LLMContextLimit         LLMActionCode = "llm_context_limit"
+	LLMRefused              LLMActionCode = "llm_refused"
+	LLMEmptyResponse        LLMActionCode = "llm_empty_response"
+	LLMTruncated            LLMActionCode = "llm_truncated"
+	LLMInvalidResponse      LLMActionCode = "llm_invalid_response"
+	LLMModelUnavailable     LLMActionCode = "llm_model_unavailable"
+	LLMTimeout              LLMActionCode = "llm_timeout"
+	LLMCancelled            LLMActionCode = "llm_cancelled"
+	LLMProviderFailed       LLMActionCode = "llm_provider_failed"
+	LLMContextStale         LLMActionCode = "llm_context_stale"
+)
+
+// LLMActionError contains no provider response, dependency error, secret, or private value.
+type LLMActionError struct {
+	Code     LLMActionCode
+	Category string
+}
+
+func (failure *LLMActionError) Error() string {
+	if failure == nil {
+		return "LLM action failed"
+	}
+	if failure.Category == "" {
+		return string(failure.Code)
+	}
+
+	return string(failure.Code) + ": " + failure.Category
+}
+
 // Target is one validated service that can enter the operation façade.
 type Target struct {
 	Project string
@@ -226,6 +315,31 @@ type DeploymentWorkspace interface {
 	Commit(ctx context.Context, message string, unsigned bool) (DeploymentCommitResult, error)
 	Discard(ctx context.Context) error
 	History(ctx context.Context, request application.Request) ([]DeploymentHistoryEntry, error)
+}
+
+// DeploymentRecommendationWorkspace extends the manual editor with one
+// multi-field LLM choice while retaining the same staged Git transaction.
+type DeploymentRecommendationWorkspace interface {
+	PreviewRecommendation(
+		ctx context.Context,
+		request application.Request,
+		changes []LLMChange,
+	) (DeploymentEditPreview, error)
+}
+
+// Assistant owns resolved configuration, provider networking, bounded chat,
+// and stale-context validation outside the TUI model.
+type Assistant interface {
+	Configuration(ctx context.Context) (LLMConfiguration, error)
+	Save(ctx context.Context, settings LLMSettings) (LLMConfiguration, error)
+	Recommend(
+		ctx context.Context,
+		request application.Request,
+		configurationIdentity string,
+		question string,
+	) (LLMResult, error)
+	Accept(ctx context.Context, token string, choice int) error
+	Close()
 }
 
 // Operations is the mutation façade consumed by the TUI.
@@ -307,6 +421,37 @@ func Run(
 	events *EventStream,
 	options Options,
 ) error {
+	return run(ctx, input, output, catalog, workspace, deployments, nil, operations, events, options)
+}
+
+// RunWithAssistant opens one session with the optional LLM capability enabled.
+func RunWithAssistant(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	catalog Catalog,
+	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
+	assistant Assistant,
+	operations Operations,
+	events *EventStream,
+	options Options,
+) error {
+	return run(ctx, input, output, catalog, workspace, deployments, assistant, operations, events, options)
+}
+
+func run(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	catalog Catalog,
+	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
+	assistant Assistant,
+	operations Operations,
+	events *EventStream,
+	options Options,
+) error {
 	if catalog == nil || workspace == nil || deployments == nil || operations == nil || events == nil {
 		return errInvalidInput
 	}
@@ -314,7 +459,9 @@ func Run(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	state := newModelWithDeployments(runCtx, catalog, workspace, deployments, operations, events, options)
+	state := newModelWithCapabilities(
+		runCtx, catalog, workspace, deployments, assistant, operations, events, options,
+	)
 	_, err := tea.NewProgram(
 		state,
 		tea.WithInput(input),
@@ -323,6 +470,9 @@ func Run(
 	).Run()
 	cleanupCtx := context.WithoutCancel(ctx)
 	cleanupErr := errors.Join(workspace.Suspend(cleanupCtx), deployments.Discard(cleanupCtx))
+	if assistant != nil {
+		assistant.Close()
+	}
 	if err != nil {
 		return errors.Join(fmt.Errorf("run TUI: %w", err), cleanupErr)
 	}

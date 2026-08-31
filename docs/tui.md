@@ -57,9 +57,22 @@ Press `e` to edit a deployment parameter. The editor lists the supported CPU, me
 
 Press `h` to open the 100 most recent first-parent commits that changed the selected Compose file. The history page reports whether a commit contains a signature; it does not verify the signer. Selecting an older file revision creates a fresh validated candidate and, after confirmation, a new restore commit. It does not rewrite Git history. The current file revision cannot produce a no-op restore.
 
+### Ask for LLM deployment recommendations
+
+Press `a` on Review to configure LLM assistance or ask a deployment question. The configuration slides support OpenAI, DeepSeek, and an OpenAI-compatible HTTPS endpoint. They collect the model, a 5–120 second per-attempt timeout, and an API key. Saving changes only `$XDG_CONFIG_HOME/maniud/.env`; it does not contact the provider.
+
+Maniud resolves each setting from the process environment, the current directory's `.env`, then `$XDG_CONFIG_HOME/maniud/.env`. An empty API-key assignment in a higher-priority source hides lower-priority keys. Current-directory files containing an API key must be owned by the current user and must not grant group or other permissions. The XDG directory and file use modes `0700` and `0600` and reject symlinked path components.
+
+Before sending, the confirmation page shows the provider, model, origin, and key source. The provider receives your bounded question and a deployment projection containing supported parameter fields plus limited service, runtime, platform, and action metadata. It does not receive the process environment, credentials, private paths, Compose text, runtime object IDs, or complete image references. A question containing one of those known values is rejected locally.
+
+The request is non-streaming and may make up to three HTTP attempts. A completed response must pass strict JSON, field, citation, and Compose-value validation. When a provider returns more than one valid choice, the TUI lists up to three choices and waits for your selection. Maniud does not select a choice. The selected changes still open the normal Compose preview, stage confirmation, diff, and commit flow; the provider cannot write or commit a file directly.
+
+If saving reports unknown durability, the TUI shows the currently visible non-secret configuration and key source. **Retry Save** repeats only the protected configuration write and does not contact the provider. Provider failures return to the question page with a stable recovery message. Retrying a provider request can incur another charge.
+
 Use these controls on Review:
 
 - Enter opens the apply confirmation.
+- `a` opens LLM assistance.
 - `e` opens the deployment parameter editor.
 - `h` opens deployment history.
 - `d` opens Details.
