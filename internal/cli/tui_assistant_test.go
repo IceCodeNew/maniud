@@ -576,6 +576,9 @@ func TestTUIAssistantRejectsDriftAndMapsEveryActionError(t *testing.T) {
 		t.Fatalf("closed assistant = %#v", assistant)
 	}
 	cloned := cloneForbiddenValues(map[string][]string{testLLMCredential: {testLLMSecretValue}})
+	if len(cloned[testLLMCredential]) != 1 {
+		t.Fatalf("cloned forbidden values = %#v", cloned)
+	}
 	cloned[testLLMCredential][0] = "changed"
 	if cloneForbiddenValues(nil) == nil {
 		t.Fatal("nil forbidden map did not produce an independent map")
