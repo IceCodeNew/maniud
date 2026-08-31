@@ -235,12 +235,16 @@ func TestBindApplyRepositorySourceRejectsMismatchedEvidence(t *testing.T) {
 		t.Fatalf("bindApplyRepositorySource(invalid scope) = %#v, %v", provenance, bindErr)
 	}
 	zeroDigest := valid
+	zeroDigest.Repository = new(*valid.Repository)
 	zeroDigest.Repository.Digest = domain.Digest{}
 	if _, bindErr = bindApplyRepositorySource(root, path, scope, zeroDigest); !errors.Is(
 		bindErr,
 		compose.ErrInvalidSource,
 	) {
 		t.Fatalf("bindApplyRepositorySource(zero digest) error = %v", bindErr)
+	}
+	if _, bindErr = bindApplyRepositorySource(root, path, scope, valid); bindErr != nil {
+		t.Fatalf("bindApplyRepositorySource(valid after mutation) error = %v", bindErr)
 	}
 	dependencies := applyDependencies{
 		loadSource:     func(context.Context, string) (compose.Source, error) { return zeroDigest, nil },
