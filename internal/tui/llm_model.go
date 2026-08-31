@@ -383,7 +383,11 @@ func (state *model) handleLLMSaveConfirmationKey(
 			return nil
 		}
 
-		return state.startLLMSave(current.configuration)
+		configuration := current.configuration
+		current.configuration.draft.APIKey = ""
+		state.page = current
+
+		return state.startLLMSave(configuration)
 	case keyEscape:
 		state.page = current.configuration
 		state.status = statusReviewLLMConfig

@@ -60,7 +60,7 @@ quickstart_socket="$temporary_dir/qs.sock"
 quickstart_ready="$temporary_dir/qs.ready"
 quickstart_engine_log="$temporary_dir/qs-engine.log"
 mkdir -p "$quickstart_repository/services" "$quickstart_docker_config"
-mkdir -m 0700 "$quickstart_state"
+mkdir -m 0700 "$temporary_dir/home" "$quickstart_state"
 
 case "$(uname -m)" in
 x86_64 | amd64)

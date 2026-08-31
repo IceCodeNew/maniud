@@ -198,7 +198,12 @@ func TestModelConfiguresLLMAndPreviewsExplicitChoice(t *testing.T) {
 	state.handleKey(key("replacement-test-key"))
 	state.handleKey(key(keyEnter))
 	state.handleKey(key(keyTab))
-	deliver(t, state, state.handleKey(key(keyEnter)))
+	save := state.handleKey(key(keyEnter))
+	confirmation := mustLLMPage[llmSaveConfirmationPage](state.page)
+	if confirmation.configuration.draft.APIKey != "" {
+		t.Fatal("API key remained in the save confirmation while storage was pending")
+	}
+	deliver(t, state, save)
 	question, valid := state.page.(llmQuestionPage)
 	if !valid || question.configuration.Identity != configured.Identity || len(assistant.settings) != 1 ||
 		assistant.settings[0].APIKey != "replacement-test-key" {

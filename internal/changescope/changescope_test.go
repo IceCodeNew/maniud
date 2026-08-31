@@ -253,6 +253,10 @@ func TestLoaderReportsFilesystemAndPackageFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+		if file, err := os.Open(path); err == nil { //nolint:gosec // The test owns this temporary path.
+			_ = file.Close()
+			t.Skip("current user can read a zero-mode file")
+		}
 		if err := loadModules(root, emptySide(root)); err == nil {
 			t.Fatal("loadModules() accepted an unreadable go.mod")
 		}
