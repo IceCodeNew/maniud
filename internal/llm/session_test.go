@@ -314,7 +314,7 @@ func assertProductRequestContract(t *testing.T, body []byte, expectAssistant boo
 }
 
 func isActionError(err error, code ErrorCode) bool {
-	var action *ActionError
+	action, valid := errors.AsType[*ActionError](err)
 
-	return errors.As(err, &action) && action.Code == code
+	return valid && action.Code == code
 }

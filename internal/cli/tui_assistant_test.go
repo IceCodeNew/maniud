@@ -467,8 +467,8 @@ func TestTUIAssistantContainsUnknownSaveAndPostSaveReloadFailure(t *testing.T) {
 		return nil, errTUIAssistantFixture
 	}
 	configuration, err := unknown.Save(t.Context(), settings)
-	var actionError *tui.LLMActionError
-	if !errors.As(err, &actionError) || actionError.Code != tui.LLMConfigSaveUnknown || !configuration.Complete {
+	actionError, valid := errors.AsType[*tui.LLMActionError](err)
+	if !valid || actionError.Code != tui.LLMConfigSaveUnknown || !configuration.Complete {
 		t.Fatalf("Save(unknown) = %#v, %v", configuration, err)
 	}
 	unknownReload := newAssistant(t)
@@ -478,8 +478,9 @@ func TestTUIAssistantContainsUnknownSaveAndPostSaveReloadFailure(t *testing.T) {
 
 		return nil, errTUIAssistantFixture
 	}
-	if _, err = unknownReload.Save(unknownCtx, settings); !errors.As(err, &actionError) ||
-		actionError.Code != tui.LLMConfigSaveUnknown {
+	_, err = unknownReload.Save(unknownCtx, settings)
+	actionError, valid = errors.AsType[*tui.LLMActionError](err)
+	if !valid || actionError.Code != tui.LLMConfigSaveUnknown {
 		t.Fatalf("Save(unknown reload failure) error = %v", err)
 	}
 
@@ -592,8 +593,8 @@ func TestTUIAssistantRejectsDriftAndMapsEveryActionError(t *testing.T) {
 	}
 	for _, code := range codes {
 		mapped := publicLLMActionError(&llm.ActionError{Code: code, Category: "category"})
-		var action *tui.LLMActionError
-		if !errors.As(mapped, &action) || action.Category != "category" {
+		action, valid := errors.AsType[*tui.LLMActionError](mapped)
+		if !valid || action.Category != "category" {
 			t.Fatalf("publicLLMActionError(%s) = %v", code, mapped)
 		}
 	}

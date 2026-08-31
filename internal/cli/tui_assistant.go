@@ -302,8 +302,8 @@ func publicLLMConfigError(err error) error {
 
 //nolint:cyclop // This is the exhaustive mapping between the capability and TUI role codes.
 func publicLLMActionError(err error) error {
-	var action *llm.ActionError
-	if !errors.As(err, &action) {
+	action, valid := errors.AsType[*llm.ActionError](err)
+	if !valid {
 		return &tui.LLMActionError{Code: tui.LLMProviderFailed}
 	}
 	var code tui.LLMActionCode
