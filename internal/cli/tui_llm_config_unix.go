@@ -201,6 +201,10 @@ func sha256Bytes(value []byte) [32]byte {
 	return sha256.Sum256(value)
 }
 
+func statUint64[T ~int32 | ~uint16 | ~uint32 | ~uint64](value T) uint64 {
+	return uint64(value)
+}
+
 func llmIdentity(info os.FileInfo) (llmFileIdentity, bool) {
 	metadata, valid := info.Sys().(*syscall.Stat_t)
 	if !valid {
@@ -208,9 +212,10 @@ func llmIdentity(info os.FileInfo) (llmFileIdentity, bool) {
 	}
 
 	return llmFileIdentity{
-		device: uint64(metadata.Dev), //nolint:gosec // Unix device IDs are non-negative kernel identifiers.
+		device: statUint64(metadata.Dev),
 		inode:  metadata.Ino,
-		links:  uint64(metadata.Nlink), owner: metadata.Uid,
+		links:  statUint64(metadata.Nlink),
+		owner:  metadata.Uid,
 	}, true
 }
 
