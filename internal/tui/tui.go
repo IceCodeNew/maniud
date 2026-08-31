@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/llm"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -223,34 +224,17 @@ type LLMResult struct {
 	Choices        []LLMRecommendation
 }
 
-// LLMActionCode is one privacy-safe assistant or configuration outcome.
-type LLMActionCode string
-
-// Stable LLM action codes returned through the Assistant role.
+// Stable configuration outcomes owned by the Assistant role. Provider action
+// outcomes use llm.ErrorCode directly.
 const (
-	LLMConfigInvalid        LLMActionCode = "llm_config_invalid"
-	LLMConfigPathInvalid    LLMActionCode = "llm_config_path_invalid"
-	LLMConfigSaveStale      LLMActionCode = "config_save_stale"
-	LLMConfigSaveUnknown    LLMActionCode = "config_save_outcome_unknown"
-	LLMQuestionInvalid      LLMActionCode = "llm_question_invalid"
-	LLMForbiddenValue       LLMActionCode = "llm_forbidden_value"
-	LLMAuthenticationFailed LLMActionCode = "llm_authentication_failed"
-	LLMRateLimited          LLMActionCode = "llm_rate_limited"
-	LLMContextLimit         LLMActionCode = "llm_context_limit"
-	LLMRefused              LLMActionCode = "llm_refused"
-	LLMEmptyResponse        LLMActionCode = "llm_empty_response"
-	LLMTruncated            LLMActionCode = "llm_truncated"
-	LLMInvalidResponse      LLMActionCode = "llm_invalid_response"
-	LLMModelUnavailable     LLMActionCode = "llm_model_unavailable"
-	LLMTimeout              LLMActionCode = "llm_timeout"
-	LLMCancelled            LLMActionCode = "llm_cancelled"
-	LLMProviderFailed       LLMActionCode = "llm_provider_failed"
-	LLMContextStale         LLMActionCode = "llm_context_stale"
+	LLMConfigPathInvalid llm.ErrorCode = "llm_config_path_invalid"
+	LLMConfigSaveStale   llm.ErrorCode = "config_save_stale"
+	LLMConfigSaveUnknown llm.ErrorCode = "config_save_outcome_unknown"
 )
 
 // LLMActionError contains no provider response, dependency error, secret, or private value.
 type LLMActionError struct {
-	Code     LLMActionCode
+	Code     llm.ErrorCode
 	Category string
 }
 

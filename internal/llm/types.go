@@ -32,11 +32,6 @@ const (
 	ProviderOpenAICompatible Provider = "openai-compatible"
 )
 
-// Providers returns supported providers in TUI display order.
-func Providers() []Provider {
-	return []Provider{ProviderOpenAI, ProviderOpenAICompatible, ProviderDeepSeek}
-}
-
 // Config is one fully resolved provider configuration. APIKey must never enter
 // logs, presentation values, or persistence outside the protected XDG file.
 type Config struct {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/IceCodeNew/maniud/internal/llm"
 )
 
 const (
@@ -610,7 +611,7 @@ func llmSaveErrorStatus(err error) string {
 		return "Configuration changed; reload and review before saving again"
 	case LLMConfigPathInvalid:
 		return "Protected configuration path does not meet the security requirements"
-	case LLMConfigInvalid:
+	case llm.ErrorConfigInvalid:
 		return "LLM configuration is invalid"
 	default:
 		return "LLM configuration was not saved"
@@ -620,46 +621,46 @@ func llmSaveErrorStatus(err error) string {
 //nolint:cyclop,exhaustive // Each relevant role code owns one privacy-safe recovery instruction.
 func llmRecommendationErrorStatus(err error) string {
 	switch llmActionErrorCode(err) {
-	case LLMConfigInvalid:
+	case llm.ErrorConfigInvalid:
 		return "LLM configuration changed or is incomplete; review it before retrying"
-	case LLMQuestionInvalid:
+	case llm.ErrorQuestionInvalid:
 		return "The deployment question is invalid; edit it before retrying"
-	case LLMForbiddenValue:
+	case llm.ErrorForbiddenValue:
 		return "The question includes protected deployment data; remove it before retrying"
-	case LLMAuthenticationFailed:
+	case llm.ErrorAuthentication:
 		return "Provider authentication failed; review the configured API key"
-	case LLMRateLimited:
+	case llm.ErrorRateLimited:
 		return "The provider rate-limited this request; wait before retrying"
-	case LLMContextLimit:
+	case llm.ErrorContextLimit:
 		return "The provider context limit was exceeded; shorten the question"
-	case LLMRefused:
+	case llm.ErrorRefused:
 		return "The provider refused this request; revise the question"
-	case LLMEmptyResponse:
+	case llm.ErrorEmptyResponse:
 		return "The provider returned no recommendation; retrying may create another billed request"
-	case LLMTruncated:
+	case llm.ErrorTruncated:
 		return "The provider truncated the recommendation; retrying may create another billed request"
-	case LLMInvalidResponse:
+	case llm.ErrorInvalidResponse:
 		return "The provider response did not pass local validation"
-	case LLMModelUnavailable:
+	case llm.ErrorModelUnavailable:
 		return "The configured model is unavailable; review the model name"
-	case LLMTimeout:
+	case llm.ErrorTimeout:
 		return "The provider request timed out; retrying may create another billed request"
-	case LLMCancelled:
+	case llm.ErrorCancelled:
 		return "Provider request cancelled"
-	case LLMContextStale:
+	case llm.ErrorContextStale:
 		return "Deployment context changed; review current values before sending again"
 	default:
 		return "LLM recommendation failed; retry may create another billed request"
 	}
 }
 
-func llmActionErrorCode(err error) LLMActionCode {
+func llmActionErrorCode(err error) llm.ErrorCode {
 	action, found := errors.AsType[*LLMActionError](err)
 	if found {
 		return action.Code
 	}
 
-	return LLMProviderFailed
+	return llm.ErrorProvider
 }
 
 func (state *model) handleLLMChoicesKey(current llmChoicesPage, key string) tea.Cmd {

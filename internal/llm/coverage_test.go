@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,9 +20,6 @@ var errLLMCoverageFixture = errors.New("LLM coverage fixture failure")
 
 func TestProviderConfigurationBoundaries(t *testing.T) {
 	t.Parallel()
-	if !slices.Equal(Providers(), []Provider{ProviderOpenAI, ProviderOpenAICompatible, ProviderDeepSeek}) {
-		t.Fatalf("Providers() = %q", Providers())
-	}
 	for _, test := range []struct {
 		name   string
 		config Config

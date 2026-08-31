@@ -71,7 +71,7 @@ func (assistant *tuiAssistant) Save(
 	}
 	updates, err := llmSettingsUpdates(settings)
 	if err != nil {
-		return tui.LLMConfiguration{}, &tui.LLMActionError{Code: tui.LLMConfigInvalid}
+		return tui.LLMConfiguration{}, &tui.LLMActionError{Code: llm.ErrorConfigInvalid}
 	}
 	if err = publishXDGLLMEnvWithOperations(
 		assistant.environment, assistant.resolved.baseline, updates, assistant.configOps,
@@ -116,7 +116,7 @@ func (assistant *tuiAssistant) Recommend(
 	) {
 		assistant.closeSession()
 
-		return tui.LLMResult{}, &tui.LLMActionError{Code: tui.LLMContextStale}
+		return tui.LLMResult{}, &tui.LLMActionError{Code: llm.ErrorContextStale}
 	}
 	token := rand.Text()
 	clear(assistant.pending)
@@ -133,7 +133,7 @@ func (assistant *tuiAssistant) Accept(ctx context.Context, token string, choice 
 	defer assistant.mu.Unlock()
 	pending, found := assistant.pending[token]
 	if !found || assistant.session == nil {
-		return &tui.LLMActionError{Code: tui.LLMContextStale}
+		return &tui.LLMActionError{Code: llm.ErrorContextStale}
 	}
 	if !assistant.recommendationContextCurrent(
 		ctx, pending.request, pending.configurationIdentity, pending.contextIdentity,
@@ -141,7 +141,7 @@ func (assistant *tuiAssistant) Accept(ctx context.Context, token string, choice 
 	) {
 		assistant.closeSession()
 
-		return &tui.LLMActionError{Code: tui.LLMContextStale}
+		return &tui.LLMActionError{Code: llm.ErrorContextStale}
 	}
 	if err := assistant.session.Accept(pending.result, choice); err != nil {
 		return publicLLMActionError(err)
@@ -169,7 +169,7 @@ func (assistant *tuiAssistant) prepareRecommendation(
 ) (llmResolvedConfig, tuiAssistContext, string, error) {
 	resolved, err := assistant.reload(ctx)
 	if err != nil || resolved.identity == "" || resolved.identity != configurationIdentity {
-		return llmResolvedConfig{}, tuiAssistContext{}, "", &tui.LLMActionError{Code: tui.LLMConfigInvalid}
+		return llmResolvedConfig{}, tuiAssistContext{}, "", &tui.LLMActionError{Code: llm.ErrorConfigInvalid}
 	}
 	canonical, err := llm.CanonicalQuestion(question)
 	if err != nil {
@@ -177,12 +177,12 @@ func (assistant *tuiAssistant) prepareRecommendation(
 	}
 	before, err := assistant.deployments.assistContext(ctx, request, assistant.operations)
 	if err != nil {
-		return llmResolvedConfig{}, tuiAssistContext{}, "", &tui.LLMActionError{Code: tui.LLMContextStale}
+		return llmResolvedConfig{}, tuiAssistContext{}, "", &tui.LLMActionError{Code: llm.ErrorContextStale}
 	}
 	forbidden := assistant.forbiddenRecommendationValues(resolved, before)
 	if category := forbiddenQuestionCategory(canonical, forbidden); category != "" {
 		return llmResolvedConfig{}, tuiAssistContext{}, "", &tui.LLMActionError{
-			Code: tui.LLMForbiddenValue, Category: category,
+			Code: llm.ErrorForbiddenValue, Category: category,
 		}
 	}
 	if err = assistant.ensureSession(resolved, before); err != nil {
@@ -316,51 +316,15 @@ func publicLLMConfigError(err error) error {
 	case errors.Is(err, errLLMConfigPathInvalid):
 		return &tui.LLMActionError{Code: tui.LLMConfigPathInvalid}
 	default:
-		return &tui.LLMActionError{Code: tui.LLMConfigInvalid}
+		return &tui.LLMActionError{Code: llm.ErrorConfigInvalid}
 	}
 }
 
-//nolint:cyclop // This is the exhaustive mapping between the capability and TUI role codes.
 func publicLLMActionError(err error) error {
 	action, valid := errors.AsType[*llm.ActionError](err)
 	if !valid {
-		return &tui.LLMActionError{Code: tui.LLMProviderFailed}
-	}
-	var code tui.LLMActionCode
-	switch action.Code {
-	case llm.ErrorConfigInvalid:
-		code = tui.LLMConfigInvalid
-	case llm.ErrorQuestionInvalid:
-		code = tui.LLMQuestionInvalid
-	case llm.ErrorForbiddenValue:
-		code = tui.LLMForbiddenValue
-	case llm.ErrorAuthentication:
-		code = tui.LLMAuthenticationFailed
-	case llm.ErrorRateLimited:
-		code = tui.LLMRateLimited
-	case llm.ErrorContextLimit:
-		code = tui.LLMContextLimit
-	case llm.ErrorRefused:
-		code = tui.LLMRefused
-	case llm.ErrorEmptyResponse:
-		code = tui.LLMEmptyResponse
-	case llm.ErrorTruncated:
-		code = tui.LLMTruncated
-	case llm.ErrorInvalidResponse:
-		code = tui.LLMInvalidResponse
-	case llm.ErrorModelUnavailable:
-		code = tui.LLMModelUnavailable
-	case llm.ErrorTimeout:
-		code = tui.LLMTimeout
-	case llm.ErrorCancelled:
-		code = tui.LLMCancelled
-	case llm.ErrorContextStale:
-		code = tui.LLMContextStale
-	case llm.ErrorProvider:
-		code = tui.LLMProviderFailed
-	default:
-		code = tui.LLMProviderFailed
+		return &tui.LLMActionError{Code: llm.ErrorProvider}
 	}
 
-	return &tui.LLMActionError{Code: code, Category: action.Category}
+	return &tui.LLMActionError{Code: action.Code, Category: action.Category}
 }

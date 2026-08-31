@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/llm"
 )
 
 const (
@@ -509,35 +510,36 @@ func TestLLMSaveUnknownQuestionAndNetworkBoundaries(t *testing.T) {
 //nolint:cyclop,funlen // Every stable action code and choice recovery path is a separate contract outcome.
 func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 	t.Parallel()
-	for code, expected := range map[LLMActionCode]string{
-		LLMConfigInvalid: "LLM configuration", LLMQuestionInvalid: "deployment question",
-		LLMForbiddenValue: "protected deployment data", LLMAuthenticationFailed: "authentication failed",
-		LLMRateLimited: "rate-limited", LLMContextLimit: "context limit", LLMRefused: "refused",
-		LLMEmptyResponse: "no recommendation", LLMTruncated: "truncated", LLMInvalidResponse: "local validation",
-		LLMModelUnavailable: "model is unavailable", LLMTimeout: "timed out", LLMCancelled: "cancelled",
-		LLMContextStale: "context changed", LLMProviderFailed: "recommendation failed",
+	for code, expected := range map[llm.ErrorCode]string{
+		llm.ErrorConfigInvalid: "LLM configuration", llm.ErrorQuestionInvalid: "deployment question",
+		llm.ErrorForbiddenValue: "protected deployment data", llm.ErrorAuthentication: "authentication failed",
+		llm.ErrorRateLimited: "rate-limited", llm.ErrorContextLimit: "context limit", llm.ErrorRefused: "refused",
+		llm.ErrorEmptyResponse: "no recommendation", llm.ErrorTruncated: "truncated",
+		llm.ErrorInvalidResponse: "local validation", llm.ErrorModelUnavailable: "model is unavailable",
+		llm.ErrorTimeout: "timed out", llm.ErrorCancelled: "cancelled",
+		llm.ErrorContextStale: "context changed", llm.ErrorProvider: "recommendation failed",
 	} {
 		err := &LLMActionError{Code: code}
 		if status := llmRecommendationErrorStatus(err); !strings.Contains(status, expected) {
 			t.Fatalf("status for %s = %q", code, status)
 		}
 	}
-	for code := range map[LLMActionCode]struct{}{
-		LLMConfigSaveStale: {}, LLMConfigPathInvalid: {}, LLMConfigInvalid: {}, LLMProviderFailed: {},
+	for code := range map[llm.ErrorCode]struct{}{
+		LLMConfigSaveStale: {}, LLMConfigPathInvalid: {}, llm.ErrorConfigInvalid: {}, llm.ErrorProvider: {},
 	} {
 		if llmSaveErrorStatus(&LLMActionError{Code: code}) == "" {
 			t.Fatalf("empty save status for %s", code)
 		}
 	}
 	var nilFailure *LLMActionError
-	for _, failure := range []*LLMActionError{nilFailure, {Code: LLMProviderFailed}, {
-		Code: LLMForbiddenValue, Category: "credential",
+	for _, failure := range []*LLMActionError{nilFailure, {Code: llm.ErrorProvider}, {
+		Code: llm.ErrorForbiddenValue, Category: "credential",
 	}} {
 		if failure.Error() == "" {
 			t.Fatal("empty action error")
 		}
 	}
-	if llmActionErrorCode(errTestSecret) != LLMProviderFailed {
+	if llmActionErrorCode(errTestSecret) != llm.ErrorProvider {
 		t.Fatal("private error did not collapse to provider failure")
 	}
 

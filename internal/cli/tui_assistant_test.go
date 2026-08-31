@@ -484,7 +484,7 @@ func TestTUIAssistantRecommendsAndAcceptsWithPinnedCompatibleAdapter(t *testing.
 	driftRuntime.Store(true)
 	err = assistant.Accept(t.Context(), staleResult.Token, 0)
 	action, valid := errors.AsType[*tui.LLMActionError](err)
-	if !valid || action.Code != tui.LLMContextStale || assistant.session != nil || len(assistant.pending) != 0 {
+	if !valid || action.Code != llm.ErrorContextStale || assistant.session != nil || len(assistant.pending) != 0 {
 		t.Fatalf("Accept(runtime drift) = %v, session = %#v, pending = %#v", err, assistant.session, assistant.pending)
 	}
 	if err = workspace.Discard(t.Context()); err != nil || workspace.draft != nil {
@@ -683,14 +683,14 @@ func TestTUIAssistantRejectsDriftAndMapsEveryActionError(t *testing.T) {
 	for _, code := range codes {
 		mapped := publicLLMActionError(&llm.ActionError{Code: code, Category: "category"})
 		action, valid := errors.AsType[*tui.LLMActionError](mapped)
-		if !valid || action.Category != "category" {
+		if !valid || action.Code != code || action.Category != "category" {
 			t.Fatalf("publicLLMActionError(%s) = %v", code, mapped)
 		}
 	}
-	if got := publicLLMActionError(errTUIAssistantFixture); got.Error() != string(tui.LLMProviderFailed) {
+	if got := publicLLMActionError(errTUIAssistantFixture); got.Error() != string(llm.ErrorProvider) {
 		t.Fatalf("private error = %v", got)
 	}
-	if got := publicLLMConfigError(errTUIAssistantFixture); got.Error() != string(tui.LLMConfigInvalid) {
+	if got := publicLLMConfigError(errTUIAssistantFixture); got.Error() != string(llm.ErrorConfigInvalid) {
 		t.Fatalf("private config error = %v", got)
 	}
 }
