@@ -26,6 +26,7 @@ type tuiRunner func(
 	io.Writer,
 	tui.Catalog,
 	tui.ServiceWorkspace,
+	tui.DeploymentWorkspace,
 	applyDependencies,
 	*tui.EventStream,
 	tui.Options,
@@ -37,15 +38,18 @@ func executeTUI(
 	output io.Writer,
 	catalog tui.Catalog,
 	workspace tui.ServiceWorkspace,
+	deployments tui.DeploymentWorkspace,
 	dependencies applyDependencies,
 	events *tui.EventStream,
 	options tui.Options,
 ) error {
-	if catalog == nil || workspace == nil || dependencies.operations == nil || events == nil {
+	if catalog == nil || workspace == nil || deployments == nil || dependencies.operations == nil || events == nil {
 		return errInvalidArguments
 	}
 
-	return errors.Join(tui.Run(ctx, input, output, catalog, workspace, dependencies.operations, events, options))
+	return errors.Join(tui.Run(
+		ctx, input, output, catalog, workspace, deployments, dependencies.operations, events, options,
+	))
 }
 
 func executeProductionTUI(
@@ -92,9 +96,10 @@ func executeProductionTUIWith(
 	}
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes)
+	deployments := defaultTUIDeploymentWorkspace(environment)
 
 	runErr := runtimes.Classify(run(
-		ctx, input, output, catalog, workspace, dependencies, tuiEvents, tuiOptions(environment),
+		ctx, input, output, catalog, workspace, deployments, dependencies, tuiEvents, tuiOptions(environment),
 	))
 	instructionErr := writeTUIInstructions(output, workspace.Instructions())
 

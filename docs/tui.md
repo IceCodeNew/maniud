@@ -53,9 +53,15 @@ After a successful commit, `maniud` reloads the fresh committed source. It then 
 
 The Review page compares the current and proposed image identities. Long identities stay in the side-by-side table and are shortened in the middle. Press `d` to inspect their full values on the Details page.
 
+Press `e` to edit a deployment parameter. The editor lists the supported CPU, memory, process, lifecycle, and healthcheck fields with their current values. Enter a new value, or press `u` on a removable field to use the Compose default. `maniud` validates the complete in-memory Compose source before it offers a separate write-and-stage confirmation. The commit page then shows the actual staged diff and uses the same signed-commit and explicit unsigned-fallback flow as service onboarding. Committing the file does not apply it to the runtime.
+
+Press `h` to open the 100 most recent first-parent commits that changed the selected Compose file. The history page reports whether a commit contains a signature; it does not verify the signer. Selecting an older file revision creates a fresh validated candidate and, after confirmation, a new restore commit. It does not rewrite Git history. The current file revision cannot produce a no-op restore.
+
 Use these controls on Review:
 
 - Enter opens the apply confirmation.
+- `e` opens the deployment parameter editor.
+- `h` opens deployment history.
 - `d` opens Details.
 - `r` refreshes dry-run, snapshot, and evidence.
 - Esc returns to service selection.

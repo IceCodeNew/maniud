@@ -37,6 +37,7 @@ func TestDeploymentSemanticProofRejectsUnselectedChanges(t *testing.T) {
 	t.Parallel()
 
 	before := []byte("services:\n  api:\n    cpus: 1\n  worker:\n    image: worker:stable\n")
+	source := testSource(t, string(before))
 	path := [][]string{{"services", "api", "cpus"}}
 	approved := bytes.Replace(before, []byte("cpus: 1"), []byte("cpus: 2"), 1)
 	if !sameUntouchedYAMLSemantics(before, approved, path) {
@@ -49,6 +50,14 @@ func TestDeploymentSemanticProofRejectsUnselectedChanges(t *testing.T) {
 	if sameUntouchedYAMLSemantics([]byte("bad: ["), approved, path) ||
 		sameUntouchedYAMLSemantics(before, []byte("bad: ["), path) {
 		t.Fatal("semantic proof accepted malformed YAML")
+	}
+	normalized := bytes.ReplaceAll(before, []byte("\n"), []byte("\r\n"))
+	candidate, err := source.WithSemanticallyEquivalentEntryContent(normalized)
+	if err != nil || !bytes.Equal(candidate.Content, normalized) {
+		t.Fatalf("WithSemanticallyEquivalentEntryContent() = %q, %v", candidate.Content, err)
+	}
+	if _, err = source.WithSemanticallyEquivalentEntryContent(drifted); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("WithSemanticallyEquivalentEntryContent(drift) error = %v", err)
 	}
 }
 
@@ -182,9 +191,9 @@ services:
 	if err = yaml.Load(source.Content, &document, yaml.WithUniqueKeys()); err != nil {
 		t.Fatalf("yaml.Load() error = %v", err)
 	}
-	canonical, err := yaml.Marshal(&document)
+	canonical, err := yaml.Dump(&document, yaml.WithIndent(2))
 	if err != nil {
-		t.Fatalf("yaml.Marshal() error = %v", err)
+		t.Fatalf("yaml.Dump() error = %v", err)
 	}
 	canonicalSource := source
 	canonicalSource.Content = canonical

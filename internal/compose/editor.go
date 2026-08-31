@@ -14,6 +14,8 @@ import (
 	"github.com/IceCodeNew/maniud/containerconfig"
 )
 
+const composeYAMLIndent = 2
+
 const (
 	deploymentFieldCount   = 14
 	deploymentHealthcheck  = "healthcheck"
@@ -62,7 +64,7 @@ func (source Source) PatchServiceFields(
 		paths = append(paths, path)
 	}
 
-	rendered, err := yaml.Marshal(&document)
+	rendered, err := yaml.Dump(&document, yaml.WithIndent(composeYAMLIndent))
 	if err != nil || bytes.Equal(rendered, source.Content) ||
 		!sameUntouchedYAMLSemantics(source.Content, rendered, paths) {
 		return Source{}, ErrInvalidSource
@@ -85,6 +87,17 @@ func (source Source) PatchServiceFields(
 	}
 
 	return candidate, nil
+}
+
+// WithSemanticallyEquivalentEntryContent replaces the entry bytes only when
+// both YAML documents represent the same values. Git attribute normalization
+// may change encoding details after the typed deployment patch is rendered.
+func (source Source) WithSemanticallyEquivalentEntryContent(content []byte) (Source, error) {
+	if !sameUntouchedYAMLSemantics(source.Content, content, nil) {
+		return Source{}, ErrInvalidSource
+	}
+
+	return source.WithEntryContent(content)
 }
 
 //nolint:cyclop // Each structural check rejects one unsafe entry-document shape.

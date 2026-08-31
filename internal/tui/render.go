@@ -167,7 +167,10 @@ func (state *model) hardFloorView(width int) []string {
 	case sourceDiagnosticPage:
 		next = "Up/Down Scroll   Enter Back"
 	case addServicePage, servicePreviewPage, stageServiceConfirmationPage,
-		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage, preparationRequiredPage:
+		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage,
+		deploymentFieldsPage, deploymentValuePage, deploymentPreviewPage,
+		stageDeploymentConfirmationPage, deploymentHistoryPage,
+		restoreDeploymentConfirmationPage, preparationRequiredPage:
 		next = "Esc Back   q Quit"
 	case selectServicePage:
 		next = "Enter Review   Esc Back"
@@ -191,7 +194,7 @@ func (state *model) header(width int) string {
 }
 
 func (state *model) locationLine() string {
-	if location, valid := state.serviceWorkspaceLocation(); valid {
+	if location, valid := state.workspaceLocation(); valid {
 		return location
 	}
 	switch current := state.page.(type) {
@@ -214,6 +217,14 @@ func (state *model) locationLine() string {
 	}
 }
 
+func (state *model) workspaceLocation() (string, bool) {
+	if location, valid := state.deploymentWorkspaceLocation(); valid {
+		return location, true
+	}
+
+	return state.serviceWorkspaceLocation()
+}
+
 func (state *model) serviceWorkspaceLocation() (string, bool) {
 	switch state.page.(type) {
 	case addServicePage:
@@ -229,7 +240,41 @@ func (state *model) serviceWorkspaceLocation() (string, bool) {
 	}
 }
 
+func (state *model) deploymentWorkspaceLocation() (string, bool) {
+	switch state.page.(type) {
+	case deploymentFieldsPage:
+		return "Home / Edit deployment / Field", true
+	case deploymentValuePage:
+		return "Home / Edit deployment / Value", true
+	case deploymentPreviewPage, stageDeploymentConfirmationPage,
+		restoreDeploymentConfirmationPage:
+		return "Home / Edit deployment / Review", true
+	case deploymentHistoryPage:
+		return "Home / Edit deployment / History", true
+	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+		return "Home / Edit deployment / Commit", state.deploymentCommitPage()
+	default:
+		return "", false
+	}
+}
+
+func (state *model) deploymentCommitPage() bool {
+	switch current := state.page.(type) {
+	case commitServicePage:
+		return current.deployment != nil
+	case stagedDiffPage:
+		return current.commit.deployment != nil
+	case unsignedCommitConfirmationPage:
+		return current.commit.deployment != nil
+	default:
+		return false
+	}
+}
+
 func (state *model) rail() []string {
+	if lines, valid := state.deploymentWorkspaceRail(); valid {
+		return lines
+	}
 	if lines, valid := state.serviceWorkspaceRail(); valid {
 		return lines
 	}
@@ -268,6 +313,29 @@ func (state *model) serviceWorkspaceRail() ([]string, bool) {
 	steps := []string{"Input", "Preview", "Commit", "Validate"}
 
 	return state.flowRail("ADD SERVICE", steps, current), true
+}
+
+func (state *model) deploymentWorkspaceRail() ([]string, bool) {
+	current := -1
+	switch state.page.(type) {
+	case deploymentFieldsPage, deploymentHistoryPage:
+		current = 0
+	case deploymentValuePage:
+		current = 1
+	case deploymentPreviewPage, stageDeploymentConfirmationPage,
+		restoreDeploymentConfirmationPage:
+		current = 2
+	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+		if state.deploymentCommitPage() {
+			current = 3
+		}
+	}
+	if current < 0 {
+		return nil, false
+	}
+	steps := []string{"Field", "Value", "Review", "Commit"}
+
+	return state.flowRail("EDIT DEPLOYMENT", steps, current), true
 }
 
 func (state *model) flowRail(label string, steps []string, current int) []string {
@@ -385,6 +453,9 @@ func sourceDiagnosticText(reason SourceDiagnosticReason) (string, string) {
 
 func (state *model) auxiliaryPageBody(width int) ([]string, bool) {
 	if lines, valid := state.registrationPageBody(width); valid {
+		return lines, true
+	}
+	if lines, valid := state.deploymentPageBody(width); valid {
 		return lines, true
 	}
 
@@ -785,7 +856,7 @@ func (state *model) reviewStatusBody(plan planView, width int, compact bool) []s
 	}
 	lines = append(lines, state.choice(true, "Continue to confirmation", width))
 	if !compact {
-		lines = append(lines, state.muted("d Details   r Refresh   Esc Back"))
+		lines = append(lines, state.muted("e Edit deployment   h History   d Details   r Refresh   Esc Back"))
 	}
 
 	return lines
@@ -838,13 +909,16 @@ func (state *model) confirmationBody(current confirmationPage, width int) []stri
 }
 
 func (state *model) footer(width int) string {
+	if keys, valid := state.deploymentWorkspaceFooter(); valid {
+		return state.muted(terminaltext.Clip(keys, width))
+	}
 	if keys, valid := state.serviceWorkspaceFooter(); valid {
 		return state.muted(terminaltext.Clip(keys, width))
 	}
 	keys := "↑/↓ Navigate   Enter Select   q Quit"
 	switch state.page.(type) {
 	case reviewPage:
-		keys = "Enter Continue   d Details   r Refresh   Esc Back   q Quit"
+		keys = "Enter Continue   e Edit   h History   d Details   r Refresh   Esc Back   q Quit"
 	case detailsPage:
 		keys = "↑/↓ Scroll   d/Esc Back   q Quit"
 	case confirmationPage:
@@ -858,6 +932,27 @@ func (state *model) footer(width int) string {
 	}
 
 	return state.muted(terminaltext.Clip(keys, width))
+}
+
+func (state *model) deploymentWorkspaceFooter() (string, bool) {
+	switch state.page.(type) {
+	case deploymentFieldsPage:
+		return "Up/Down Navigate   Enter Edit   u Remove field   Esc Back", true
+	case deploymentValuePage:
+		return "Type value   Enter Validate   Esc Back", true
+	case deploymentPreviewPage:
+		return "Enter Continue   Esc Back   q Quit", true
+	case deploymentHistoryPage:
+		return "Up/Down Navigate   Enter Review restore   Esc Back", true
+	case stageDeploymentConfirmationPage, restoreDeploymentConfirmationPage:
+		return confirmationKeys, true
+	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+		if state.deploymentCommitPage() {
+			return state.serviceWorkspaceFooter()
+		}
+	}
+
+	return "", false
 }
 
 func (state *model) serviceWorkspaceFooter() (string, bool) {

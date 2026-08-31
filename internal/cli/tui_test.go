@@ -274,6 +274,7 @@ func productionTUIRunner(result error) tuiRunner {
 		io.Writer,
 		tui.Catalog,
 		tui.ServiceWorkspace,
+		tui.DeploymentWorkspace,
 		applyDependencies,
 		*tui.EventStream,
 		tui.Options,
@@ -326,6 +327,56 @@ func (*tuiWorkspaceFixture) Suspend(context.Context) error {
 	return nil
 }
 
+type tuiDeploymentWorkspaceFixture struct{}
+
+func (*tuiDeploymentWorkspaceFixture) Fields(
+	context.Context,
+	application.Request,
+) ([]tui.DeploymentFieldState, error) {
+	return nil, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Preview(
+	context.Context,
+	application.Request,
+	string,
+	string,
+	bool,
+) (tui.DeploymentEditPreview, error) {
+	return tui.DeploymentEditPreview{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) PreviewRestore(
+	context.Context,
+	application.Request,
+	string,
+) (tui.DeploymentEditPreview, error) {
+	return tui.DeploymentEditPreview{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Stage(context.Context) (tui.StagedDeploymentEdit, error) {
+	return tui.StagedDeploymentEdit{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Commit(
+	context.Context,
+	string,
+	bool,
+) (tui.DeploymentCommitResult, error) {
+	return tui.DeploymentCommitResult{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Discard(context.Context) error {
+	return nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) History(
+	context.Context,
+	application.Request,
+) ([]tui.DeploymentHistoryEntry, error) {
+	return nil, nil
+}
+
 type tuiOperationsFixture struct{}
 
 func (*tuiOperationsFixture) DryRun(
@@ -372,7 +423,7 @@ func TestExecuteTUIRunsCatalogHome(t *testing.T) {
 	dependencies := applyDependencies{operations: &tuiOperationsFixture{}}
 	if err := executeTUI(
 		t.Context(), input, io.Discard, catalog, &tuiWorkspaceFixture{},
-		dependencies, tui.NewEventStream(), tui.Options{},
+		&tuiDeploymentWorkspaceFixture{}, dependencies, tui.NewEventStream(), tui.Options{},
 	); err != nil {
 		t.Fatalf("executeTUI() error = %v", err)
 	}
@@ -383,22 +434,40 @@ func TestExecuteTUIRejectsInvalidDependencies(t *testing.T) {
 
 	validCatalog := &tuiCatalogFixture{}
 	validWorkspace := &tuiWorkspaceFixture{}
+	validDeployments := &tuiDeploymentWorkspaceFixture{}
 	validDependencies := applyDependencies{operations: &tuiOperationsFixture{}}
 	events := tui.NewEventStream()
 	tests := []struct {
 		catalog      tui.Catalog
 		workspace    tui.ServiceWorkspace
+		deployments  tui.DeploymentWorkspace
 		dependencies applyDependencies
 		events       *tui.EventStream
 	}{
-		{catalog: nil, workspace: validWorkspace, dependencies: validDependencies, events: events},
-		{catalog: validCatalog, workspace: nil, dependencies: validDependencies, events: events},
-		{catalog: validCatalog, workspace: validWorkspace, dependencies: applyDependencies{}, events: events},
-		{catalog: validCatalog, workspace: validWorkspace, dependencies: validDependencies, events: nil},
+		{
+			catalog: nil, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: nil, deployments: validDeployments,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: nil,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: applyDependencies{}, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: validDependencies, events: nil,
+		},
 	}
 	for _, test := range tests {
 		if err := executeTUI(
-			t.Context(), nil, io.Discard, test.catalog, test.workspace,
+			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.deployments,
 			test.dependencies, test.events, tui.Options{},
 		); !errors.Is(err, errInvalidArguments) {
 			t.Fatalf("executeTUI(invalid) error = %v", err)
