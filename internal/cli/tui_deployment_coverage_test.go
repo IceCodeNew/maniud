@@ -531,6 +531,23 @@ func installDeploymentGitWrapper(t *testing.T, prefix string) {
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func TestDeploymentWorkspaceDiscardClearsDraft(t *testing.T) {
+	t.Parallel()
+
+	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	if _, err := workspace.Preview(
+		t.Context(), request, application.DeploymentCPUs.ID(), "2", false,
+	); err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if err := workspace.Discard(t.Context()); err != nil {
+		t.Fatalf("Discard(draft) error = %v", err)
+	}
+	if workspace.draft != nil {
+		t.Fatal("Discard(draft) retained draft")
+	}
+}
+
 //nolint:cyclop // One stateful sequence covers each invalid deployment lifecycle transition.
 func TestDeploymentWorkspaceRejectsInvalidLifecycleStates(t *testing.T) {
 	t.Parallel()

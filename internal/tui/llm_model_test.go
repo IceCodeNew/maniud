@@ -17,6 +17,7 @@ const (
 	testLLMModel        = "gpt-5"
 	testLLMOrigin       = "origin"
 	testLLMToken        = "token"
+	testRecommendation  = "recommendation"
 )
 
 type assistantFixture struct {
@@ -27,6 +28,7 @@ type assistantFixture struct {
 	saveErr          error
 	recommendErr     error
 	acceptErr        error
+	acceptHook       func()
 	settings         []LLMSettings
 	calls            []string
 	closed           int
@@ -63,6 +65,9 @@ func (fixture *assistantFixture) Recommend(
 
 func (fixture *assistantFixture) Accept(_ context.Context, token string, choice int) error {
 	fixture.calls = append(fixture.calls, "accept:"+token+":"+strconv.Itoa(choice))
+	if fixture.acceptHook != nil {
+		fixture.acceptHook()
+	}
 
 	return fixture.acceptErr
 }
@@ -84,7 +89,7 @@ func (fixture *deploymentAssistFixture) PreviewRecommendation(
 	_ application.Request,
 	changes []LLMChange,
 ) (DeploymentEditPreview, error) {
-	fixture.calls = append(fixture.calls, "recommendation")
+	fixture.calls = append(fixture.calls, testRecommendation)
 	fixture.changes = slices.Clone(changes)
 
 	return fixture.recommendation, fixture.err
@@ -225,7 +230,7 @@ func TestModelConfiguresLLMAndPreviewsExplicitChoice(t *testing.T) {
 		"accept:recommendation-1:1",
 	}
 	if !slices.Equal(assistant.calls, wantCalls) ||
-		!slices.Equal(deployments.calls, []string{"recommendation"}) {
+		!slices.Equal(deployments.calls, []string{testRecommendation}) {
 		t.Fatalf("calls = %q / %q", assistant.calls, deployments.calls)
 	}
 }
@@ -553,8 +558,20 @@ func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 	state.deployments = deployments
 	assistant.acceptErr = errTestSecret
 	state.page = choices
+	deploymentCalls := len(deployments.calls)
 	deliver(t, state, state.handleKey(key(keyEnter)))
+	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, "discard"}) {
+		t.Fatalf("accept failure deployment calls = %q", calls)
+	}
 	assistant.acceptErr = nil
+	assistant.acceptHook = state.requestCancellation
+	state.page = choices
+	deploymentCalls = len(deployments.calls)
+	deliver(t, state, state.handleKey(key(keyEnter)))
+	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, "discard"}) {
+		t.Fatalf("cancelled acceptance deployment calls = %q", calls)
+	}
+	assistant.acceptHook = nil
 	deployments.err = errTestSecret
 	state.page = choices
 	acceptCalls := len(assistant.calls)

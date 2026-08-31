@@ -516,6 +516,12 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 			t.Fatalf("Run(invalid) error = %v", err)
 		}
 	}
+	if err := RunWithAssistant(
+		t.Context(), nil, io.Discard, catalog, workspace, deployments, &assistantFixture{},
+		operations, events, Options{},
+	); !errors.Is(err, errInvalidInput) {
+		t.Fatalf("RunWithAssistant(invalid deployment workspace) error = %v", err)
+	}
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -542,7 +548,7 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 		io.Discard,
 		catalog,
 		workspace,
-		&deploymentWorkspaceFixture{},
+		&deploymentAssistFixture{deploymentWorkflowFixture: newDeploymentWorkflowFixture()},
 		assistant,
 		newOperationsFixture(),
 		NewEventStream(),

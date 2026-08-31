@@ -696,7 +696,13 @@ func (state *model) startLLMChoicePreview(current llmChoicesPage) tea.Cmd {
 			if err != nil {
 				return llmPreviewResultMsg{sequence: sequence, page: current, err: err}
 			}
-			err = assistant.Accept(ctx, current.result.Token, current.cursor)
+			if err = ctx.Err(); err != nil {
+				err = errors.Join(err, workspace.Discard(context.WithoutCancel(ctx)))
+			} else if err = assistant.Accept(ctx, current.result.Token, current.cursor); err != nil {
+				err = errors.Join(err, workspace.Discard(context.WithoutCancel(ctx)))
+			} else if err = ctx.Err(); err != nil {
+				err = errors.Join(err, workspace.Discard(context.WithoutCancel(ctx)))
+			}
 
 			return llmPreviewResultMsg{sequence: sequence, page: current, preview: preview, err: err}
 		}

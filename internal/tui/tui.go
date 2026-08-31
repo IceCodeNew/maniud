@@ -320,6 +320,7 @@ type DeploymentWorkspace interface {
 // DeploymentRecommendationWorkspace extends the manual editor with one
 // multi-field LLM choice while retaining the same staged Git transaction.
 type DeploymentRecommendationWorkspace interface {
+	DeploymentWorkspace
 	PreviewRecommendation(
 		ctx context.Context,
 		request application.Request,
@@ -437,6 +438,12 @@ func RunWithAssistant(
 	events *EventStream,
 	options Options,
 ) error {
+	if assistant != nil {
+		if _, valid := deployments.(DeploymentRecommendationWorkspace); !valid {
+			return errInvalidInput
+		}
+	}
+
 	return run(ctx, input, output, catalog, workspace, deployments, assistant, operations, events, options)
 }
 

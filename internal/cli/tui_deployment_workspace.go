@@ -861,6 +861,8 @@ func (workspace *tuiDeploymentWorkspace) Discard(ctx context.Context) error {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged == nil {
+		workspace.draft = nil
+
 		return nil
 	}
 	staged := *workspace.staged
@@ -874,6 +876,7 @@ func (workspace *tuiDeploymentWorkspace) Discard(ctx context.Context) error {
 		return err
 	}
 	workspace.staged = nil
+	workspace.draft = nil
 
 	return nil
 }
