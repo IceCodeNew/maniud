@@ -14,7 +14,10 @@ import (
 )
 
 type tuiAssistantPending struct {
-	result llm.Result
+	result                llm.Result
+	request               application.Request
+	configurationIdentity string
+	contextIdentity       string
 }
 
 type tuiAssistant struct {
@@ -108,23 +111,36 @@ func (assistant *tuiAssistant) Recommend(
 	if err != nil {
 		return tui.LLMResult{}, publicLLMActionError(err)
 	}
-	if !assistant.recommendationContextCurrent(ctx, request, resolved.identity, before.identity) {
+	if !assistant.recommendationContextCurrent(
+		ctx, request, resolved.identity, before.identity, assistant.deployments.assistContext,
+	) {
 		assistant.closeSession()
 
 		return tui.LLMResult{}, &tui.LLMActionError{Code: tui.LLMContextStale}
 	}
 	token := rand.Text()
 	clear(assistant.pending)
-	assistant.pending[token] = tuiAssistantPending{result: result}
+	assistant.pending[token] = tuiAssistantPending{
+		result: result, request: request,
+		configurationIdentity: resolved.identity, contextIdentity: before.identity,
+	}
 
 	return publicLLMResult(token, result), nil
 }
 
-func (assistant *tuiAssistant) Accept(_ context.Context, token string, choice int) error {
+func (assistant *tuiAssistant) Accept(ctx context.Context, token string, choice int) error {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
 	pending, found := assistant.pending[token]
 	if !found || assistant.session == nil {
+		return &tui.LLMActionError{Code: tui.LLMContextStale}
+	}
+	if !assistant.recommendationContextCurrent(
+		ctx, pending.request, pending.configurationIdentity, pending.contextIdentity,
+		assistant.deployments.pendingAssistContext,
+	) {
+		assistant.closeSession()
+
 		return &tui.LLMActionError{Code: tui.LLMContextStale}
 	}
 	if err := assistant.session.Accept(pending.result, choice); err != nil {
@@ -135,11 +151,14 @@ func (assistant *tuiAssistant) Accept(_ context.Context, token string, choice in
 	return nil
 }
 
-// Close releases the active provider session and clears pending choices.
+// Close releases the active provider session and clears resolved secrets.
 func (assistant *tuiAssistant) Close() {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
 	assistant.closeSession()
+	assistant.resolved.config.APIKey = ""
+	clear(assistant.resolved.secrets)
+	assistant.resolved.secrets = nil
 }
 
 func (assistant *tuiAssistant) prepareRecommendation(
@@ -194,8 +213,9 @@ func (assistant *tuiAssistant) recommendationContextCurrent(
 	request application.Request,
 	configurationIdentity string,
 	contextIdentity string,
+	capture func(context.Context, application.Request, tui.Operations) (tuiAssistContext, error),
 ) bool {
-	after, contextErr := assistant.deployments.assistContext(ctx, request, assistant.operations)
+	after, contextErr := capture(ctx, request, assistant.operations)
 	refreshed, configErr := loadLLMConfiguration(ctx, assistant.environment, assistant.workingDir)
 
 	return contextErr == nil && configErr == nil && after.identity == contextIdentity &&

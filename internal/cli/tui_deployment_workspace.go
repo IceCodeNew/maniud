@@ -79,6 +79,29 @@ func (workspace *tuiDeploymentWorkspace) assistContext(
 	if operations == nil || workspace.draft != nil || workspace.staged != nil {
 		return tuiAssistContext{}, errDeploymentEditInvalid
 	}
+
+	return workspace.captureAssistContext(ctx, request, operations)
+}
+
+func (workspace *tuiDeploymentWorkspace) pendingAssistContext(
+	ctx context.Context,
+	request application.Request,
+	operations tui.Operations,
+) (tuiAssistContext, error) {
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	if operations == nil || workspace.staged != nil {
+		return tuiAssistContext{}, errDeploymentEditInvalid
+	}
+
+	return workspace.captureAssistContext(ctx, request, operations)
+}
+
+func (workspace *tuiDeploymentWorkspace) captureAssistContext(
+	ctx context.Context,
+	request application.Request,
+	operations tui.Operations,
+) (tuiAssistContext, error) {
 	source, repository, _, base, err := workspace.openRequest(ctx, request)
 	if err != nil {
 		return tuiAssistContext{}, err

@@ -132,6 +132,33 @@ func TestTUIAssistContextRejectsSourceDriftDuringSnapshot(t *testing.T) {
 	}
 }
 
+func TestTUIAssistantCloseClearsOnlyResolvedSecrets(t *testing.T) {
+	t.Parallel()
+	assistant := defaultTUIAssistant(nil, "", nil, nil)
+	assistant.resolved = llmResolvedConfig{
+		config: llm.Config{
+			Provider: llm.ProviderOpenAI, Model: testLLMModelValue,
+			Timeout: time.Minute, APIKey: testLLMSecretValue,
+		},
+		identity: "identity", keySource: "process environment",
+		secrets:  []string{testLLMSecretValue},
+		warnings: []string{"current .env was ignored"},
+		baseline: llmConfigBaseline{initialized: true},
+	}
+
+	assistant.Close()
+
+	if assistant.resolved.config.APIKey != "" || assistant.resolved.secrets != nil {
+		t.Fatalf("Close() retained resolved secrets: %#v", assistant.resolved)
+	}
+	if assistant.resolved.identity != "identity" ||
+		assistant.resolved.keySource != "process environment" ||
+		!slices.Equal(assistant.resolved.warnings, []string{"current .env was ignored"}) ||
+		!assistant.resolved.baseline.initialized {
+		t.Fatalf("Close() removed non-sensitive state: %#v", assistant.resolved)
+	}
+}
+
 func TestTUIAssistContextHonorsCancellationAtEveryLoadBoundary(t *testing.T) {
 	t.Parallel()
 	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
@@ -355,6 +382,7 @@ func TestTUIAssistantRecommendsAndAcceptsWithPinnedCompatibleAdapter(t *testing.
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
 	var providerFailure atomic.Bool
 	var driftSource atomic.Bool
+	var driftRuntime atomic.Bool
 	var sourcePath string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/chat/completions" {
@@ -384,7 +412,12 @@ func TestTUIAssistantRecommendsAndAcceptsWithPinnedCompatibleAdapter(t *testing.
 		context.Context,
 		application.Request,
 	) (application.OperationSnapshot, error) {
-		return validAssistantSnapshot(), nil
+		snapshot := validAssistantSnapshot()
+		if driftRuntime.Load() {
+			snapshot.Runtime.Digest = domain.Hash([]byte("changed runtime evidence"))
+		}
+
+		return snapshot, nil
 	}}
 	environment := map[string]string{
 		homeEnvironment: t.TempDir(), llmProviderEnvironment: string(llm.ProviderOpenAICompatible),
@@ -410,11 +443,41 @@ func TestTUIAssistantRecommendsAndAcceptsWithPinnedCompatibleAdapter(t *testing.
 	if err != nil || len(result.Choices) != 1 {
 		t.Fatalf("Recommend() = %#v, %v", result, err)
 	}
+	if _, err = workspace.PreviewRecommendation(t.Context(), request, result.Choices[0].Changes); err != nil {
+		t.Fatalf("PreviewRecommendation() error = %v", err)
+	}
 	if err = assistant.Accept(t.Context(), result.Token, 1); err == nil {
 		t.Fatal("Accept(invalid choice) succeeded")
 	}
 	if err = assistant.Accept(t.Context(), result.Token, 0); err != nil {
 		t.Fatalf("Accept() error = %v", err)
+	}
+	if err = workspace.Discard(t.Context()); err != nil {
+		t.Fatalf("Discard(accepted preview) error = %v", err)
+	}
+	staleResult, err := assistant.Recommend(
+		t.Context(), request, configuration.Identity, "Recommend with fresh runtime evidence",
+	)
+	if err != nil {
+		t.Fatalf("Recommend(before accept drift) error = %v", err)
+	}
+	if _, err = workspace.PreviewRecommendation(
+		t.Context(), request, staleResult.Choices[0].Changes,
+	); err != nil {
+		t.Fatalf("PreviewRecommendation(before accept drift) error = %v", err)
+	}
+	driftRuntime.Store(true)
+	err = assistant.Accept(t.Context(), staleResult.Token, 0)
+	action, valid := errors.AsType[*tui.LLMActionError](err)
+	if !valid || action.Code != tui.LLMContextStale || assistant.session != nil || len(assistant.pending) != 0 {
+		t.Fatalf("Accept(runtime drift) = %v, session = %#v, pending = %#v", err, assistant.session, assistant.pending)
+	}
+	if err = workspace.Discard(t.Context()); err != nil || workspace.draft != nil {
+		t.Fatalf("Discard(stale preview) = %v, draft = %#v", err, workspace.draft)
+	}
+	driftRuntime.Store(false)
+	if err = assistant.Accept(t.Context(), staleResult.Token, 0); err == nil {
+		t.Fatal("Accept(stale token after runtime drift) succeeded")
 	}
 	providerFailure.Store(true)
 	if _, err = assistant.Recommend(
