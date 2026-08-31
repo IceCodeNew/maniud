@@ -533,6 +533,11 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 	) {
 		t.Fatalf("Run(cancelled) error = %v", err)
 	}
+	if err := RunWithAssistant(
+		cancelled, nil, io.Discard, catalog, workspace, deployments, nil, operations, events, Options{},
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunWithAssistant(without assistant) error = %v", err)
+	}
 }
 
 func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
