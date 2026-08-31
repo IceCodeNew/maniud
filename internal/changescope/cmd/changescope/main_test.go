@@ -190,6 +190,13 @@ func TestReadPaths(t *testing.T) {
 	if _, err := readPaths(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("readPaths() accepted a missing file")
 	}
+	empty := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := readPaths(empty); err != nil || len(paths) != 0 {
+		t.Fatalf("readPaths(empty) = %q, %v", paths, err)
+	}
 	invalid := filepath.Join(t.TempDir(), "invalid")
 	if err := os.WriteFile(invalid, []byte("not terminated"), 0o600); err != nil {
 		t.Fatal(err)

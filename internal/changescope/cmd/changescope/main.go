@@ -98,7 +98,10 @@ func readPaths(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read changed paths: %w", err)
 	}
-	if len(raw) == 0 || raw[len(raw)-1] != 0 {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if raw[len(raw)-1] != 0 {
 		return nil, errMissingNULTerminator
 	}
 	parts := bytes.Split(raw[:len(raw)-1], []byte{0})
