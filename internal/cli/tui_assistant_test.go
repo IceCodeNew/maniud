@@ -160,6 +160,20 @@ func TestTUIAssistantCloseClearsOnlyResolvedSecrets(t *testing.T) {
 	}
 }
 
+func TestTUIPendingAssistContextRejectsUnavailableInputs(t *testing.T) {
+	t.Parallel()
+	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	if _, err := workspace.pendingAssistContext(t.Context(), request, nil); err == nil {
+		t.Fatal("pendingAssistContext(nil operations) succeeded")
+	}
+	workspace.staged = &tuiStagedDeployment{}
+	if _, err := workspace.pendingAssistContext(
+		t.Context(), request, &assistantOperationsFixture{},
+	); err == nil {
+		t.Fatal("pendingAssistContext(staged edit) succeeded")
+	}
+}
+
 func TestTUIAssistContextHonorsCancellationAtEveryLoadBoundary(t *testing.T) {
 	t.Parallel()
 	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
