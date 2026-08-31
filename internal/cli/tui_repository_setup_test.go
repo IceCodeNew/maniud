@@ -48,7 +48,7 @@ func TestTUIRepositorySetupCreatesPrivateGitHubRepositoryWithGH(t *testing.T) {
 		t.Fatalf("setupTUIRepositoryWith(create) error = %v", err)
 	}
 	wantCalls := [][]string{
-		{"repo", "create", "--private", "--add-readme", tuiTestGitHubRepository},
+		{"repo", createOperation, "--private", "--add-readme", tuiTestGitHubRepository},
 		{"repo", "clone", tuiTestGitHubRepository, checkout},
 	}
 	if !slices.EqualFunc(calls, wantCalls, slices.Equal) {
@@ -361,7 +361,7 @@ func TestRunTUIRepositoryGHUsesBoundedEnvironment(t *testing.T) {
 	t.Setenv("PATH", directory)
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("UNRELATED_VALUE", "not-forwarded")
-	if err := runTUIRepositoryGH(t.Context(), directory, "repo", "create"); err != nil {
+	if err := runTUIRepositoryGH(t.Context(), directory, "repo", createOperation); err != nil {
 		t.Fatalf("runTUIRepositoryGH(success) error = %v", err)
 	}
 	environment := tuiRepositoryGHEnvironment()
@@ -374,7 +374,7 @@ func TestRunTUIRepositoryGHUsesBoundedEnvironment(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatalf("WriteFile(failing gh) error = %v", err)
 	}
-	if err := runTUIRepositoryGH(t.Context(), directory, "repo", "create"); !errors.Is(
+	if err := runTUIRepositoryGH(t.Context(), directory, "repo", createOperation); !errors.Is(
 		err,
 		errTUIRepositorySetupUnavailable,
 	) {
@@ -383,7 +383,7 @@ func TestRunTUIRepositoryGHUsesBoundedEnvironment(t *testing.T) {
 	if err := os.Remove(script); err != nil {
 		t.Fatalf("Remove(gh) error = %v", err)
 	}
-	if err := runTUIRepositoryGH(t.Context(), directory, "repo", "create"); !errors.Is(
+	if err := runTUIRepositoryGH(t.Context(), directory, "repo", createOperation); !errors.Is(
 		err,
 		errTUIRepositorySetupUnavailable,
 	) {

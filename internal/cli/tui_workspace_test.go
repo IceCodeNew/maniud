@@ -28,6 +28,8 @@ const (
 	tuiCommand           = "maniud tui"
 	testOpenRootFailure  = "root"
 	testOpenDirFailure   = "directory"
+	testDirectoryClose   = "directory close"
+	testRootClose        = "root close"
 )
 
 func TestTUIGenInvocationAcceptsOneNonExecutingServiceSource(t *testing.T) {
@@ -1477,12 +1479,12 @@ func TestTUIDraftMoveContainsFilesystemFailures(t *testing.T) {
 				return file.Sync()
 			}
 		}},
-		{"directory close", func(operations *generatedComposeOperations) {
+		{testDirectoryClose, func(operations *generatedComposeOperations) {
 			operations.closeFile = func(file *os.File) error {
 				return errors.Join(file.Close(), errGeneratedComposeTest)
 			}
 		}},
-		{"root close", func(operations *generatedComposeOperations) {
+		{testRootClose, func(operations *generatedComposeOperations) {
 			operations.closeRoot = func(root *os.Root) error {
 				return errors.Join(root.Close(), errGeneratedComposeTest)
 			}
@@ -1525,12 +1527,12 @@ func TestTUIDraftRemovalContainsFilesystemFailures(t *testing.T) {
 		{"sync", func(operations *generatedComposeOperations) {
 			operations.syncDirectory = func(*os.File) error { return errGeneratedComposeTest }
 		}},
-		{"directory close", func(operations *generatedComposeOperations) {
+		{testDirectoryClose, func(operations *generatedComposeOperations) {
 			operations.closeFile = func(file *os.File) error {
 				return errors.Join(file.Close(), errGeneratedComposeTest)
 			}
 		}},
-		{"root close", func(operations *generatedComposeOperations) {
+		{testRootClose, func(operations *generatedComposeOperations) {
 			operations.closeRoot = func(root *os.Root) error {
 				return errors.Join(root.Close(), errGeneratedComposeTest)
 			}

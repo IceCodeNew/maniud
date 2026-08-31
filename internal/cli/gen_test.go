@@ -748,7 +748,7 @@ func TestExecuteGenUsesDefaultOutputAndContainsFailures(t *testing.T) {
 	t.Parallel()
 
 	platform := defaultGeneratedPlatform()
-	valid := genInvocation{runtimeArgs: []string{testDockerRuntime, "create", testRegistrySource}}
+	valid := genInvocation{runtimeArgs: []string{testDockerRuntime, createOperation, testRegistrySource}}
 
 	for _, test := range genFailureCases(t, platform, valid) {
 		t.Run(test.name, func(t *testing.T) {
