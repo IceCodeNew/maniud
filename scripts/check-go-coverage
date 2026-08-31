@@ -47,6 +47,35 @@ module_names=()
 while IFS= read -r module_name; do
 	module_names+=("$module_name")
 done < <("$repository_root/scripts/list-go-modules")
+
+# Gate manifests also contain command packages for static analysis and smoke
+# tests. Keep coverage aligned with each module's established package scope.
+select_coverage_packages() {
+	local module_name="$1"
+	local module_directory="$2"
+	shift 2
+	if [[ -z "$packages_file" ]]; then
+		(
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" go list "$@"
+		)
+		return
+	fi
+
+	local selected_file eligible_file
+	selected_file="$(mktemp "$temporary_dir/selected.XXXXXX")"
+	eligible_file="$(mktemp "$temporary_dir/eligible.XXXXXX")"
+	awk -F $'\t' -v module="$module_name" \
+		'$1 == "package" && $2 == module { print $3 }' "$packages_file" >"$selected_file"
+	(
+		cd "$module_directory"
+		GOWORK=off CGO_ENABLED="$test_cgo" go list "$@"
+	) >"$eligible_file"
+	awk 'NR == FNR { selected[$0] = 1; next } selected[$0]' \
+		"$selected_file" "$eligible_file"
+	rm -f "$selected_file" "$eligible_file"
+}
+
 module_profiles=()
 for module_number in "${!module_names[@]}"; do
 	module_name="${module_names[$module_number]}"
@@ -56,18 +85,10 @@ for module_number in "${!module_names[@]}"; do
 		coverage_patterns=(./internal/... ./plugins/...)
 	fi
 	coverage_packages=()
-	if [[ -n "$packages_file" ]]; then
-		while IFS= read -r coverage_package; do
-			coverage_packages+=("$coverage_package")
-		done < <(awk -F $'\t' -v module="$module_name" '$1 == "package" && $2 == module { print $3 }' "$packages_file")
-	else
-		while IFS= read -r coverage_package; do
-			coverage_packages+=("$coverage_package")
-		done < <(
-			cd "$module_directory"
-			GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
-		)
-	fi
+	while IFS= read -r coverage_package; do
+		coverage_packages+=("$coverage_package")
+	done < <(select_coverage_packages \
+		"$module_name" "$module_directory" "${coverage_patterns[@]}")
 	if ((${#coverage_packages[@]} == 0)); then
 		continue
 	fi
@@ -204,13 +225,10 @@ PY
 			coverage_patterns=(./internal/... ./plugins/...)
 		fi
 		coverage_packages=()
-		if [[ -n "$packages_file" ]]; then
-			while IFS= read -r coverage_package; do
-				coverage_packages+=("$coverage_package")
-			done < <(awk -F $'\t' -v module="$module_name" '$1 == "package" && $2 == module { print $3 }' "$packages_file")
-		else
-			coverage_packages=("${coverage_patterns[@]}")
-		fi
+		while IFS= read -r coverage_package; do
+			coverage_packages+=("$coverage_package")
+		done < <(select_coverage_packages \
+			"$module_name" "$module_directory" "${coverage_patterns[@]}")
 		if ((${#coverage_packages[@]} == 0)); then
 			continue
 		fi
