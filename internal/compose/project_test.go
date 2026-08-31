@@ -30,14 +30,14 @@ func TestProjectSelectsRuntimeFromValidatedServiceMetadata(t *testing.T) {
 		{name: "explicit Docker", maniud: composeDockerRuntime, want: domain.RuntimeDocker},
 		{name: "Podman", maniud: composePodmanRuntime, want: domain.RuntimePodman},
 		{name: "containerd", maniud: composeContainerdRuntime, want: domain.RuntimeContainerd},
-		{name: "metadata for another service", maniud: "other", wantErr: true},
+		{name: "metadata for another service", maniud: testOtherValue, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			extension := ""
-			if test.maniud == "other" {
+			if test.maniud == testOtherValue {
 				extension = "x-maniud:\n  services:\n    worker:\n      runtime: podman\n"
 			} else if test.maniud != "" {
 				extension = "x-maniud:\n  services:\n    api:\n      runtime: " + test.maniud + "\n"
@@ -156,8 +156,8 @@ services:
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	image := resolvedImageForService(t, project, "api")
-	if _, err = project.Workload("api", image); err != nil {
+	image := resolvedImageForService(t, project, apiService)
+	if _, err = project.Workload(apiService, image); err != nil {
 		t.Fatalf("Workload() error = %v", err)
 	}
 
@@ -168,7 +168,7 @@ services:
 	mismatch := image
 	mismatch.Platform = domain.Platform{OS: archiveLinuxOS, Architecture: archiveARM64, Variant: archiveARM64Variant}
 	for _, value := range []domain.ImageIdentity{archive, unknown, mismatch} {
-		if _, err = project.Workload("api", value); !errors.Is(err, ErrInvalidSource) {
+		if _, err = project.Workload(apiService, value); !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("Workload(%#v) error = %v", value, err)
 		}
 	}
@@ -185,7 +185,7 @@ services:
 	if err != nil {
 		t.Fatalf("Load(invalid platform syntax) error = %v", err)
 	}
-	if _, err = invalidPlatform.Workload("api", image); !errors.Is(err, ErrInvalidSource) {
+	if _, err = invalidPlatform.Workload(apiService, image); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Workload(unsupported platform) error = %v", err)
 	}
 }
@@ -268,11 +268,11 @@ services:
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	image := resolvedImageForService(t, project, "api")
+	image := resolvedImageForService(t, project, apiService)
 	image.Entrypoint = nil
 	image.Command = nil
 
-	workload, err := project.Workload("api", image)
+	workload, err := project.Workload(apiService, image)
 	if err != nil || workload.Entrypoint != nil || workload.Command != nil ||
 		workload.EffectiveDigest == (domain.Digest{}) {
 		t.Fatalf("Workload(absent image process) = %#v, %v", workload, err)
@@ -333,9 +333,9 @@ services:
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	image := resolvedImageForService(t, project, "api")
+	image := resolvedImageForService(t, project, apiService)
 
-	workload, err := project.Workload("api", image)
+	workload, err := project.Workload(apiService, image)
 	if err != nil {
 		t.Fatalf("Workload() error = %v", err)
 	}
@@ -394,7 +394,7 @@ services:
 func TestWorkloadProjectsSameDocumentExtends(t *testing.T) {
 	t.Parallel()
 
-	workload := loadSelectedWorkload(t, "api", `
+	workload := loadSelectedWorkload(t, apiService, `
 name: example
 services:
   base:
@@ -420,7 +420,7 @@ func TestImageInputNormalizesDockerCompatibleInput(t *testing.T) {
 		image string
 		want  string
 	}{
-		{name: "short implicit latest", image: "api", want: "docker.io/library/api:latest"},
+		{name: "short implicit latest", image: apiService, want: "docker.io/library/api:latest"},
 		{name: "Docker Hub alias", image: "registry-1.docker.io/api:1", want: "docker.io/library/api:1"},
 		{name: "uppercase registry", image: "EXAMPLE.com/team/api:1", want: "example.com/team/api:1"},
 		{

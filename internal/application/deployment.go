@@ -143,10 +143,15 @@ type DeploymentBytes int64
 
 func (DeploymentBytes) deploymentValue() {}
 
-// DeploymentInteger is an integer process or retry limit.
+// DeploymentInteger is an integer process limit.
 type DeploymentInteger int64
 
 func (DeploymentInteger) deploymentValue() {}
+
+// DeploymentRetries is a healthcheck retry count bounded to Compose's int representation.
+type DeploymentRetries int
+
+func (DeploymentRetries) deploymentValue() {}
 
 // DeploymentRestartPolicy is one portable restart policy.
 type DeploymentRestartPolicy string
@@ -254,9 +259,9 @@ func validDeploymentValue(field DeploymentField, value DeploymentValue) bool {
 
 		return valid
 	case DeploymentHealthRetries:
-		integer, valid := value.(DeploymentInteger)
+		retries, valid := value.(DeploymentRetries)
 
-		return valid && integer > 0 && uint64(integer) <= uint64(^uint(0)>>1)
+		return valid && retries > 0
 	case DeploymentHealthInterval, DeploymentHealthTimeout,
 		DeploymentHealthStartPeriod, DeploymentHealthStartInterval:
 		duration, valid := value.(DeploymentDuration)
@@ -344,7 +349,7 @@ func setDeploymentField(spec *containerconfig.Spec, patch DeploymentPatch) {
 	case DeploymentHealthTimeout:
 		spec.Healthcheck.Timeout = time.Duration(patch.value.(DeploymentDuration)).String()
 	case DeploymentHealthRetries:
-		spec.Healthcheck.Retries = new(int(patch.value.(DeploymentInteger)))
+		spec.Healthcheck.Retries = new(int(patch.value.(DeploymentRetries)))
 	case DeploymentHealthStartPeriod:
 		spec.Healthcheck.StartPeriod = time.Duration(patch.value.(DeploymentDuration)).String()
 	case DeploymentHealthStartInterval:

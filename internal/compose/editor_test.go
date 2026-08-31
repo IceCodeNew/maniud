@@ -38,7 +38,7 @@ func TestDeploymentSemanticProofRejectsUnselectedChanges(t *testing.T) {
 
 	before := []byte("services:\n  api:\n    cpus: 1\n  worker:\n    image: worker:stable\n")
 	source := testSource(t, string(before))
-	path := [][]string{{"services", "api", "cpus"}}
+	path := [][]string{{testServicesKey, apiService, "cpus"}}
 	approved := bytes.Replace(before, []byte("cpus: 1"), []byte("cpus: 2"), 1)
 	if !sameUntouchedYAMLSemantics(before, approved, path) {
 		t.Fatal("semantic proof rejected the approved path")
@@ -67,7 +67,7 @@ func TestPatchServiceFieldsRejectsInvalidContract(t *testing.T) {
 	source := testSource(t, "name: example\nservices:\n  api:\n    image: busybox:stable\n")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := source.PatchServiceFields(ctx, "api", containerconfig.Spec{}, []string{"cpus"}); !errors.Is(err, context.Canceled) {
+	if _, err := source.PatchServiceFields(ctx, apiService, containerconfig.Spec{}, []string{"cpus"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("PatchServiceFields(canceled) error = %v", err)
 	}
 	for _, input := range []struct {
@@ -75,11 +75,11 @@ func TestPatchServiceFieldsRejectsInvalidContract(t *testing.T) {
 		expected containerconfig.Spec
 		fields   []string
 	}{
-		{service: "", expected: containerconfig.Spec{ServiceName: "api"}, fields: []string{"cpus"}},
-		{service: "api", expected: containerconfig.Spec{ServiceName: "worker"}, fields: []string{"cpus"}},
-		{service: "api", expected: containerconfig.Spec{ServiceName: "api"}},
-		{service: "api", expected: containerconfig.Spec{ServiceName: "api"}, fields: []string{"unknown"}},
-		{service: "api", expected: containerconfig.Spec{ServiceName: "api"}, fields: []string{"cpus", "cpus"}},
+		{service: "", expected: containerconfig.Spec{ServiceName: apiService}, fields: []string{"cpus"}},
+		{service: apiService, expected: containerconfig.Spec{ServiceName: "worker"}, fields: []string{"cpus"}},
+		{service: apiService, expected: containerconfig.Spec{ServiceName: apiService}},
+		{service: apiService, expected: containerconfig.Spec{ServiceName: apiService}, fields: []string{"unknown"}},
+		{service: apiService, expected: containerconfig.Spec{ServiceName: apiService}, fields: []string{"cpus", "cpus"}},
 	} {
 		if _, err := source.PatchServiceFields(t.Context(), input.service, input.expected, input.fields); !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("PatchServiceFields(invalid contract) error = %v", err)
@@ -117,7 +117,7 @@ services:
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	expected, err := project.ServiceSpec("api")
+	expected, err := project.ServiceSpec(apiService)
 	if err != nil {
 		t.Fatalf("ServiceSpec() error = %v", err)
 	}
@@ -140,7 +140,7 @@ services:
 		"init", "read_only", "no_new_privileges", "healthcheck.interval", "healthcheck.timeout",
 		"healthcheck.retries", "healthcheck.start_period", "healthcheck.start_interval",
 	}
-	candidate, err := source.PatchServiceFields(t.Context(), "api", expected, fields)
+	candidate, err := source.PatchServiceFields(t.Context(), apiService, expected, fields)
 	if err != nil {
 		t.Fatalf("PatchServiceFields(set) error = %v", err)
 	}
@@ -160,7 +160,7 @@ services:
 	expected.Healthcheck.StartInterval = ""
 	withoutOneWay := append([]string(nil), fields...)
 	withoutOneWay = append(withoutOneWay[:8], withoutOneWay[9:]...)
-	if _, err = candidate.PatchServiceFields(t.Context(), "api", expected, withoutOneWay); err != nil {
+	if _, err = candidate.PatchServiceFields(t.Context(), apiService, expected, withoutOneWay); err != nil {
 		t.Fatalf("PatchServiceFields(unset) error = %v", err)
 	}
 }
@@ -182,7 +182,7 @@ services:
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	expected, err := project.ServiceSpec("api")
+	expected, err := project.ServiceSpec(apiService)
 	if err != nil {
 		t.Fatalf("ServiceSpec() error = %v", err)
 	}
@@ -197,33 +197,33 @@ services:
 	}
 	canonicalSource := source
 	canonicalSource.Content = canonical
-	if _, err = canonicalSource.PatchServiceFields(t.Context(), "api", expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
+	if _, err = canonicalSource.PatchServiceFields(t.Context(), apiService, expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(no-op) error = %v", err)
 	}
 	expected.CPUs = "2"
 	expected.ContainerName = "different"
-	if _, err = source.PatchServiceFields(t.Context(), "api", expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
+	if _, err = source.PatchServiceFields(t.Context(), apiService, expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(mismatch) error = %v", err)
 	}
 	expected.ContainerName = "example-api"
 	expected.CPUs = "not-a-number"
-	if _, err = source.PatchServiceFields(t.Context(), "api", expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
+	if _, err = source.PatchServiceFields(t.Context(), apiService, expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(invalid candidate) error = %v", err)
 	}
 	expected.CPUs = "2"
 	cancelDuringLoad := &cancelComposeAfterChecksContext{after: 2}
-	if _, err = source.PatchServiceFields(cancelDuringLoad, "api", expected, []string{"cpus"}); !errors.Is(err, context.Canceled) {
+	if _, err = source.PatchServiceFields(cancelDuringLoad, apiService, expected, []string{"cpus"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("PatchServiceFields(canceled candidate load) error = %v", err)
 	}
 
 	invalidRepository := source
 	invalidRepository.Repository = new(RepositorySnapshot)
-	if _, err = invalidRepository.PatchServiceFields(t.Context(), "api", expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
+	if _, err = invalidRepository.PatchServiceFields(t.Context(), apiService, expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(invalid repository) error = %v", err)
 	}
 
 	malformed := Source{Content: []byte("services: ["), WorkingDir: t.TempDir()}
-	if _, err = malformed.PatchServiceFields(t.Context(), "api", expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
+	if _, err = malformed.PatchServiceFields(t.Context(), apiService, expected, []string{"cpus"}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(malformed) error = %v", err)
 	}
 }
@@ -232,7 +232,7 @@ services:
 func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 	t.Parallel()
 
-	if _, err := entryLocalServiceNode(nil, "api"); !errors.Is(err, ErrInvalidSource) {
+	if _, err := entryLocalServiceNode(nil, apiService); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("entryLocalServiceNode(nil) error = %v", err)
 	}
 	for _, content := range []string{
@@ -244,7 +244,7 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 		if err := yaml.Load([]byte(content), &document, yaml.WithUniqueKeys()); err != nil {
 			t.Fatalf("yaml.Load(%q) error = %v", content, err)
 		}
-		if _, err := entryLocalServiceNode(&document, "api"); !errors.Is(err, ErrInvalidSource) {
+		if _, err := entryLocalServiceNode(&document, apiService); !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("entryLocalServiceNode(%q) error = %v", content, err)
 		}
 	}
@@ -261,11 +261,11 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 	}
 
 	health := &containerconfig.Healthcheck{Interval: "1s"}
-	expected := containerconfig.Spec{ServiceName: "api", Healthcheck: health}
-	if _, err := mutateDeploymentNode(&yaml.Node{Kind: yaml.MappingNode}, "api", expected, "healthcheck.interval"); !errors.Is(err, ErrInvalidSource) {
+	expected := containerconfig.Spec{ServiceName: apiService, Healthcheck: health}
+	if _, err := mutateDeploymentNode(&yaml.Node{Kind: yaml.MappingNode}, apiService, expected, "healthcheck.interval"); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("mutateDeploymentNode(absent healthcheck) error = %v", err)
 	}
-	if _, err := mutateDeploymentNode(oddMapping, "api", containerconfig.Spec{ServiceName: "api", CPUs: "2"}, "cpus"); !errors.Is(err, ErrInvalidSource) {
+	if _, err := mutateDeploymentNode(oddMapping, apiService, containerconfig.Spec{ServiceName: apiService, CPUs: "2"}, "cpus"); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("mutateDeploymentNode(odd mapping) error = %v", err)
 	}
 
@@ -282,12 +282,12 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 		t.Fatal("safeDeploymentTarget() rejected a safe sequence child")
 	}
 	removeDeploymentMappingValue(&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Value: "other"}, {Kind: yaml.ScalarNode, Value: "value"},
+		{Kind: yaml.ScalarNode, Value: testOtherValue}, {Kind: yaml.ScalarNode, Value: "value"},
 	}}, "missing")
 
 	missingService := testSource(t, "services: {}\n")
 	if _, err := missingService.PatchServiceFields(
-		t.Context(), "api", containerconfig.Spec{ServiceName: "api", CPUs: "2"}, []string{"cpus"},
+		t.Context(), apiService, containerconfig.Spec{ServiceName: apiService, CPUs: "2"}, []string{"cpus"},
 	); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("PatchServiceFields(missing service) error = %v", err)
 	}
@@ -321,10 +321,10 @@ func TestDeploymentSemanticHelpersHandleMissingPathsAndNonMappings(t *testing.T)
 	if _, valid := deploymentSemanticTree([]byte("- item\n")); valid {
 		t.Fatal("deploymentSemanticTree() decoded a sequence as a mapping")
 	}
-	tree := map[string]any{"services": "not-a-map"}
+	tree := map[string]any{testServicesKey: "not-a-map"}
 	removeDeploymentSemanticPath(tree, nil)
-	removeDeploymentSemanticPath(tree, []string{"services", "api"})
-	if tree["services"] != "not-a-map" {
+	removeDeploymentSemanticPath(tree, []string{testServicesKey, apiService})
+	if tree[testServicesKey] != "not-a-map" {
 		t.Fatalf("removeDeploymentSemanticPath() changed an unavailable path: %#v", tree)
 	}
 }

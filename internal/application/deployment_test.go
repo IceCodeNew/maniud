@@ -69,7 +69,7 @@ func TestDeploymentPatchAppliesEveryTypedField(t *testing.T) {
 		{"no new privileges", DeploymentNoNewPrivileges, DeploymentEnabled{}, func(spec containerconfig.Spec) bool { return spec.NoNewPrivileges }},
 		{"health interval", DeploymentHealthInterval, DeploymentDuration(5 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.Interval == "5s" }},
 		{"health timeout", DeploymentHealthTimeout, DeploymentDuration(6 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.Timeout == "6s" }},
-		{"health retries", DeploymentHealthRetries, DeploymentInteger(7), func(spec containerconfig.Spec) bool {
+		{"health retries", DeploymentHealthRetries, DeploymentRetries(7), func(spec containerconfig.Spec) bool {
 			return spec.Healthcheck.Retries != nil && *spec.Healthcheck.Retries == 7
 		}},
 		{"health start period", DeploymentHealthStartPeriod, DeploymentDuration(8 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.StartPeriod == "8s" }},
@@ -140,6 +140,7 @@ func TestDeploymentPatchRejectsInvalidPairingsAndHealthState(t *testing.T) {
 		{DeploymentInit, DeploymentInteger(1)},
 		{DeploymentNoNewPrivileges, DeploymentUnset{}},
 		{DeploymentHealthRetries, DeploymentInteger(0)},
+		{DeploymentHealthRetries, DeploymentRetries(0)},
 		{DeploymentHealthInterval, DeploymentDuration(0)},
 	}
 	for _, test := range invalid {
@@ -171,6 +172,7 @@ func TestDeploymentValueFamilyAndRestartPolicies(t *testing.T) {
 	DeploymentCPU(1).deploymentValue()
 	DeploymentBytes(1).deploymentValue()
 	DeploymentInteger(1).deploymentValue()
+	DeploymentRetries(1).deploymentValue()
 	DeploymentRestartPolicy("always").deploymentValue()
 	DeploymentDuration(time.Second).deploymentValue()
 	DeploymentBoolean(true).deploymentValue()

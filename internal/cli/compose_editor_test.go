@@ -1,4 +1,4 @@
-//nolint:goconst,lll // Complete Compose fixtures keep field spellings and expectations readable.
+//nolint:lll // Complete Compose fixtures keep field spellings and expectations readable.
 package cli
 
 import (
@@ -59,7 +59,7 @@ func TestPrepareDeploymentEditChangesOnlyTypedFields(t *testing.T) {
 		deploymentPatch(t, application.DeploymentNoNewPrivileges, application.DeploymentEnabled{}),
 		deploymentPatch(t, application.DeploymentHealthInterval, application.DeploymentDuration(5*time.Second)),
 		deploymentPatch(t, application.DeploymentHealthTimeout, application.DeploymentDuration(6*time.Second)),
-		deploymentPatch(t, application.DeploymentHealthRetries, application.DeploymentInteger(4)),
+		deploymentPatch(t, application.DeploymentHealthRetries, application.DeploymentRetries(4)),
 		deploymentPatch(t, application.DeploymentHealthStartPeriod, application.DeploymentDuration(8*time.Second)),
 		deploymentPatch(t, application.DeploymentHealthStartInterval, application.DeploymentDuration(9*time.Second)),
 	}
@@ -149,8 +149,8 @@ func TestPrepareDeploymentEditRejectsUnsafeTargetsAndHealthStates(t *testing.T) 
 
 	healthPatch := deploymentPatch(t, application.DeploymentHealthTimeout, application.DeploymentDuration(time.Second))
 	for name, content := range map[string]string{
-		"absent":   strings.Replace(string(deploymentComposeFixture()), deploymentHealthFixture(), "", 1),
-		"disabled": strings.Replace(string(deploymentComposeFixture()), "healthcheck:\n", "healthcheck:\n      disable: true\n", 1),
+		"absent":               strings.Replace(string(deploymentComposeFixture()), deploymentHealthFixture(), "", 1),
+		"disabled healthcheck": strings.Replace(string(deploymentComposeFixture()), "healthcheck:\n", "healthcheck:\n      disable: true\n", 1),
 	} {
 		t.Run("health "+name, func(t *testing.T) {
 			t.Parallel()

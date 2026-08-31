@@ -439,7 +439,7 @@ func archiveRenderAnalysis(t *testing.T) imagearchive.Analysis {
 			Platform:         domain.Platform{OS: archiveLinuxOS, Architecture: archiveAMD64},
 			PlatformManifest: platformManifest, ImageConfig: imageConfig,
 			User: "1000", Environment: []string{"A=1"}, Entrypoint: []string{"/init"},
-			Command:      []string{"serve"},
+			Command:      []string{testServeCommand},
 			ExposedPorts: []domain.ExposedPort{{TargetPort: 8080, Protocol: composeProtocolTCP}},
 			Volumes:      []string{"/data"}, WorkingDirectory: "/work", Labels: []string{"team=platform"},
 			StopSignal: "SIGTERM", Healthcheck: &domain.Healthcheck{
