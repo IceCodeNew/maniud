@@ -17,6 +17,7 @@ const (
 	testLLMModel        = "gpt-5"
 	testLLMOrigin       = "origin"
 	testLLMToken        = "token"
+	testDiscard         = "discard"
 	testRecommendation  = "recommendation"
 )
 
@@ -81,6 +82,7 @@ type deploymentAssistFixture struct {
 
 	recommendation DeploymentEditPreview
 	err            error
+	previewHook    func()
 	changes        []LLMChange
 }
 
@@ -91,6 +93,9 @@ func (fixture *deploymentAssistFixture) PreviewRecommendation(
 ) (DeploymentEditPreview, error) {
 	fixture.calls = append(fixture.calls, testRecommendation)
 	fixture.changes = slices.Clone(changes)
+	if fixture.previewHook != nil {
+		fixture.previewHook()
+	}
 
 	return fixture.recommendation, fixture.err
 }
@@ -560,21 +565,33 @@ func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 	state.page = choices
 	deploymentCalls := len(deployments.calls)
 	deliver(t, state, state.handleKey(key(keyEnter)))
-	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, "discard"}) {
+	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, testDiscard}) {
 		t.Fatalf("accept failure deployment calls = %q", calls)
 	}
 	assistant.acceptErr = nil
+	deployments.previewHook = state.requestCancellation
+	state.page = choices
+	acceptCalls := len(assistant.calls)
+	deploymentCalls = len(deployments.calls)
+	deliver(t, state, state.handleKey(key(keyEnter)))
+	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, testDiscard}) {
+		t.Fatalf("pre-accept cancellation deployment calls = %q", calls)
+	}
+	if len(assistant.calls) != acceptCalls {
+		t.Fatal("pre-accept cancellation consumed the choice token")
+	}
+	deployments.previewHook = nil
 	assistant.acceptHook = state.requestCancellation
 	state.page = choices
 	deploymentCalls = len(deployments.calls)
 	deliver(t, state, state.handleKey(key(keyEnter)))
-	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, "discard"}) {
+	if calls := deployments.calls[deploymentCalls:]; !slices.Equal(calls, []string{testRecommendation, testDiscard}) {
 		t.Fatalf("cancelled acceptance deployment calls = %q", calls)
 	}
 	assistant.acceptHook = nil
 	deployments.err = errTestSecret
 	state.page = choices
-	acceptCalls := len(assistant.calls)
+	acceptCalls = len(assistant.calls)
 	deliver(t, state, state.handleKey(key(keyEnter)))
 	if len(assistant.calls) != acceptCalls {
 		t.Fatal("failed recommendation preview consumed the choice token")
