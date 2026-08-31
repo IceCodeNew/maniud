@@ -259,6 +259,14 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 	if _, _, valid := deploymentMappingValue(nonScalarKey, "key"); valid {
 		t.Fatal("deploymentMappingValue() accepted a non-scalar key")
 	}
+	for _, content := range [][]*yaml.Node{
+		{nil, {Kind: yaml.ScalarNode}},
+		{{Kind: yaml.ScalarNode, Value: "key"}, nil},
+	} {
+		if _, _, valid := deploymentMappingValue(&yaml.Node{Kind: yaml.MappingNode, Content: content}, "key"); valid {
+			t.Fatal("deploymentMappingValue() accepted a nil mapping member")
+		}
+	}
 
 	health := &containerconfig.Healthcheck{Interval: "1s"}
 	expected := containerconfig.Spec{ServiceName: apiService, Healthcheck: health}

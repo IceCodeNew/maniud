@@ -131,11 +131,12 @@ func deploymentMappingValue(mapping *yaml.Node, key string) (*yaml.Node, bool, b
 	}
 	for index := 0; index < len(mapping.Content); index += deploymentMappingWidth {
 		name := mapping.Content[index]
-		if name.Kind != yaml.ScalarNode {
+		value := mapping.Content[index+1]
+		if name == nil || value == nil || name.Kind != yaml.ScalarNode {
 			return nil, false, false
 		}
 		if name.Value == key {
-			return mapping.Content[index+1], true, true
+			return value, true, true
 		}
 	}
 
@@ -165,9 +166,12 @@ func mutateDeploymentNode(
 		owner = healthcheck
 		key = nested
 	}
+	if owner == nil {
+		return nil, ErrInvalidSource
+	}
 
 	current, found, mappingValid := deploymentMappingValue(owner, key)
-	if !mappingValid || found && !safeDeploymentTarget(current) {
+	if !mappingValid || found && current == nil || found && !safeDeploymentTarget(current) {
 		return nil, ErrInvalidSource
 	}
 	if !present {
@@ -177,7 +181,13 @@ func mutateDeploymentNode(
 
 		return path, nil
 	}
+	if value == nil {
+		return nil, ErrInvalidSource
+	}
 	if found {
+		if current == nil {
+			return nil, ErrInvalidSource
+		}
 		copyDeploymentComments(value, current)
 	}
 	setDeploymentMappingValue(owner, key, value)
