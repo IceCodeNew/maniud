@@ -125,22 +125,24 @@ func safeDeploymentMapping(node *yaml.Node) bool {
 	return node != nil && node.Kind == yaml.MappingNode && node.Style&yaml.TaggedStyle == 0 && node.Anchor == ""
 }
 
+// deploymentMappingValue always returns a non-nil node. Callers use found and
+// valid to decide whether that node belongs to the mapping.
 func deploymentMappingValue(mapping *yaml.Node, key string) (*yaml.Node, bool, bool) {
 	if mapping == nil || mapping.Kind != yaml.MappingNode || len(mapping.Content)%deploymentMappingWidth != 0 {
-		return nil, false, false
+		return new(yaml.Node), false, false
 	}
 	for index := 0; index < len(mapping.Content); index += deploymentMappingWidth {
 		name := mapping.Content[index]
 		value := mapping.Content[index+1]
 		if name == nil || value == nil || name.Kind != yaml.ScalarNode {
-			return nil, false, false
+			return new(yaml.Node), false, false
 		}
 		if name.Value == key {
 			return value, true, true
 		}
 	}
 
-	return nil, false, true
+	return new(yaml.Node), false, true
 }
 
 //nolint:cyclop // Direct and nested fields share one auditable node mutation boundary.
@@ -171,7 +173,7 @@ func mutateDeploymentNode(
 	}
 
 	current, found, mappingValid := deploymentMappingValue(owner, key)
-	if !mappingValid || found && current == nil || found && !safeDeploymentTarget(current) {
+	if !mappingValid || found && !safeDeploymentTarget(current) {
 		return nil, ErrInvalidSource
 	}
 	if !present {
@@ -181,13 +183,7 @@ func mutateDeploymentNode(
 
 		return path, nil
 	}
-	if value == nil {
-		return nil, ErrInvalidSource
-	}
 	if found {
-		if current == nil {
-			return nil, ErrInvalidSource
-		}
 		copyDeploymentComments(value, current)
 	}
 	setDeploymentMappingValue(owner, key, value)
@@ -232,6 +228,9 @@ func deploymentYAMLPath(field string) (string, string, bool) {
 	}
 }
 
+// deploymentYAMLValue always returns a non-nil node. Callers use present and
+// valid to decide whether to write it.
+//
 //nolint:cyclop // Every closed field has a distinct Spec representation.
 func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, bool, bool) {
 	switch field {
@@ -247,7 +246,7 @@ func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, b
 		return deploymentInteger(spec.SharedMemoryBytes), spec.SharedMemoryBytes != 0, true
 	case "stop_grace_period":
 		if spec.StopTimeout == nil {
-			return nil, false, true
+			return new(yaml.Node), false, true
 		}
 
 		return deploymentScalar(yamlStringTag, strconv.FormatInt(*spec.StopTimeout, 10)+"s"), true, true
@@ -257,7 +256,7 @@ func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, b
 		return deploymentOptionalBoolean(spec.ReadOnly)
 	case "no_new_privileges":
 		if !spec.NoNewPrivileges {
-			return nil, false, false
+			return new(yaml.Node), false, false
 		}
 
 		return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{{
@@ -273,7 +272,7 @@ func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, b
 		})
 	case "healthcheck.retries":
 		if spec.Healthcheck == nil || spec.Healthcheck.Disabled {
-			return nil, false, false
+			return new(yaml.Node), false, false
 		}
 
 		return deploymentOptionalInteger(spec.Healthcheck.Retries)
@@ -286,7 +285,7 @@ func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, b
 			return value.StartInterval
 		})
 	default:
-		return nil, false, false
+		return new(yaml.Node), false, false
 	}
 }
 
@@ -300,7 +299,7 @@ func deploymentInteger[T ~int | ~int64](value T) *yaml.Node {
 
 func deploymentOptionalInteger[T ~int | ~int64](value *T) (*yaml.Node, bool, bool) {
 	if value == nil {
-		return nil, false, true
+		return new(yaml.Node), false, true
 	}
 
 	return deploymentInteger(*value), true, true
@@ -308,7 +307,7 @@ func deploymentOptionalInteger[T ~int | ~int64](value *T) (*yaml.Node, bool, boo
 
 func deploymentOptionalBoolean(value *bool) (*yaml.Node, bool, bool) {
 	if value == nil {
-		return nil, false, true
+		return new(yaml.Node), false, true
 	}
 
 	return deploymentScalar("!!bool", strconv.FormatBool(*value)), true, true
@@ -319,7 +318,7 @@ func deploymentHealthValue(
 	selected func(*containerconfig.Healthcheck) string,
 ) (*yaml.Node, bool, bool) {
 	if healthcheck == nil || healthcheck.Disabled {
-		return nil, false, false
+		return new(yaml.Node), false, false
 	}
 	value := selected(healthcheck)
 

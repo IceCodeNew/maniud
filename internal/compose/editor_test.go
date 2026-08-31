@@ -270,6 +270,9 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 
 	health := &containerconfig.Healthcheck{Interval: "1s"}
 	expected := containerconfig.Spec{ServiceName: apiService, Healthcheck: health}
+	if _, err := mutateDeploymentNode(nil, apiService, containerconfig.Spec{CPUs: "2"}, "cpus"); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("mutateDeploymentNode(nil service) error = %v", err)
+	}
 	if _, err := mutateDeploymentNode(&yaml.Node{Kind: yaml.MappingNode}, apiService, expected, "healthcheck.interval"); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("mutateDeploymentNode(absent healthcheck) error = %v", err)
 	}
