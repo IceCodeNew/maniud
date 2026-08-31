@@ -24,6 +24,7 @@ import (
 const (
 	testLLMChangedModel = "changed-model"
 	testLLMCredential   = "credential"
+	testLLMIdentity     = "identity"
 	testLLMKey          = "key"
 	testLLMModelValue   = "model"
 	testLLMSecretValue  = "secret"
@@ -140,7 +141,7 @@ func TestTUIAssistantCloseClearsOnlyResolvedSecrets(t *testing.T) {
 			Provider: llm.ProviderOpenAI, Model: testLLMModelValue,
 			Timeout: time.Minute, APIKey: testLLMSecretValue,
 		},
-		identity: "identity", keySource: "process environment",
+		identity: testLLMIdentity, keySource: "process environment",
 		secrets:  []string{testLLMSecretValue},
 		warnings: []string{"current .env was ignored"},
 		baseline: llmConfigBaseline{initialized: true},
@@ -151,7 +152,7 @@ func TestTUIAssistantCloseClearsOnlyResolvedSecrets(t *testing.T) {
 	if assistant.resolved.config.APIKey != "" || assistant.resolved.secrets != nil {
 		t.Fatalf("Close() retained resolved secrets: %#v", assistant.resolved)
 	}
-	if assistant.resolved.identity != "identity" ||
+	if assistant.resolved.identity != testLLMIdentity ||
 		assistant.resolved.keySource != "process environment" ||
 		!slices.Equal(assistant.resolved.warnings, []string{"current .env was ignored"}) ||
 		!assistant.resolved.baseline.initialized {
@@ -376,7 +377,7 @@ func TestPublicLLMResultAndConfigurationErrorsRemainPrivacySafe(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,funlen,paralleltest // The contract test temporarily replaces http.DefaultTransport.
+//nolint:cyclop,funlen,gocognit,paralleltest // The contract test temporarily replaces http.DefaultTransport.
 func TestTUIAssistantRecommendsAndAcceptsWithPinnedCompatibleAdapter(t *testing.T) {
 	originalTransport := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })

@@ -68,7 +68,7 @@ func defaultTUIDeploymentWorkspace(environment map[string]string) *tuiDeployment
 	}
 }
 
-//nolint:cyclop,funcorder // Source, runtime snapshot, projection, and postflight freeze one network context.
+//nolint:funcorder // Source, runtime snapshot, projection, and postflight freeze one network context.
 func (workspace *tuiDeploymentWorkspace) assistContext(
 	ctx context.Context,
 	request application.Request,
@@ -83,6 +83,7 @@ func (workspace *tuiDeploymentWorkspace) assistContext(
 	return workspace.captureAssistContext(ctx, request, operations)
 }
 
+//nolint:funcorder // Acceptance rechecks the same source while an in-memory preview exists.
 func (workspace *tuiDeploymentWorkspace) pendingAssistContext(
 	ctx context.Context,
 	request application.Request,
@@ -97,6 +98,7 @@ func (workspace *tuiDeploymentWorkspace) pendingAssistContext(
 	return workspace.captureAssistContext(ctx, request, operations)
 }
 
+//nolint:funcorder // Both recommendation phases share one context identity implementation.
 func (workspace *tuiDeploymentWorkspace) captureAssistContext(
 	ctx context.Context,
 	request application.Request,
