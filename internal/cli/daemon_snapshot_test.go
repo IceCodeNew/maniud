@@ -16,6 +16,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+//nolint:cyclop // Assertions jointly prove partial convergence and event ordering.
 func TestReconcileGitOpsSnapshotSkipsInvalidSourceAndMutatesValidService(t *testing.T) {
 	t.Parallel()
 

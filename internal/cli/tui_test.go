@@ -16,6 +16,11 @@ import (
 	"github.com/IceCodeNew/maniud/internal/tui"
 )
 
+const (
+	tuiTestLocale       = "C.UTF-8"
+	languageEnvironment = "LANG"
+)
+
 type terminalFixture struct {
 	io.Reader
 	io.Writer
@@ -65,7 +70,6 @@ func TestRequireInteractiveTerminal(t *testing.T) {
 
 func TestTUIOptionsHonorTerminalEnvironment(t *testing.T) {
 	t.Parallel()
-	const languageEnvironment = "LANG"
 	const utf8Locale = "en_US.UTF-8"
 
 	tests := []struct {
@@ -139,7 +143,7 @@ func TestExecuteProductionTUIContainsSetupFailures(t *testing.T) {
 	workingDirectory := t.TempDir()
 	environment := map[string]string{
 		homeKey: workingDirectory, xdgStateHomeKey: filepath.Join(workingDirectory, "state"),
-		testTermEnvironment: testTerminalName, "LANG": "C.UTF-8",
+		testTermEnvironment: testTerminalName, languageEnvironment: tuiTestLocale,
 	}
 
 	tests := []struct {
@@ -186,7 +190,7 @@ func TestExecuteProductionTUIRunsHomeAndClassifiesCancellation(t *testing.T) {
 	workingDirectory := t.TempDir()
 	environment := map[string]string{
 		homeKey: workingDirectory, xdgStateHomeKey: filepath.Join(workingDirectory, "state"),
-		testTermEnvironment: testTerminalName, "LANG": "C.UTF-8",
+		testTermEnvironment: testTerminalName, languageEnvironment: tuiTestLocale,
 	}
 	terminal := func(uintptr) bool { return true }
 	for _, test := range []struct {
@@ -224,7 +228,7 @@ func TestExecuteProductionTUIWritesPostCommitInstructionsAfterFailure(t *testing
 	workingDirectory := t.TempDir()
 	environment := map[string]string{
 		homeKey: workingDirectory, xdgStateHomeKey: filepath.Join(workingDirectory, "state"),
-		testTermEnvironment: testTerminalName, "LANG": "C.UTF-8",
+		testTermEnvironment: testTerminalName, languageEnvironment: tuiTestLocale,
 	}
 	output := new(bytes.Buffer)
 	var notifications processNotifications

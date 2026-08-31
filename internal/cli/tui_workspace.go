@@ -95,6 +95,7 @@ func (workspace *tuiServiceWorkspace) Preview(ctx context.Context, input string)
 	return publicServiceDraft(draft), nil
 }
 
+//nolint:cyclop // Preview keeps repository proof, generation, and draft recovery in one ordered transaction.
 func prepareTUIServiceDraft(
 	ctx context.Context,
 	input string,
@@ -297,6 +298,7 @@ func stageTUIService(ctx context.Context, draft tuiServiceDraft) ([]string, []by
 	return stageTUIServiceWith(ctx, draft, stagedTUIDiff, writeGitTree)
 }
 
+//nolint:cyclop // Staging keeps publication, index ownership, and rollback proof in one ordered transaction.
 func stageTUIServiceWith(
 	ctx context.Context,
 	draft tuiServiceDraft,
@@ -942,6 +944,7 @@ func gitCommitHasSignature(ctx context.Context, repository, head string) bool {
 	return err == nil && bytes.Contains(commit, []byte("\ngpgsig "))
 }
 
+//nolint:cyclop // Readback keeps immutable source, checkout, runtime, and provenance proofs ordered.
 func committedTUIRequest(
 	ctx context.Context,
 	staged tuiStagedService,

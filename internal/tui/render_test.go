@@ -15,6 +15,7 @@ const (
 	testProposedLabel     = "PROPOSED"
 	testCurrentImage      = "current"
 	testProposedImage     = "proposed"
+	testPreparationPath   = "services/service.prepare.sh"
 )
 
 func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
@@ -114,7 +115,7 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 	}}
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: ServiceDraft{
 		Runtime: testRuntime, Image: strings.Repeat("registry.example/image@sha256:a", 4),
-		Service: testService, ComposePath: testServicePath, Preparation: "services/service.prepare.sh",
+		Service: testService, ComposePath: testServicePath, Preparation: testPreparationPath,
 		WarningCount: 1,
 	}}
 	commit := commitServicePage{
@@ -155,7 +156,7 @@ func TestViewRendersEveryPageWithoutLeakingErrors(t *testing.T) {
 		{page: unsignedCommitConfirmationPage{commit: commit, focus: confirmationBack},
 			contains: "Confirm unsigned commit"},
 		{page: preparationRequiredPage{draft: ServiceDraft{
-			Service: testService, Preparation: "services/service.prepare.sh",
+			Service: testService, Preparation: testPreparationPath,
 		}}, contains: "Preparation required"},
 		{page: selectServicePage{choices: []serviceChoice{{
 			project: testProject, service: testService, runtime: testRuntime,
@@ -342,7 +343,7 @@ func TestRenderConditionalStatePaths(t *testing.T) {
 		t.Fatalf("recovered stage confirmation = %q", lines)
 	}
 	if lines := state.preparationRequiredBody(preparationRequiredPage{draft: ServiceDraft{
-		Service: testService, Preparation: "services/service.prepare.sh",
+		Service: testService, Preparation: testPreparationPath,
 	}}, defaultWidth); len(lines) == 0 {
 		t.Fatal("preparationRequiredBody() is empty")
 	}

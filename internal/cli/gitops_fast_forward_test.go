@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+//nolint:cyclop // Assertions jointly prove remote selection, draft preservation, and checkout identity.
 func TestFastForwardGitOpsCheckoutSelectsRemoteDescendant(t *testing.T) {
 	t.Parallel()
 

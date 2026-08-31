@@ -1396,10 +1396,7 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 	if !accepted || result.err != nil {
 		return command
 	}
-	if result.result.Committed && result.result.NeedsUnsignedApproval ||
-		result.result.ValidationUnavailable && !result.result.Committed ||
-		result.result.PreparationRequired &&
-			(!result.result.Committed || result.result.ValidationUnavailable || result.result.NeedsUnsignedApproval) {
+	if invalidServiceCommitResult(result.result) {
 		state.err = errInvalidInput
 		state.status = "Commit result could not be verified"
 
@@ -1433,6 +1430,13 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 	}
 
 	return tea.Batch(command, state.startCommittedSnapshot(result.result.Request))
+}
+
+func invalidServiceCommitResult(result ServiceCommitResult) bool {
+	return result.Committed && result.NeedsUnsignedApproval ||
+		result.ValidationUnavailable && !result.Committed ||
+		result.PreparationRequired &&
+			(!result.Committed || result.ValidationUnavailable || result.NeedsUnsignedApproval)
 }
 
 func (state *model) handleServiceSuspendResult(result serviceSuspendResultMsg) tea.Cmd {

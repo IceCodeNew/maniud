@@ -23,6 +23,7 @@ import (
 const (
 	tuiTestDigest        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	tuiTestServicePath   = "services/api.yaml"
+	tuiTestPreparation   = "services/api.prepare.sh"
 	tuiTestCommitMessage = "Add api service"
 	tuiCommand           = "maniud tui"
 	testOpenRootFailure  = "root"
@@ -616,7 +617,7 @@ func TestTUIWorkspaceGeneratedServiceValidationAndProjection(t *testing.T) {
 	t.Parallel()
 
 	generated := generatedCompose{
-		path: tuiTestServicePath, preparationPath: "services/api.prepare.sh",
+		path: tuiTestServicePath, preparationPath: tuiTestPreparation,
 		runtime: domain.RuntimeDocker, image: imageValue, service: applyServiceValue,
 		warnings: []runtimeargv.Warning{{}},
 	}
@@ -626,7 +627,7 @@ func TestTUIWorkspaceGeneratedServiceValidationAndProjection(t *testing.T) {
 	}
 	if draft := publicServiceDraft(tuiServiceDraft{generated: generated}); draft != (tui.ServiceDraft{
 		Runtime: testDockerRuntime, Image: imageValue, Service: applyServiceValue, ComposePath: tuiTestServicePath,
-		Preparation: "services/api.prepare.sh", WarningCount: 1,
+		Preparation: tuiTestPreparation, WarningCount: 1,
 	}) {
 		t.Fatalf("publicServiceDraft() = %#v", draft)
 	}
@@ -798,6 +799,7 @@ func TestTUIWorkspaceContainsDependencyAndRepositoryInspectionFailures(t *testin
 	}
 }
 
+//nolint:cyclop,funlen,gocognit // Subtests keep independent stage transaction failures visible together.
 func TestTUIWorkspaceContainsStableStageFailures(t *testing.T) {
 	t.Parallel()
 
@@ -1049,7 +1051,7 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 		t.Parallel()
 
 		draft := newTUIWorkspaceDraft(t)
-		draft.generated.preparationPath = "services/api.prepare.sh"
+		draft.generated.preparationPath = tuiTestPreparation
 		draft.generated.preparationAbsolute = filepath.Join(draft.repository, draft.generated.preparationPath)
 		draft.generated.preparation = []byte("#!/bin/sh\n")
 		workspace := &tuiServiceWorkspace{draft: &draft}
