@@ -266,6 +266,7 @@ func TestExecuteProductionTUIWritesPostCommitInstructionsAfterFailure(t *testing
 			_ tui.Catalog,
 			workspace tui.ServiceWorkspace,
 			_ tui.DeploymentWorkspace,
+			_ tui.Assistant,
 			_ applyDependencies,
 			_ *tui.EventStream,
 			_ tui.Options,
