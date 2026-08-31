@@ -599,7 +599,7 @@ func TestDeploymentFilesystemProofRejectsInvalidInputs(t *testing.T) {
 		t.Fatalf("defaultTUIDeploymentWorkspace(invalid state path) = %#v", invalidDefault)
 	}
 	invalidRepository := filepath.Join(t.TempDir(), "missing")
-	if published, err := replaceDeploymentEntry(invalidRepository, "compose.yaml", nil, nil); published ||
+	if published, err := replaceDeploymentEntry(invalidRepository, composeFileValue, nil, nil); published ||
 		!errors.Is(err, errDeploymentEditInvalid) {
 		t.Fatalf("replaceDeploymentEntry(missing repository) = %t, %v", published, err)
 	}
@@ -616,34 +616,59 @@ func TestDeploymentFilesystemProofRejectsInvalidInputs(t *testing.T) {
 		!errors.Is(err, errDeploymentEditInvalid) {
 		t.Fatalf("replaceDeploymentEntry(directory) = %t, %v", published, err)
 	}
-	path := filepath.Join(repository, "compose.yaml")
+	path := filepath.Join(repository, composeFileValue)
 	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if published, err := replaceDeploymentEntry(
-		repository, "compose.yaml", []byte("other"), []byte("after"),
+		repository, composeFileValue, []byte("other"), []byte("after"),
 	); published || !errors.Is(err, errDeploymentEditInvalid) {
 		t.Fatalf("replaceDeploymentEntry(content mismatch) = %t, %v", published, err)
 	}
 	if published, err := replaceDeploymentEntry(
-		repository, "compose.yaml", []byte("before"), []byte("after"),
+		repository, composeFileValue, []byte("before"), []byte("after"),
 	); !published || err != nil {
 		t.Fatalf("replaceDeploymentEntry(valid) = %t, %v", published, err)
 	}
 
 	badProof := tuiStagedProof{repository: repository, expectedTree: "bad"}
-	if deploymentTreeContains(t.Context(), badProof, "compose.yaml", []byte("after")) {
+	if deploymentTreeContains(t.Context(), badProof, composeFileValue, []byte("after")) {
 		t.Fatal("deploymentTreeContains(invalid proof) = true")
 	}
 	draft := tuiDeploymentDraft{
 		repository: repository,
-		entry:      "compose.yaml",
+		entry:      composeFileValue,
 		base:       gitTreeState{head: strings.Repeat("a", 40), tree: strings.Repeat("b", 40)},
 		source:     compose.Source{Content: []byte("before")},
 		candidate:  compose.Source{Content: []byte("after")},
 	}
 	if err := rollbackDeploymentEdit(t.Context(), draft); err == nil {
 		t.Fatal("rollbackDeploymentEdit(invalid repository) succeeded")
+	}
+}
+
+func TestDeploymentStagedProofRejectsInvalidGitState(t *testing.T) {
+	t.Parallel()
+
+	nonRepository := t.TempDir()
+	if exactStagedPathStatusWithAttributes(
+		t.Context(), nonRepository, []string{composeFileValue}, "M", "",
+	) {
+		t.Fatal("exactStagedPathStatusWithAttributes(non-repository) = true")
+	}
+	if head, unchanged := proveTUIStagedCommit(
+		t.Context(), tuiStagedProof{repository: nonRepository}, "Update deployment", false,
+	); head != "" || unchanged {
+		t.Fatalf("proveTUIStagedCommit(non-repository) = %q, %t", head, unchanged)
+	}
+
+	draft := newDeploymentDraftFixture(t)
+	proof := tuiStagedProof{
+		repository: draft.repository,
+		base:       gitTreeState{head: strings.Repeat("a", 40)},
+	}
+	if head, unchanged := proveTUIStagedCommit(t.Context(), proof, "Update deployment", false); head != "" || unchanged {
+		t.Fatalf("proveTUIStagedCommit(mismatched parent) = %q, %t", head, unchanged)
 	}
 }
 
@@ -813,13 +838,13 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			t.Parallel()
 
 			repository := t.TempDir()
-			if err := os.WriteFile(filepath.Join(repository, "compose.yaml"), []byte("before"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(repository, composeFileValue), []byte("before"), 0o600); err != nil {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
 			operations := defaultDeploymentEntryOperations()
 			test.configure(&operations)
 			published, err := replaceDeploymentEntryWithOperations(
-				repository, "compose.yaml", []byte("before"), []byte("after"), operations,
+				repository, composeFileValue, []byte("before"), []byte("after"), operations,
 			)
 			if err == nil || published != test.published {
 				t.Fatalf("replaceDeploymentEntryWithOperations() = %t, %v", published, err)
@@ -1393,7 +1418,7 @@ func TestCaptureDeploymentRestoreRejectsMalformedProof(t *testing.T) {
 		t.Fatalf("captureDeploymentRestore(no repository) error = %v", err)
 	}
 	source := compose.Source{Repository: &compose.RepositorySnapshot{
-		Root: t.TempDir(), Entry: "compose.yaml", Files: map[string]compose.RepositoryFile{},
+		Root: t.TempDir(), Entry: composeFileValue, Files: map[string]compose.RepositoryFile{},
 	}}
 	if _, err := captureDeploymentRestore(
 		t.Context(), source, strings.Repeat("a", 40), nil, nil, t.TempDir(),
