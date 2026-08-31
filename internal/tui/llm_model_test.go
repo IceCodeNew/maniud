@@ -557,7 +557,11 @@ func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 	assistant.acceptErr = nil
 	deployments.err = errTestSecret
 	state.page = choices
+	acceptCalls := len(assistant.calls)
 	deliver(t, state, state.handleKey(key(keyEnter)))
+	if len(assistant.calls) != acceptCalls {
+		t.Fatal("failed recommendation preview consumed the choice token")
+	}
 	deployments.err = nil
 	deployments.recommendation = DeploymentEditPreview{}
 	state.page = choices

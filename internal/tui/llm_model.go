@@ -692,10 +692,11 @@ func (state *model) startLLMChoicePreview(current llmChoicesPage) tea.Cmd {
 		choice := current.result.Choices[current.cursor]
 
 		return func() tea.Msg {
-			if err := assistant.Accept(ctx, current.result.Token, current.cursor); err != nil {
+			preview, err := workspace.PreviewRecommendation(ctx, current.question.review.request, choice.Changes)
+			if err != nil {
 				return llmPreviewResultMsg{sequence: sequence, page: current, err: err}
 			}
-			preview, err := workspace.PreviewRecommendation(ctx, current.question.review.request, choice.Changes)
+			err = assistant.Accept(ctx, current.result.Token, current.cursor)
 
 			return llmPreviewResultMsg{sequence: sequence, page: current, preview: preview, err: err}
 		}
