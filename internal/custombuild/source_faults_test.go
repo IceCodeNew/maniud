@@ -107,6 +107,7 @@ func validModuleTree(t *testing.T) string {
 	for _, module := range modules[1:] {
 		rootModule.WriteString("\t" + module.path + " => ./" + filepath.ToSlash(module.directory) + "\n")
 	}
+	rootModule.WriteString("\t" + anyLLMModule + " => " + anyLLMFork + " " + testAnyLLMVersion + "\n")
 	rootModule.WriteString("\t" + notificationModule + " => " + notificationFork + " " +
 		testNotificationVersion + "\n")
 	rootModule.WriteString(")\n")
@@ -343,6 +344,15 @@ func TestInspectSourceModuleRejectsMissingVersions(t *testing.T) {
 	if _, err := inspectSourceModule(root); !errors.Is(err, errInvalidSource) {
 		t.Fatalf("inspectSourceModule(incomplete) error = %v", err)
 	}
+	content := "module " + projectModule + "\ngo " + testGoDirective + "\n" +
+		"replace " + anyLLMModule + " => example.com/any-llm-go " + testAnyLLMVersion + "\n" +
+		"replace " + notificationModule + " => " + notificationFork + " " + testNotificationVersion + "\n"
+	if err := os.WriteFile(path, []byte(content), generatedFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectSourceModule(root); !errors.Is(err, errInvalidSource) {
+		t.Fatalf("inspectSourceModule(invalid any-llm fork) error = %v", err)
+	}
 }
 
 func TestInspectSourceModuleAcceptsReplaceFormats(t *testing.T) {
@@ -363,13 +373,15 @@ func TestInspectSourceModuleAcceptsReplaceFormats(t *testing.T) {
 
 			root := t.TempDir()
 			content := "module " + projectModule + "\n\ngo " + testGoDirective + "\n\ntoolchain " + testGoVersion +
-				"\n\n" + test.replacement
+				"\n\nreplace " + anyLLMModule + " => " + anyLLMFork + " " + testAnyLLMVersion + "\n" +
+				test.replacement
 			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(content), generatedFileMode); err != nil {
 				t.Fatal(err)
 			}
 			source, err := inspectSourceModule(root)
 			if err != nil || source.settings.goDirective != testGoDirective ||
 				source.settings.toolchain != testGoVersion ||
+				source.settings.anyLLMVersion != testAnyLLMVersion ||
 				source.settings.notificationVersion != testNotificationVersion {
 				t.Fatalf("inspectSourceModule() = %#v, %v", source, err)
 			}
@@ -382,7 +394,8 @@ func TestWriteBuildModuleWithWriterReportsEachWriteFailure(t *testing.T) {
 
 	plan := buildPlan{
 		config:      resolvedConfig{root: testRepositoryRoot(t), runtimes: []string{dockerRuntime}},
-		goDirective: testGoDirective, toolchain: testGoVersion, notificationVersion: testNotificationVersion,
+		goDirective: testGoDirective, toolchain: testGoVersion, anyLLMVersion: testAnyLLMVersion,
+		notificationVersion: testNotificationVersion,
 	}
 	tests := []struct {
 		name     string
@@ -400,8 +413,9 @@ func TestWriteBuildModuleWithWriterReportsEachWriteFailure(t *testing.T) {
 				t.TempDir(), plan,
 				func(_ string, content []byte, mode os.FileMode) error {
 					calls++
-					if calls == 1 && !strings.Contains(string(content), "toolchain "+testGoVersion) {
-						t.Error("generated module omitted toolchain directive")
+					if calls == 1 && (!strings.Contains(string(content), "toolchain "+testGoVersion) ||
+						!strings.Contains(string(content), anyLLMFork+" "+testAnyLLMVersion)) {
+						t.Error("generated module omitted a source directive")
 					}
 					if mode != generatedFileMode {
 						t.Errorf("generated file mode = %o", mode)

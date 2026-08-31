@@ -27,6 +27,7 @@ require (
 	github.com/mattn/go-shellwords v1.0.12
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/sys/user v0.4.1
+	github.com/mozilla-ai/any-llm-go v0.0.0-20260830222028-1c5364355b59
 	github.com/nikoksr/notify v1.5.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -44,6 +45,8 @@ require (
 )
 
 require (
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 // indirect
 	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29 // indirect
 	github.com/Microsoft/hcsshim v0.15.0-rc.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
@@ -75,10 +78,15 @@ require (
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/openai/openai-go/v3 v3.32.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
+	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.opencensus.io v0.24.0 // indirect
@@ -100,5 +108,6 @@ replace (
 	github.com/IceCodeNew/maniud/containerconfig/podman => ./containerconfig/podman
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ./containerconfig/runtimeargv
 	github.com/IceCodeNew/maniud/imageref => ./imageref
+	github.com/mozilla-ai/any-llm-go => github.com/IceCodeNew/any-llm-go v0.0.0-20260830222028-1c5364355b59
 	github.com/nikoksr/notify => github.com/IceCodeNew/notify v0.0.0-20260825033926-0a827094afac
 )

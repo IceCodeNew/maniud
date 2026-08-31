@@ -12,6 +12,7 @@ import (
 const (
 	testGoVersion           = "go1.27.0"
 	testGoDirective         = "1.27.0"
+	testAnyLLMVersion       = "v0.0.0-20260830222028-1c5364355b59"
 	testNotificationVersion = "v1.5.0"
 	testSuccess             = "success"
 	testLinuxARM64          = "linux/arm64"

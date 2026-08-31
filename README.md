@@ -123,4 +123,4 @@ Copy the settings needed from [`env.example`](env.example) into the process envi
 
 Keep the Compose file, state directory, runtime workload, and backups unchanged. Run the same `apply` again, or restart the supervised daemon. Read the [recovery guide](docs/recovery.md) before editing state or backups.
 
-Use `maniud COMMAND --help` for command syntax and the [error reference](docs/errors.md) for failure codes. The [custom build guide](docs/custom-builds.md) explains how to create a binary with selected runtimes.
+Use `maniud COMMAND --help` for command syntax and the [error reference](docs/errors.md) for failure codes. The [custom build guide](docs/custom-builds.md) explains how to create a binary with selected runtimes. Maintainers changing the LLM dependency must follow the [any-llm-go repin checklist](docs/any-llm-go-repin.md).
