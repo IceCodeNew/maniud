@@ -2,10 +2,10 @@
 set -euo pipefail
 
 usage() {
-	printf 'usage: %s (--full | --base ref --head ref) --output file\n' "$0" >&2
+	printf 'usage: %s (--full [--index] | --base ref --head ref) --output file\n' "$0" >&2
 	exit 2
 }
-base="" head="HEAD" output="" full=0
+base="" head="HEAD" output="" full=0 index=0
 while (($#)); do
 	case "$1" in
 	--base)
@@ -27,10 +27,15 @@ while (($#)); do
 		full=1
 		shift
 		;;
+	--index)
+		index=1
+		shift
+		;;
 	*) usage ;;
 	esac
 done
 [[ -n "$output" ]] || usage
+if ((index)) && { ((!full)) || [[ "$head" != HEAD ]]; }; then usage; fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
 emit_full() {
@@ -38,7 +43,12 @@ emit_full() {
 	local modules=()
 	local patterns=()
 	tree="$(mktemp)" manifest="$(mktemp)"
-	if ! git ls-tree -rz --name-only "$head" >"$tree"; then
+	if ((index)); then
+		if ! git ls-files --cached -z >"$tree"; then
+			rm -f "$tree" "$manifest"
+			return 1
+		fi
+	elif ! git ls-tree -rz --name-only "$head" >"$tree"; then
 		rm -f "$tree" "$manifest"
 		return 1
 	fi

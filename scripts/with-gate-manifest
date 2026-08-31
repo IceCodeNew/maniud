@@ -14,6 +14,6 @@ trap 'rm -f "$temporary"' EXIT
 if [[ -n "${PRE_COMMIT_FROM_REF:-}" && -n "${PRE_COMMIT_TO_REF:-}" ]]; then
 	"$root/scripts/select-affected-gates" --base "$PRE_COMMIT_FROM_REF" --head "$PRE_COMMIT_TO_REF" --output "$temporary"
 else
-	"$root/scripts/select-affected-gates" --full --head HEAD --output "$temporary"
+	"$root/scripts/select-affected-gates" --full --head HEAD --index --output "$temporary"
 fi
 MANIUD_GATE_MANIFEST="$temporary" "$@"

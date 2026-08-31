@@ -74,6 +74,43 @@ func TestBootstrapGuardAllowsClassifiedChangeAndRejectsShallowHistory(t *testing
 	invokeBootstrap(t, clone, base, "HEAD", testFullMode)
 }
 
+func TestLocalFullManifestDiscoversStagedModules(t *testing.T) {
+	repository := bootstrapRepository(t)
+	commit(t, repository, "base")
+	write(t, repository, "nested/go.mod", "module example.test/nested\n\ngo 1.27\n")
+	write(t, repository, "nested/nested.go", "package nested\n")
+	run(t, repository, "git", "add", "nested/go.mod", "nested/nested.go")
+
+	command := exec.CommandContext(
+		t.Context(), "bash", "scripts/with-gate-manifest", "bash", "-c", `cat "$MANIUD_GATE_MANIFEST"`,
+	)
+	command.Dir = repository
+	command.Env = append(
+		os.Environ(), "MANIUD_GATE_MANIFEST=", "PRE_COMMIT_FROM_REF=", "PRE_COMMIT_TO_REF=",
+	)
+	localManifest, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("with-gate-manifest: %v\n%s", err, localManifest)
+	}
+	if !strings.Contains(string(localManifest), "module\tnested\n") ||
+		!strings.Contains(string(localManifest), "package\tnested\texample.test/nested\n") {
+		t.Fatalf("local manifest missed staged module:\n%s", localManifest)
+	}
+
+	headManifest := filepath.Join(t.TempDir(), "head.tsv")
+	run(
+		t, repository, "bash", "scripts/select-affected-gates",
+		"--full", "--head", "HEAD", "--output", headManifest,
+	)
+	contents, err := os.ReadFile(headManifest) //nolint:gosec // The path belongs to this test.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "module\tnested\n") {
+		t.Fatalf("explicit HEAD manifest read the staged module:\n%s", contents)
+	}
+}
+
 func TestCommandE2EManifestFailsClosed(t *testing.T) {
 	manifest := filepath.Join(t.TempDir(), "manifest.tsv")
 	for _, contents := range []string{
@@ -170,6 +207,7 @@ func main() {
 `)
 	write(t, repository, "plugins/runtime/runtime.go", "package runtime\n")
 	copyFile(t, "../../scripts/select-affected-gates", filepath.Join(repository, "scripts/select-affected-gates"))
+	copyFile(t, "../../scripts/with-gate-manifest", filepath.Join(repository, "scripts/with-gate-manifest"))
 
 	return repository
 }
