@@ -265,7 +265,7 @@ func FuzzPrepareDeploymentEdit(f *testing.F) {
 		}
 		cpu := application.DeploymentCPU(float32(units%64+1) / 2)
 		patch := deploymentPatch(t, application.DeploymentCPUs, cpu)
-		source := compose.Source{Content: []byte(content), WorkingDir: "/private/tmp", Environment: map[string]string{}}
+		source := compose.Source{Content: []byte(content), WorkingDir: t.TempDir(), Environment: map[string]string{}}
 		candidate, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{patch})
 		if err != nil {
 			return

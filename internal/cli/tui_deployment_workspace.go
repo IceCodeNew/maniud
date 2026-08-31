@@ -160,9 +160,13 @@ func parseDeploymentPatch(
 		var number int64
 		number, err = strconv.ParseInt(value, 10, 64)
 		parsed = application.DeploymentBytes(number)
-	case application.DeploymentPIDs, application.DeploymentHealthRetries:
+	case application.DeploymentPIDs:
 		var number int64
 		number, err = strconv.ParseInt(value, 10, 64)
+		parsed = application.DeploymentInteger(number)
+	case application.DeploymentHealthRetries:
+		var number int64
+		number, err = strconv.ParseInt(value, 10, strconv.IntSize)
 		parsed = application.DeploymentInteger(number)
 	case application.DeploymentRestart:
 		parsed = application.DeploymentRestartPolicy(value)

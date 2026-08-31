@@ -69,6 +69,7 @@ func TestParseDeploymentPatchCoversClosedFieldCatalog(t *testing.T) {
 		{field: application.DeploymentCPUs, value: "x"},
 		{field: application.DeploymentMemory, value: "x"},
 		{field: application.DeploymentPIDs, value: "x"},
+		{field: application.DeploymentHealthRetries, value: "x"},
 		{field: application.DeploymentStopGrace, value: "x"},
 		{field: application.DeploymentInit, value: "x"},
 		{field: application.DeploymentNoNewPrivileges, value: falseValue},
