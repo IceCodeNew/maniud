@@ -139,8 +139,11 @@ func TestLLMConfigurationSavePreservesUnknownAssignmentsAndClearsKey(t *testing.
 		t.Fatalf("saved content = %q", raw)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("saved mode = %v, error = %v", info.Mode(), err)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("saved mode = %v", info.Mode())
 	}
 	if _, err = assistant.Save(t.Context(), tui.LLMSettings{
 		Provider: string(llm.ProviderOpenAI), Model: "gpt-test", Timeout: "60", ClearAPIKey: true,
