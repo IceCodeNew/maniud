@@ -33,7 +33,7 @@ hooks = [
 # Spell-check tracked text before the slower Go analyzers and tests.
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
-rev = "v1.49.1"
+rev = "v1.50.0"
 hooks = [
   { id = "typos" },
 ]
