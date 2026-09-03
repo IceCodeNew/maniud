@@ -23,7 +23,7 @@ require (
 	github.com/google/go-containerregistry v0.22.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/sys/user v0.4.1
-	github.com/nikoksr/notify v1.5.0
+	github.com/nikoksr/notify v1.6.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
@@ -70,7 +70,7 @@ require (
 	go.opencensus.io v0.24.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260807164820-c8921c73eeea // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
