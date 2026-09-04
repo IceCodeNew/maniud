@@ -132,7 +132,8 @@ func TestCompactCommitKeepsBothActionsVisible(t *testing.T) {
 		state.options.Unicode = unicode
 		for _, focus := range []confirmationFocus{confirmationBack, confirmationApply} {
 			state.resize(56, 16)
-			state.page = commitServicePage{
+			state.page = commitPage{
+				kind:  commitKindService,
 				focus: focus, message: strings.Repeat("message", 30),
 				staged: StagedService{ComposePath: registeredAPIID, Diff: strings.Repeat("+changed line\n", 20)},
 			}
@@ -181,7 +182,7 @@ func TestCompactCommitKeyboardRequiresVisibleConfirmation(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	workspace.staged.Diff = "+first changed line\n" + strings.Repeat("+changed line\n", 20) + "+last changed line"
-	commit := commitServicePage{staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{kind: commitKindService, staged: workspace.staged, message: workspace.staged.CommitMessage}
 	state.resize(56, 16)
 	state.page = commit
 	state.Update(key("d"))
@@ -219,7 +220,7 @@ func TestNarrowCommitAllowsBackAndQuit(t *testing.T) {
 	for _, input := range []string{keyEscape, keyQuit} {
 		state, _, _ := newTestModel(t)
 		state.resize(32, 8)
-		state.page = commitServicePage{}
+		state.page = commitPage{kind: commitKindService}
 		_, command := state.Update(key(input))
 		if command == nil {
 			t.Fatalf("%s was blocked below Compact", input)
