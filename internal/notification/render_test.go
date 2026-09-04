@@ -9,6 +9,8 @@ import (
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
+const notificationTestSource = "services/api.yaml"
+
 func TestRenderApplicationEventProjectsSupportedNotifications(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +66,50 @@ func TestRenderApplicationEventOmitsEmptyAndDefaultFields(t *testing.T) {
 	}
 }
 
+func TestRenderApplicationEventProjectsGitOpsSourceTransitions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		event application.Event
+		want  notificationMessage
+	}{
+		{
+			name: "blocked source",
+			event: application.Event{
+				Kind: application.EventGitOpsSourceBlocked, Source: notificationTestSource,
+				Reason: application.EventReasonInvalidComposeSource,
+			},
+			want: notificationMessage{
+				title: "maniud GitOps source blocked",
+				body: "event: gitops_source_blocked\nsource: services/api.yaml\n" +
+					"reason: invalid_compose_source",
+			},
+		},
+		{
+			name: "recovery source recovered",
+			event: application.Event{
+				Kind:   application.EventGitOpsSourceRecovered,
+				Reason: application.EventReasonRecoverySourceBlocked,
+			},
+			want: notificationMessage{
+				title: "maniud GitOps source recovered",
+				body:  "event: gitops_source_recovered\nreason: recovery_source_blocked",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, valid := renderApplicationEvent(test.event)
+			if !valid || got != test.want {
+				t.Fatalf("renderApplicationEvent() = %#v, %t", got, valid)
+			}
+		})
+	}
+}
+
 func TestRenderApplicationEventRejectsUnsupportedOrInvalidValues(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +122,31 @@ func TestRenderApplicationEventRejectsUnsupportedOrInvalidValues(t *testing.T) {
 		{Kind: application.EventPlanPrepared, Project: "bad\nproject"},
 		{Kind: application.EventPlanPrepared, Service: "bad\x00service"},
 		{Kind: application.EventPlanPrepared, Action: string([]byte{0xff})},
+		{
+			Kind: application.EventPlanPrepared, Source: notificationTestSource,
+			Reason: application.EventReasonInvalidComposeSource,
+		},
+		{Kind: application.EventGitOpsSourceBlocked},
+		{
+			Kind: application.EventGitOpsSourceBlocked, Source: "/private/source.yaml",
+			Reason: application.EventReasonInvalidComposeSource,
+		},
+		{
+			Kind: application.EventGitOpsSourceBlocked, Source: "services/../source.yaml",
+			Reason: application.EventReasonInvalidComposeSource,
+		},
+		{
+			Kind: application.EventGitOpsSourceBlocked, Source: "services/source.txt",
+			Reason: application.EventReasonInvalidComposeSource,
+		},
+		{
+			Kind: application.EventGitOpsSourceRecovered, Source: notificationTestSource,
+			Reason: application.EventReasonRecoverySourceBlocked,
+		},
+		{
+			Kind:   application.EventGitOpsSourceRecovered,
+			Reason: "unknown_reason",
+		},
 	} {
 		if message, valid := renderApplicationEvent(event); valid || message != (notificationMessage{}) {
 			t.Fatalf("renderApplicationEvent(%#v) = %#v, %t", event, message, valid)
