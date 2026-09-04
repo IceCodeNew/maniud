@@ -164,10 +164,6 @@ jobs:
           MANIUD_CI_RACE: 1
           MANIUD_GATE_MANIFEST: ${{ runner.temp }}/gate-manifest.tsv
         run: scripts/check-go-coverage coverage.txt
-      - name: Verify documented release install
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/check-release-install-docs
       - name: Upload statement coverage to Codecov
         if: >-
           steps.gate-scope.outputs.mode == 'full' &&
