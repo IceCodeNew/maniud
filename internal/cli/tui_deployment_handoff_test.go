@@ -86,7 +86,11 @@ func assertDeploymentPostTerminalHandoff(t *testing.T, mode string) {
 
 					return commitTUIStagedProof(commitCtx, proof, message, unsigned)
 				})
-			if commitErr != nil || !result.Committed || result.ValidationUnavailable != (mode == handoffReloadFailure) {
+			wantOutcome := tui.CommitSucceeded
+			if mode == handoffReloadFailure {
+				wantOutcome = tui.CommitValidationUnavailable
+			}
+			if commitErr != nil || result.Outcome != wantOutcome {
 				t.Fatalf("commit = %#v, %v", result, commitErr)
 			}
 			if mode == "restore" {
@@ -144,7 +148,7 @@ func commitDeploymentHandoffRestore(
 		t.Fatal(err)
 	}
 	result, err := workspace.Commit(ctx, staged.CommitMessage, true)
-	if err != nil || !result.Committed {
+	if err != nil || result.Outcome != tui.CommitSucceeded {
 		t.Fatalf("restore commit = %#v, %v", result, err)
 	}
 }
