@@ -29,7 +29,9 @@ A later signal exits immediately and may interrupt that cleanup.
 Keep the registered checkout, state directory, runtime workload, and backups unchanged.
 Restart the supervised `maniud daemon start` process after runtime and registry access have recovered.
 The daemon first recovers unfinished operations, then checks for a newer commit.
-It validates every service file before applying any of them.
+If a source tied to an unfinished operation is missing, invalid, or changed, the cycle stops before fetching or starting a new effect.
+Other invalid service files are reported and skipped.
+The daemon preflights the remaining valid services before applying them.
 
 ## Recover a failed upgrade
 

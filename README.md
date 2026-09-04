@@ -9,6 +9,28 @@
 
 maniud turns a container image or a published `docker run` command into a reviewable Compose file. It prepares required host paths, previews changes, applies upgrades, and resumes interrupted operations. Docker, Podman, and containerd are supported.
 
+## Two-minute start
+
+You need [maniud installed](docs/release-verification.md#install-a-verified-release-with-github-cli), Git, and a running Docker Engine. The example uses a public image pinned to a multi-platform digest, so the image identity stays fixed on Linux AMD64 and ARM64 hosts.
+
+```sh
+image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
+docker pull "$image"
+maniud tui
+```
+
+On the first screen, choose whether to create a private GitHub repository with `gh` or use an existing Git repository. The first option requires `gh` to be installed and `gh auth status` to succeed. Without an authenticated `gh`, choose **Use existing Git repository**; that path uses Git and does not require GitHub. Enter the repository source and local checkout path, then confirm the setup. Choose **Add service** and paste this command:
+
+```text
+docker run --name maniud-hello --restart unless-stopped registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15 /usr/bin/sleep infinity
+```
+
+`maniud` parses the command without running it. Review the generated Compose file and staged diff. Every confirmation starts on **Back**; use Tab to select the effect before pressing Enter. After the commit, `maniud` reloads the committed file and performs a dry run before it offers **Apply**.
+
+![maniud TUI Review screen](docs/images/tui-review.svg)
+
+The [TUI guide](docs/tui.md) covers the complete flow, keyboard controls, terminal requirements, and recovery behavior. The [release verification guide](docs/release-verification.md) covers provenance-checked installation.
+
 ## Install
 
 An agent that can operate the target machine can install the latest release with this prompt:
@@ -27,7 +49,7 @@ mise use --global 'github:IceCodeNew/maniud[asset_pattern=maniud_{{ version }}_{
 maniud --version
 ```
 
-## Start a service
+## Use non-interactive commands
 
 Create a Git-backed service directory:
 
@@ -84,6 +106,14 @@ maniud daemon start --interval 300
 ```
 
 The daemon checks the repository immediately and after each interval. To upgrade a service, change its fixed image version, review any changed preparation script, then commit and push the update.
+
+Each check writes one JSON line to standard output:
+
+```json
+{"commit":"0123456789ab","status":"partial","applied":1,"unchanged":2,"skipped":1,"failed":0,"deferred":0,"skipped_sources":[{"path":"services/legacy.yaml","code":"invalid_compose_source"}]}
+```
+
+`commit` is the checked commit's 12-character prefix. `status` is `converged`, `partial`, `awaiting_push`, `failed`, or `recovery_source_blocked`. The five counters report that cycle's results. `skipped_sources` identifies invalid direct children of `services/` and is omitted when no source was skipped.
 
 ## Notifications
 

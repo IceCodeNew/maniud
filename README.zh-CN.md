@@ -9,6 +9,28 @@
 
 maniud 可以把容器镜像或项目提供的 `docker run` 命令转换成便于审阅的 Compose 文件。maniud 会准备宿主机路径、预览改动、执行升级，并恢复中断的操作。支持 Docker、Podman 和 containerd。
 
+## 两分钟上手
+
+你需要先[安装 maniud](docs/release-verification.zh-CN.md#使用-github-cli-安装已验证的-release)，准备 Git，并启动 Docker Engine。示例镜像来自公共仓库，固定的多平台 digest 同时支持 Linux AMD64 和 ARM64。
+
+```sh
+image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
+docker pull "$image"
+maniud tui
+```
+
+首次进入时，选择通过 `gh` 创建私有 GitHub 仓库，或者使用现有 Git 仓库。前一个选项要求系统已安装 `gh`，且 `gh auth status` 执行成功。如果 `gh` 未安装或尚未登录，请选择 **Use existing Git repository**；该流程只调用 Git，不要求仓库托管在 GitHub。输入仓库来源和本地 checkout 路径，再确认设置。选择 **Add service**，粘贴下面的命令：
+
+```text
+docker run --name maniud-hello --restart unless-stopped registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15 /usr/bin/sleep infinity
+```
+
+`maniud` 只解析这条命令，不会直接执行。检查生成的 Compose 文件和暂存区 diff。确认页默认选中 **Back**，按 Tab 选择要执行的操作，再按 Enter。提交完成后，`maniud` 会重新读取已经提交的文件并执行 dry-run，随后才提供 **Apply**。
+
+![maniud TUI Review 页面](docs/images/tui-review.svg)
+
+[TUI 使用指南](docs/tui.zh-CN.md)记录了完整流程、快捷键、终端要求和恢复方式。[Release 验证指南](docs/release-verification.zh-CN.md)提供带来源验证的安装步骤。
+
 ## 安装
 
 可以把下面的提示词交给能够操作目标机器的 agent：
@@ -27,7 +49,7 @@ mise use --global 'github:IceCodeNew/maniud[asset_pattern=maniud_{{ version }}_{
 maniud --version
 ```
 
-## 启动服务
+## 使用非交互命令
 
 先创建由 Git 管理的服务目录：
 
@@ -84,6 +106,14 @@ maniud daemon start --interval 300
 ```
 
 daemon 会在启动时立即检查仓库，之后按设定间隔继续检查。升级服务时，修改固定镜像版本，检查有变化的准备脚本，再提交并推送改动。
+
+每轮检查都会向标准输出写入一行 JSON：
+
+```json
+{"commit":"0123456789ab","status":"partial","applied":1,"unchanged":2,"skipped":1,"failed":0,"deferred":0,"skipped_sources":[{"path":"services/legacy.yaml","code":"invalid_compose_source"}]}
+```
+
+`commit` 是本轮检查提交的 12 字符前缀。`status` 取值为 `converged`、`partial`、`awaiting_push`、`failed` 或 `recovery_source_blocked`。五个计数字段记录本轮结果。`skipped_sources` 只列出 `services/` 直属目录中未通过验证的来源；没有跳过项时，该字段不会出现在结果中。
 
 ## 通知
 
