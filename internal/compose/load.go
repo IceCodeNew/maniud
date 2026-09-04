@@ -9,7 +9,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	composetypes "github.com/compose-spec/compose-go/v2/types"
@@ -31,6 +30,39 @@ var (
 	// ErrExternalSource reports source that would read unverified secondary files.
 	ErrExternalSource = errors.New("compose source references unverified external content")
 )
+
+// DiagnosticReason is a stable, content-free Compose validation category.
+type DiagnosticReason string
+
+const (
+	// DiagnosticYAMLSyntax identifies input that the YAML parser cannot read.
+	DiagnosticYAMLSyntax DiagnosticReason = "yaml_syntax_invalid"
+	// DiagnosticYAMLStructure identifies an invalid YAML mapping or value shape.
+	DiagnosticYAMLStructure DiagnosticReason = "yaml_structure_invalid"
+	// DiagnosticYAMLUnsupported identifies YAML aliases, merge keys, or unapproved tags.
+	DiagnosticYAMLUnsupported DiagnosticReason = "yaml_feature_unsupported"
+	// DiagnosticComposeValidation identifies input rejected by Compose validation.
+	DiagnosticComposeValidation DiagnosticReason = "compose_validation_failed"
+)
+
+// SourceDiagnosticError reports a stable reason and an optional safe source position.
+// It intentionally excludes parser messages and source content.
+type SourceDiagnosticError struct {
+	File   string
+	Reason DiagnosticReason
+	Line   int
+	Column int
+}
+
+// Error implements error without exposing parser or source content.
+func (*SourceDiagnosticError) Error() string {
+	return ErrInvalidSource.Error()
+}
+
+// Unwrap preserves the existing invalid-source contract.
+func (*SourceDiagnosticError) Unwrap() error {
+	return ErrInvalidSource
+}
 
 // Source is one immutable Compose document and its explicit interpolation context.
 type Source struct {
@@ -73,15 +105,22 @@ func (project Project) ServiceNames() []string {
 
 // Load validates and normalizes one in-memory Compose document without secondary file reads.
 //
-//nolint:cyclop // Repository and in-memory sources share one loader and distinct I/O policies.
+//nolint:cyclop,funlen // Repository and in-memory sources share one loader and distinct I/O policies.
 func Load(ctx context.Context, source Source) (Project, error) {
 	ctxErr := ctx.Err()
 	if ctxErr != nil {
 		return Project{value: nil, sourceDigest: domain.Digest{}}, fmt.Errorf("load compose: %w", ctxErr)
 	}
 
-	if len(source.Content) == 0 || len(source.Content) > maxSourceBytes || !filepath.IsAbs(source.WorkingDir) {
+	if !filepath.IsAbs(source.WorkingDir) {
 		return Project{value: nil, sourceDigest: domain.Digest{}}, ErrInvalidSource
+	}
+	if len(source.Content) == 0 || len(source.Content) > maxSourceBytes {
+		return Project{value: nil, sourceDigest: domain.Digest{}}, newSourceDiagnostic(
+			DiagnosticComposeValidation,
+			0,
+			0,
+		)
 	}
 
 	loadedSource, cleanup, err := materializeSource(source)
@@ -247,7 +286,7 @@ func classifyLoadError(ctx context.Context) error {
 		return fmt.Errorf("load compose: %w", ctxErr)
 	}
 
-	return ErrInvalidSource
+	return newSourceDiagnostic(DiagnosticComposeValidation, 0, 0)
 }
 
 func validateSource(
@@ -258,18 +297,22 @@ func validateSource(
 
 	err := yaml.Load(content, &document, yaml.WithUniqueKeys())
 	if err != nil {
-		return maniudExtension{}, ErrInvalidSource
+		return maniudExtension{}, sourceYAMLError(DiagnosticYAMLSyntax, err)
 	}
 
-	if hasUnsupportedYAML(&document) {
-		return maniudExtension{}, ErrInvalidSource
+	if unsupported := unsupportedYAMLNode(&document); unsupported != nil {
+		return maniudExtension{}, newSourceDiagnostic(
+			DiagnosticYAMLUnsupported,
+			unsupported.Line,
+			unsupported.Column,
+		)
 	}
 
 	raw := make(map[string]any)
 
 	err = document.Load(&raw, yaml.WithUniqueKeys())
 	if err != nil {
-		return maniudExtension{}, ErrInvalidSource
+		return maniudExtension{}, sourceYAMLError(DiagnosticYAMLStructure, err)
 	}
 
 	if referencesExternalSource(raw) && !allowSecondary {
@@ -278,22 +321,41 @@ func validateSource(
 
 	extension, valid := decodeComposeExtensions(raw)
 	if !valid {
-		return maniudExtension{}, ErrInvalidSource
+		return maniudExtension{}, newSourceDiagnostic(DiagnosticComposeValidation, 0, 0)
 	}
 
 	return extension, nil
 }
 
-func hasUnsupportedYAML(node *yaml.Node) bool {
+func unsupportedYAMLNode(node *yaml.Node) *yaml.Node {
 	if node.Kind == yaml.AliasNode || node.ShortTag() == "!!merge" {
-		return true
+		return node
 	}
 
 	if node.Style&yaml.TaggedStyle != 0 && !isApprovedYAMLTag(node.ShortTag()) {
-		return true
+		return node
 	}
 
-	return slices.ContainsFunc(node.Content, hasUnsupportedYAML)
+	for _, child := range node.Content {
+		if unsupported := unsupportedYAMLNode(child); unsupported != nil {
+			return unsupported
+		}
+	}
+
+	return nil
+}
+
+func sourceYAMLError(reason DiagnosticReason, err error) *SourceDiagnosticError {
+	loadError, ok := errors.AsType[*yaml.LoadError](err)
+	if !ok {
+		return newSourceDiagnostic(reason, 0, 0)
+	}
+
+	return newSourceDiagnostic(reason, loadError.Mark.Line, loadError.Mark.Column)
+}
+
+func newSourceDiagnostic(reason DiagnosticReason, line, column int) *SourceDiagnosticError {
+	return &SourceDiagnosticError{Reason: reason, Line: max(line, 0), Column: max(column, 0)}
 }
 
 func isApprovedYAMLTag(tag string) bool {

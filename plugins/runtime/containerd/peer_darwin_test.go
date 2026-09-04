@@ -22,7 +22,7 @@ func TestDarwinSocketAndPeerIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	path := filepath.Join(directory, "containerd.sock")
-	listener, err := net.Listen("unix", path)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,7 @@ func TestDarwinSocketAndPeerIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	peer, err := connectedPeer(connection)
+	//nolint:gosec // Native process IDs are non-negative.
 	if err != nil || peer.process != uint64(os.Getpid()) || peer.owner != uint32(os.Geteuid()) ||
 		peer.generation == 0 {
 		t.Fatalf("connectedPeer() = %#v, %v", peer, err)

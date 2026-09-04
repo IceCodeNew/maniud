@@ -1,6 +1,7 @@
 package application
 
 import (
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/store"
 )
@@ -95,6 +96,7 @@ type Preparation struct {
 	Plan           Plan
 	Workload       domain.DesiredWorkload
 	Execution      RuntimeEvidence
+	repository     compose.RepositoryProvenance
 	Transaction    store.Transaction
 	HasTransaction bool
 	Applied        store.AppliedService

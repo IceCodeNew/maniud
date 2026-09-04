@@ -35,7 +35,7 @@ func executeDaemon(
 		return executeDaemonStart(ctx, arguments, output, environment, stderr, getWorkingDirectory, events, runtimes)
 	case commandDaemonStop:
 		return executeDaemonStop(ctx, output, environment)
-	case commandGen, commandApply, commandGitOpsInit, commandDoctor:
+	case commandGen, commandApply, commandTUI, commandGitOpsInit, commandDoctor:
 		return errGitOpsRepositoryInvalid
 	default:
 		return errGitOpsRepositoryInvalid
@@ -73,6 +73,7 @@ func executeDaemonStart(
 		return errDaemonAlreadyRunning
 	}
 
+	events = &gitOpsSourceBlockerEvents{sink: events}
 	reconcile := func() error {
 		return reconcileRegisteredRepository(
 			ctx, output, environment, stderr, getWorkingDirectory, events, runtimes,
@@ -211,6 +212,25 @@ func reconcileRegisteredRepository(
 		return err
 	}
 
+	return reconcileRegisteredGitOpsCheckout(
+		ctx,
+		output,
+		registration,
+		dependencies,
+		fastForwardGitOpsCheckout,
+		compose.NewRepositoryScope,
+	)
+}
+
+//nolint:funlen // The daemon keeps recovery-before-fetch ordering visible in one orchestration function.
+func reconcileRegisteredGitOpsCheckout(
+	ctx context.Context,
+	output io.Writer,
+	registration gitOpsRegistration,
+	dependencies applyDependencies,
+	fastForward func(context.Context, string, string, string) (gitOpsCheckoutSelection, error),
+	newScope func(string, string, string) (compose.RepositoryScope, error),
+) error {
 	root, currentCommit, err := registeredGitOpsCheckout(
 		ctx,
 		registration.Repository,
@@ -220,21 +240,55 @@ func reconcileRegisteredRepository(
 	if err != nil {
 		return err
 	}
-	if err = recoverGitOpsSnapshot(ctx, root, currentCommit, output, dependencies); err != nil {
-		return err
+	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	if err != nil {
+		return errGitOpsRepositoryInvalid
+	}
+	scope, err := newScope(root, remote, registration.Branch)
+	if err != nil {
+		return errGitOpsRepositoryInvalid
+	}
+	dependencies.repositoryRoot = root
+	dependencies.repository = scope
+	counts, err := recoverGitOpsSnapshotResult(ctx, root, currentCommit, output, dependencies)
+	if err != nil {
+		counts.markFailed()
+
+		return finishGitOpsCycle(
+			output, currentCommit, gitOpsCycleStatusFor(counts, err), counts, err,
+			dependencies.events,
+		)
 	}
 
-	root, selectedCommit, err := fastForwardGitOpsCheckout(
+	selection, err := fastForward(
 		ctx,
 		registration.Repository,
 		registration.Branch,
 		registration.BaselineCommit,
 	)
 	if err != nil {
-		return err
+		counts.markFailed()
+
+		return finishGitOpsCycle(
+			output, currentCommit, gitOpsCycleFailed, counts, err, dependencies.events,
+		)
+	}
+	if selection.awaitingPush {
+		return finishGitOpsCycle(
+			output, selection.commit, gitOpsCycleAwaitingPush, counts, nil,
+			dependencies.events,
+		)
 	}
 
-	return reconcileGitOpsSnapshot(ctx, root, selectedCommit, output, dependencies)
+	reconciled, runErr := reconcileGitOpsSnapshotResult(
+		ctx, selection.root, selection.commit, output, dependencies,
+	)
+	counts.add(reconciled)
+
+	return finishGitOpsCycle(
+		output, selection.commit, gitOpsCycleStatusFor(counts, runErr), counts, runErr,
+		dependencies.events,
+	)
 }
 
 func listGitOpsServiceFiles(root string) ([]string, error) {
@@ -279,6 +333,8 @@ func classifyDaemonCommandFailure(err error) *domain.FailureError {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return domain.OperationCancelled()
+	case errors.Is(err, errGitOpsRecoverySourceBlocked):
+		return domain.ApplyFailed(true)
 	case errors.Is(err, errGitOpsRegistrationExists),
 		errors.Is(err, errGitOpsRepositoryInvalid),
 		errors.Is(err, compose.ErrInvalidSource),

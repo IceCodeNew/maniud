@@ -11,6 +11,9 @@ import (
 // successful application-owned seams and never replace durable journal state.
 type EventKind string
 
+// EventReason identifies one fixed, value-free reason for an event.
+type EventReason string
+
 const (
 	// EventPlanPrepared reports a successful dry-run or mutation preparation.
 	EventPlanPrepared EventKind = "plan_prepared"
@@ -35,8 +38,21 @@ const (
 	// EventGitOpsServiceApplyFailed reports one service that stopped the current
 	// GitOps snapshot reconciliation.
 	EventGitOpsServiceApplyFailed EventKind = "gitops_service_apply_failed"
+	// EventGitOpsSourceBlocked reports a new or changed Compose source blocker.
+	EventGitOpsSourceBlocked EventKind = "gitops_source_blocked"
+	// EventGitOpsSourceRecovered reports that a Compose source blocker cleared.
+	EventGitOpsSourceRecovered EventKind = "gitops_source_recovered"
 	// EventDaemonUnavailable reports a retryable daemon reconciliation failure.
 	EventDaemonUnavailable EventKind = "daemon_unavailable"
+)
+
+const (
+	// EventReasonInvalidComposeSource identifies an ordinary Compose source that
+	// cannot enter the current GitOps cycle.
+	EventReasonInvalidComposeSource EventReason = "invalid_compose_source"
+	// EventReasonRecoverySourceBlocked identifies an unresolved transaction whose
+	// current Compose source cannot be proved.
+	EventReasonRecoverySourceBlocked EventReason = "recovery_source_blocked"
 )
 
 // Event is a bounded, value-free projection of one application seam. Digest
@@ -53,6 +69,8 @@ type Event struct {
 	Sequence    int64
 	Evidence    string
 	Satisfied   bool
+	Source      string
+	Reason      EventReason
 }
 
 // EventSink accepts one transient event without waiting for transport or

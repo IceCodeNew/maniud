@@ -274,6 +274,13 @@ func TestValidateSchemaRejectsIncompleteFactsAndClosedDatabase(t *testing.T) {
 	database := testDatabase(t, "file::memory:")
 	requireNoError(t, initializeSchema(context.Background(), database))
 
+	facts, err := readSchemaFacts(context.Background(), database)
+	requireNoError(t, err)
+	facts.repositoryInventoryDefinition = ""
+	if facts.valid() {
+		t.Fatal("schemaFacts.valid() accepted a missing repository inventory index")
+	}
+
 	incompleteFacts := schemaFacts{objectCount: 0, schemaDefinition: schemaTableSQL, schemaRows: 1}
 	if incompleteFacts.valid() {
 		t.Fatal("schemaFacts.valid() accepted an incomplete schema")

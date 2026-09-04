@@ -3,9 +3,11 @@ package application
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/store"
 )
@@ -48,6 +50,189 @@ func (reader *operationReaderFixture) Close() error {
 	*reader.events = append(*reader.events, operationCloseReader)
 
 	return reader.closeErr
+}
+
+func TestApplyFacadeReturnsBoundedRepositoryInventory(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	scope, err := compose.NewRepositoryScope(
+		filepath.Clean(t.TempDir()),
+		"https://example.com/team/desired.git",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	records := []store.Transaction{
+		{
+			ID: store.TransactionID{1}, State: store.TransactionActive,
+			SourceDigest:      domain.Hash([]byte("source one")),
+			RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
+			RepositoryLocationDigest: domain.Hash([]byte("services/one.yaml")), HasRepository: true,
+		},
+		{
+			ID: store.TransactionID{2}, State: store.TransactionDegraded,
+			SourceDigest:      domain.Hash([]byte("source two")),
+			RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
+			RepositoryLocationDigest: domain.Hash([]byte("services/two.yaml")), HasRepository: true,
+		},
+	}
+	operation.transactions.repository = func(
+		_ context.Context,
+		gotScope domain.Digest,
+	) ([]store.Transaction, error) {
+		if gotScope != scope.Digest {
+			t.Fatalf("inventory scope = %x", gotScope)
+		}
+
+		return records, nil
+	}
+	readerEvents := make([]string, 0, 1)
+	facade := newOperationTestFacade(
+		operation,
+		&operationRuntimeFixture{testRuntime: operation.runtime, events: new([]string)},
+		&operationReaderFixture{testTransactions: operation.transactions, events: &readerEvents},
+	)
+
+	got, err := facade.RepositoryInventory(t.Context(), scope)
+	if err != nil {
+		t.Fatalf("RepositoryInventory() error = %v", err)
+	}
+	want := []RepositoryTransaction{
+		{
+			ID: records[0].ID, State: records[0].State,
+			Source: records[0].SourceDigest, Location: records[0].RepositoryLocationDigest,
+		},
+		{
+			ID: records[1].ID, State: records[1].State,
+			Source: records[1].SourceDigest, Location: records[1].RepositoryLocationDigest,
+		},
+	}
+	if !slices.Equal(got, want) || !slices.Equal(readerEvents, []string{operationCloseReader}) {
+		t.Fatalf("RepositoryInventory() = %#v, events %q", got, readerEvents)
+	}
+}
+
+func TestApplyFacadeRejectsRepositoryInventoryOverflow(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	scope, err := compose.NewRepositoryScope(
+		filepath.Clean(t.TempDir()),
+		"https://example.com/team/desired.git",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	operation.transactions.repository = func(
+		context.Context,
+		domain.Digest,
+	) ([]store.Transaction, error) {
+		return make([]store.Transaction, maximumRepositoryInventory+1), nil
+	}
+	facade := newOperationTestFacade(
+		operation,
+		&operationRuntimeFixture{testRuntime: operation.runtime, events: new([]string)},
+		&operationReaderFixture{testTransactions: operation.transactions, events: new([]string)},
+	)
+
+	_, err = facade.RepositoryInventory(t.Context(), scope)
+	if !errors.Is(err, ErrRepositoryInventoryOverflow) {
+		t.Fatalf("RepositoryInventory(overflow) error = %v", err)
+	}
+}
+
+//nolint:cyclop,funlen // One table covers every malformed inventory field and resource failure boundary.
+func TestApplyFacadeContainsRepositoryInventoryFailures(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	scope, err := compose.NewRepositoryScope(
+		filepath.Clean(t.TempDir()),
+		"https://example.com/team/desired.git",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	validRecord := store.Transaction{
+		ID: store.TransactionID{1}, State: store.TransactionActive,
+		SourceDigest:      domain.Hash([]byte("source")),
+		RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
+		RepositoryLocationDigest: domain.Hash([]byte("services/api.yaml")), HasRepository: true,
+	}
+	readerEvents := make([]string, 0, 1)
+	reader := &operationReaderFixture{testTransactions: operation.transactions, events: &readerEvents}
+	facade := newOperationTestFacade(
+		operation,
+		&operationRuntimeFixture{testRuntime: operation.runtime, events: new([]string)},
+		reader,
+	)
+
+	if _, err = (*ApplyFacade)(nil).RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(nil facade) error = %v", err)
+	}
+	if _, err = (&ApplyFacade{}).RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(missing opener) error = %v", err)
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), compose.RepositoryScope{}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(invalid scope) error = %v", err)
+	}
+
+	facade.openReader = func(context.Context) (OperationReader, error) { return nil, errTestBoundary }
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(open failure) error = %v", err)
+	}
+	facade.openReader = func(context.Context) (OperationReader, error) {
+		//nolint:nilnil // This fixture verifies that the façade rejects a broken opener contract.
+		return nil, nil
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RepositoryInventory(nil reader) error = %v", err)
+	}
+
+	facade.openReader = func(context.Context) (OperationReader, error) { return reader, nil }
+	operation.transactions.repository = func(context.Context, domain.Digest) ([]store.Transaction, error) {
+		return nil, errTestBoundary
+	}
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(read failure) error = %v", err)
+	}
+	operation.transactions.repository = func(context.Context, domain.Digest) ([]store.Transaction, error) {
+		return []store.Transaction{validRecord}, nil
+	}
+	reader.closeErr = errTestBoundary
+	if _, err = facade.RepositoryInventory(t.Context(), scope); !errors.Is(err, errTestBoundary) {
+		t.Fatalf("RepositoryInventory(close failure) error = %v", err)
+	}
+	reader.closeErr = nil
+
+	invalidRecords := make([]store.Transaction, 1, 7)
+	record := validRecord
+	record.SourceDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryLocationDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.HasRepository = false
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryVersion++
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.RepositoryScopeDigest = domain.Digest{}
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
+	record.State = store.TransactionFailed
+	invalidRecords = append(invalidRecords, record)
+	for _, record := range invalidRecords {
+		if _, err = repositoryInventory([]store.Transaction{record}, scope); !errors.Is(err, ErrConflictingState) {
+			t.Fatalf("repositoryInventory(%#v) error = %v", record, err)
+		}
+	}
 }
 
 func TestApplyFacadeDryRunOwnsResourceLifetime(t *testing.T) {

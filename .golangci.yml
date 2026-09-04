@@ -52,7 +52,11 @@ linters:
             - "!**/internal/imagerootfs/*.go"
             - "!**/internal/notification/*.go"
             - "!**/internal/registry/*.go"
+            - "!**/internal/tui/*.go"
+            - "!**/internal/terminaltext/*.go"
+            - "!**/internal/changescope/*.go"
             - "!**/internal/cli/parse.go"
+            - "!**/internal/cli/tui_workspace.go"
             - "!**/internal/custombuild/*.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/containerd/*.go"
@@ -65,6 +69,22 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/google/go-cmp
+        change-scope:
+          list-mode: strict
+          files:
+            - "**/internal/changescope/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/mod
+        terminal-text:
+          list-mode: strict
+          files:
+            - "**/internal/terminaltext/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/charmbracelet/x/ansi
         custom-builder:
           list-mode: strict
           files:
@@ -81,6 +101,14 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/alecthomas/kong
+        tui-workspace-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/cli/tui_workspace.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/mattn/go-shellwords
         public-imageref:
           list-mode: strict
           files:
@@ -179,6 +207,15 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/nikoksr/notify
+        tui-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/tui/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - charm.land/bubbletea/v2
+            - github.com/charmbracelet/x/term
         public-docker-adapter:
           list-mode: strict
           files:

@@ -12,9 +12,30 @@ import (
 	"github.com/IceCodeNew/maniud/internal/store"
 )
 
+const maximumRepositoryInventory = 256
+
+// RepositoryTransaction is the opaque source association for one unresolved
+// transaction. It intentionally omits service names and source content.
+type RepositoryTransaction struct {
+	ID       store.TransactionID
+	State    store.TransactionState
+	Source   domain.Digest
+	Location domain.Digest
+}
+
+// RepositoryTransactionReader reads one bounded scope-local unresolved
+// inventory from a stable state snapshot.
+type RepositoryTransactionReader interface {
+	UnresolvedRepositoryTransactions(
+		ctx context.Context,
+		scope domain.Digest,
+	) ([]store.Transaction, error)
+}
+
 // OperationReader is one stable read-only journal snapshot.
 type OperationReader interface {
 	TransactionReader
+	RepositoryTransactionReader
 	Close() error
 }
 
@@ -93,6 +114,58 @@ func (facade *ApplyFacade) DryRun(ctx context.Context, request Request) (Plan, e
 	}
 
 	return plan, nil
+}
+
+// RepositoryInventory returns at most 256 unresolved transactions associated
+// with one repository scope from a single stable state snapshot.
+func (facade *ApplyFacade) RepositoryInventory(
+	ctx context.Context,
+	scope compose.RepositoryScope,
+) ([]RepositoryTransaction, error) {
+	if facade == nil || facade.openReader == nil || !scope.Valid() {
+		return nil, ErrInvalidRequest
+	}
+
+	reader, err := facade.openReader(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open repository transaction inventory: %w", err)
+	}
+	if reader == nil {
+		return nil, ErrInvalidRequest
+	}
+
+	records, readErr := reader.UnresolvedRepositoryTransactions(ctx, scope.Digest)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(readErr, closeErr)
+	}
+	if len(records) > maximumRepositoryInventory {
+		return nil, ErrRepositoryInventoryOverflow
+	}
+
+	return repositoryInventory(records, scope)
+}
+
+func repositoryInventory(
+	records []store.Transaction,
+	scope compose.RepositoryScope,
+) ([]RepositoryTransaction, error) {
+	inventory := make([]RepositoryTransaction, 0, len(records))
+	for _, record := range records {
+		if record.ID == (store.TransactionID{}) || record.SourceDigest == (domain.Digest{}) ||
+			record.RepositoryLocationDigest == (domain.Digest{}) || !record.HasRepository ||
+			record.RepositoryVersion != scope.Version ||
+			record.RepositoryScopeDigest != scope.Digest ||
+			(record.State != store.TransactionActive && record.State != store.TransactionDegraded) {
+			return nil, ErrConflictingState
+		}
+		inventory = append(inventory, RepositoryTransaction{
+			ID: record.ID, State: record.State,
+			Source: record.SourceDigest, Location: record.RepositoryLocationDigest,
+		})
+	}
+
+	return inventory, nil
 }
 
 // Apply executes one mutation and closes runtime and journal resources before

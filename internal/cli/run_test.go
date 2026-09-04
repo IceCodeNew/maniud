@@ -14,13 +14,18 @@ import (
 
 const (
 	testArchitectureAMD64 = "amd64"
+	testBrokenComposeName = "broken.yaml"
+	testCancelledName     = "cancelled"
 	testDockerRuntime     = "docker"
 	testImageSource       = "image:1"
 	testInvalidValue      = "invalid"
+	testMissingName       = "missing"
 	testPlatformAMD64     = "linux/amd64"
 	testRegistrySource    = "example.invalid/api:1"
 	testRelativePath      = "relative"
 	testServiceName       = "service"
+	testTermEnvironment   = "TERM"
+	testTerminalName      = "xterm-256color"
 	testNumericUser       = "1000:1001"
 	testWorkingDirectory  = "/workspace"
 	invalidInputJSON      = "{\"code\":\"invalid_input\",\"message\":" +
@@ -55,7 +60,7 @@ func TestRunPublicTransport(t *testing.T) {
 			name:         "root help",
 			args:         []string{helpOption},
 			wantStatus:   0,
-			wantContains: []string{"Usage: maniud <command> [flags]", "gitops", "daemon", versionOption},
+			wantContains: []string{"Usage: maniud <command> [flags]", "tui", "gitops", "daemon", versionOption},
 		},
 		{
 			name:         "short root help",
@@ -159,6 +164,12 @@ func TestRunHelpPages(t *testing.T) {
 			wantContains: []string{"Usage: maniud apply", "Dry run passed", jsonOption},
 		},
 		{
+			args: []string{string(commandTUI), helpOption},
+			wantContains: []string{
+				"Usage: maniud tui", "terminal input and output", "maniud apply --dry-run <compose>",
+			},
+		},
+		{
 			args:         []string{daemonCommand, helpOption},
 			wantContains: []string{"Usage: maniud daemon <command>", startCommand, stopCommand},
 		},
@@ -243,7 +254,7 @@ func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
 
 			output := new(bytes.Buffer)
 			status := runProduction(
-				context.Background(), test.args, output, io.Discard, map[string]string{}, test.getwd,
+				context.Background(), test.args, nil, output, io.Discard, map[string]string{}, test.getwd,
 				testRuntimePlugins(t),
 			)
 			if status != 1 || !strings.Contains(output.String(), test.wantCode) {
@@ -265,7 +276,7 @@ func TestRunProductionWiresLongRunningCommands(t *testing.T) {
 	for _, arguments := range commands {
 		var output bytes.Buffer
 		status := runProduction(
-			t.Context(), arguments, &output, io.Discard, map[string]string{}, os.Getwd,
+			t.Context(), arguments, nil, &output, io.Discard, map[string]string{}, os.Getwd,
 			testRuntimePlugins(t),
 		)
 		if status != 1 {
@@ -283,6 +294,7 @@ func TestRunProductionValidatesNotificationsBeforeApplyDependencies(t *testing.T
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{telegramBotTokenEnvironment: testTelegramBotToken},
@@ -311,6 +323,7 @@ func TestRunProductionValidatesBarkEncryptionBeforeApplyDependencies(t *testing.
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{barkEncryptionKeyEnvironment: testBarkEncryptionKey},
@@ -338,6 +351,7 @@ func TestRunProductionValidatesNotificationsBeforeDaemonStart(t *testing.T) {
 	status := runProduction(
 		t.Context(),
 		[]string{daemonCommand, startCommand},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{telegramChatIDEnvironment: testTelegramChatID},
@@ -372,7 +386,7 @@ func TestRunProductionLimitsNotificationConfigurationToEventProducingCommands(t 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		status := runProduction(
-			t.Context(), test.arguments, &stdout, &stderr, environment, os.Getwd,
+			t.Context(), test.arguments, nil, &stdout, &stderr, environment, os.Getwd,
 			testRuntimePlugins(t),
 		)
 		if status != test.wantStatus || stderr.Len() != 0 {
@@ -389,6 +403,7 @@ func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
 	status := runProduction(
 		t.Context(),
 		[]string{string(commandApply), composeFileValue},
+		nil,
 		&stdout,
 		&stderr,
 		map[string]string{homeKey: t.TempDir(), barkDeviceKeyEnvironment: testBarkDeviceKey},
@@ -400,10 +415,35 @@ func TestRunProductionOwnsEnabledNotificationLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunProductionRejectsNonTerminalTUIBeforeDependencies(t *testing.T) {
+	t.Parallel()
+
+	workingDirectoryRead := false
+	var stdout bytes.Buffer
+	status := runProduction(
+		t.Context(),
+		[]string{string(commandTUI)},
+		strings.NewReader("q"),
+		&stdout,
+		io.Discard,
+		map[string]string{homeKey: t.TempDir()},
+		func() (string, error) {
+			workingDirectoryRead = true
+
+			return t.TempDir(), nil
+		},
+		testRuntimePlugins(t),
+	)
+	if status != 1 || !strings.Contains(stdout.String(), `"code":"tui_unavailable"`) || workingDirectoryRead {
+		t.Fatalf("runProduction(TUI) = %d, %q", status, stdout.String())
+	}
+}
+
 func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 	t.Parallel()
 
 	tests := []invocation{
+		{arguments: tuiInvocation{}},
 		{arguments: gitOpsInitInvocation{}},
 		{arguments: daemonInvocation{operation: commandDaemonStart}},
 		{arguments: daemonInvocation{operation: commandDaemonStop}},
@@ -415,6 +455,7 @@ func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 			parsed, &output, nil,
 			func(genInvocation) error { return nil },
 			func(applyInvocation) error { return nil },
+			func(tuiInvocation) error { return nil },
 			func(gitOpsInitInvocation) error { return nil },
 			func(daemonInvocation) error { return nil },
 			func(doctorInvocation) error { return nil },
@@ -426,7 +467,7 @@ func TestDispatchParsedCommandRoutesEveryApplicationService(t *testing.T) {
 
 	var output bytes.Buffer
 	status := dispatchParsedCommand(
-		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil,
+		invocation{arguments: unavailableInvocation{}}, &output, nil, nil, nil, nil, nil, nil, nil,
 	)
 	if status != 1 || output.String() != internalErrorJSON {
 		t.Fatalf("dispatchParsedCommand(unavailable) = %d, %q", status, output.String())
