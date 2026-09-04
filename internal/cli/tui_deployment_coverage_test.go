@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/IceCodeNew/maniud/containerconfig"
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
+	"github.com/IceCodeNew/maniud/internal/tui"
 )
 
 var errDeploymentCoverage = errors.New("deployment coverage failure")
@@ -84,57 +86,6 @@ func TestParseDeploymentPatchCoversClosedFieldCatalog(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // The assertions cover every member of the closed deployment field catalog.
-func TestDeploymentFieldStateCoversClosedProjectionCatalog(t *testing.T) {
-	t.Parallel()
-
-	pids := int64(40)
-	retries := 3
-	initProcess := true
-	readOnly := false
-	stopTimeout := int64(12)
-	spec := containerconfig.Spec{
-		CPUs: testDeploymentCPUValue, MemoryBytes: 1048576, PidsLimit: &pids, Restart: testDeploymentRestart,
-		SharedMemoryBytes: 67108864, StopTimeout: &stopTimeout, Init: &initProcess, ReadOnly: &readOnly,
-		NoNewPrivileges: true,
-		Healthcheck: &containerconfig.Healthcheck{
-			Interval: testDeploymentDuration, Timeout: "5s", Retries: &retries,
-			StartPeriod: "10s", StartInterval: "2s",
-		},
-	}
-	for _, field := range application.DeploymentFields() {
-		state := deploymentFieldState(spec, field)
-		if state.ID != field.ID() || !state.Present || state.Value == "" {
-			t.Fatalf("deploymentFieldState(%s) = %#v", field.ID(), state)
-		}
-	}
-
-	for _, field := range application.DeploymentFields() {
-		state := deploymentFieldState(containerconfig.Spec{}, field)
-		if state.ID != field.ID() || state.Present {
-			t.Fatalf("empty deploymentFieldState(%s) = %#v", field.ID(), state)
-		}
-	}
-	disabled := containerconfig.Spec{Healthcheck: &containerconfig.Healthcheck{Disabled: true}}
-	for _, field := range []application.DeploymentField{
-		application.DeploymentHealthInterval,
-		application.DeploymentHealthTimeout,
-		application.DeploymentHealthRetries,
-		application.DeploymentHealthStartPeriod,
-		application.DeploymentHealthStartInterval,
-	} {
-		if state := deploymentFieldState(disabled, field); state.Available {
-			t.Fatalf("disabled healthcheck field %s = %#v", field.ID(), state)
-		}
-	}
-	if state := deploymentFieldState(spec, application.DeploymentField(255)); state.Available {
-		t.Fatalf("unknown deployment field = %#v", state)
-	}
-	if value, present := deploymentOptionalInt(nil); value != "" || present {
-		t.Fatalf("deploymentOptionalInt(nil) = %q, %t", value, present)
-	}
-}
-
 func TestParseDeploymentHistoryRejectsMalformedProtocol(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +152,21 @@ func TestDeploymentHistoryRejectsMalformedLogAndSignatureReadFailure(t *testing.
 	}
 }
 
+//nolint:paralleltest // This test temporarily replaces PATH with a deterministic Git fault injector.
+func TestDeploymentHistoryClassifiesGitLogFailure(t *testing.T) {
+	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	installDeploymentGitWrapper(t, ""+
+		"for argument do\n"+
+		"  if [ \"$argument\" = log ]; then exit 1; fi\n"+
+		"done\n")
+
+	if _, err := workspace.History(t.Context(), request); !isDeploymentFailure(
+		err, tui.DeploymentHistoryUnavailable,
+	) {
+		t.Fatalf("History(git log failure) error = %v", err)
+	}
+}
+
 func TestDeploymentAttributeOutputPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -226,9 +192,6 @@ func TestDeploymentAttributeOutputPolicy(t *testing.T) {
 				t.Fatalf("deploymentAttributeOutputSafe() = %t, want %t", actual, test.want)
 			}
 		})
-	}
-	if deploymentAttributesSafe(t.Context(), t.TempDir(), strings.Repeat("a", 40), entry) {
-		t.Fatal("deploymentAttributesSafe(invalid repository) = true")
 	}
 }
 
@@ -390,7 +353,7 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	}
 	registration := gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: repository, Branch: branch,
-		Remote: gitOpsRemoteName, BaselineCommit: head,
+		Remote: gitOpsRemoteName, RemoteURL: repository, BaselineCommit: head,
 	}
 	if err = writeGitOpsRegistration(workspace.registrationPath, registration); err != nil {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)
@@ -514,6 +477,36 @@ func TestDeploymentRestoreRejectsRevisionLostAfterHistoryProof(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // This test temporarily replaces PATH with a deterministic Git fault injector.
+func TestDeploymentRestoreClassifiesConfirmationFailure(t *testing.T) {
+	workspace, _, repository := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	initial, err := resolveGitObject(t.Context(), repository, "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("resolve HEAD error = %v", err)
+	}
+	updated := bytes.Replace(deploymentComposeFixture(), []byte("cpus: 1"), []byte("cpus: 2"), 1)
+	commitDeploymentContent(t, repository, updated, "update deployment")
+	path := filepath.Join(repository, filepath.FromSlash(deploymentComposeEntry))
+	runtimeBase := t.TempDir()
+	environment := map[string]string{testComposeDisableEnvFile: trueValue}
+	source, err := loadTrackedComposeSource(t.Context(), path, repository, environment, runtimeBase)
+	if err != nil {
+		t.Fatalf("loadTrackedComposeSource() error = %v", err)
+	}
+	workspace.environment = environment
+	workspace.runtimeBase = runtimeBase
+	installDeploymentGitWrapper(t, ""+
+		"for argument do\n"+
+		"  if [ \"$argument\" = --cached ]; then exit 1; fi\n"+
+		"done\n")
+
+	if _, err = workspace.PreviewRestore(
+		t.Context(), application.Request{Source: source, Service: applyServiceValue}, initial,
+	); !isDeploymentFailure(err, tui.DeploymentPreconditionFailed) {
+		t.Fatalf("PreviewRestore(confirmation failure) error = %v", err)
+	}
+}
+
 func installDeploymentGitWrapper(t *testing.T, prefix string) {
 	t.Helper()
 
@@ -529,6 +522,77 @@ func installDeploymentGitWrapper(t *testing.T, prefix string) {
 		t.Fatalf("WriteFile(git wrapper) error = %v", err)
 	}
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestDeploymentWorkspaceDiscardClearsDraft(t *testing.T) {
+	t.Parallel()
+
+	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	if _, err := workspace.Preview(
+		t.Context(), request, application.DeploymentCPUs.ID(), "2", false,
+	); err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if err := workspace.Discard(t.Context()); err != nil {
+		t.Fatalf("Discard(draft) error = %v", err)
+	}
+	if workspace.draft != nil {
+		t.Fatal("Discard(draft) retained draft")
+	}
+}
+
+func TestDeploymentWorkspaceReturnsTypedNoChangeBeforeGitPreview(t *testing.T) {
+	t.Parallel()
+
+	workspace, request, _ := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	preview, err := workspace.Preview(
+		t.Context(), request, application.DeploymentCPUs.ID(), "1", false,
+	)
+	if err != nil || !preview.NoChanges || workspace.draft != nil {
+		t.Fatalf("Preview(no change) = %#v, %v", preview, err)
+	}
+}
+
+func TestDeploymentPreviewAndStageContainMissingConfirmationProof(t *testing.T) {
+	t.Parallel()
+
+	draft := newDeploymentDraftFixture(t)
+	workspace := &tuiDeploymentWorkspace{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := workspace.confirmDeploymentPreview(ctx, draft); err == nil {
+		t.Fatal("confirmDeploymentPreview(cancelled) succeeded")
+	}
+	draft.confirmation.expectedTree = ""
+	if _, _, err := stageDeploymentEdit(t.Context(), draft); !errors.Is(
+		err, errDeploymentEditInvalid,
+	) {
+		t.Fatalf("stageDeploymentEdit(missing confirmation) error = %v", err)
+	}
+}
+
+//nolint:paralleltest // The test installs a process-wide PATH wrapper around Git.
+func TestDeploymentRestoreContainsBlobReadFailure(t *testing.T) {
+	workspace, request, repository := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+	revision, err := resolveGitObject(t.Context(), repository, "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("resolve HEAD error = %v", err)
+	}
+	countPath := filepath.Join(t.TempDir(), "cat-file-count")
+	installDeploymentGitWrapper(t, ""+
+		"for argument do\n"+
+		"  if [ \"$argument\" = cat-file ]; then\n"+
+		"    count=$(cat "+shellArgument(countPath)+" 2>/dev/null || printf 0)\n"+
+		"    count=$((count + 1))\n"+
+		"    printf '%s\\n' \"$count\" >"+shellArgument(countPath)+"\n"+
+		"    if [ \"$count\" -eq 3 ]; then exit 1; fi\n"+
+		"  fi\n"+
+		"done\n")
+	if _, err = workspace.PreviewRestore(t.Context(), request, revision); !errors.Is(
+		err, errDeploymentEditInvalid,
+	) {
+		t.Fatalf("PreviewRestore(blob read failure) error = %v", err)
+	}
 }
 
 //nolint:cyclop // One stateful sequence covers each invalid deployment lifecycle transition.
@@ -672,7 +736,7 @@ func TestDeploymentStagedProofRejectsInvalidGitState(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The table exercises each atomic publication failure boundary through the private seam.
+//nolint:cyclop,funlen,gocognit // The table exercises each publication failure boundary through the private seam.
 func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -698,7 +762,7 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 		{
 			name: "initial read",
 			configure: func(operations *deploymentEntryOperations) {
-				operations.readFile = func(*os.Root, string) ([]byte, error) {
+				operations.readFile = func(*os.File) ([]byte, error) {
 					return nil, errDeploymentCoverage
 				}
 			},
@@ -740,14 +804,41 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name: "rename",
+			name: "candidate read",
 			configure: func(operations *deploymentEntryOperations) {
-				operations.rename = func(*os.Root, string, string) error { return errDeploymentCoverage }
+				calls := 0
+				operations.readFile = func(file *os.File) ([]byte, error) {
+					calls++
+					if calls == 2 {
+						return nil, errDeploymentCoverage
+					}
+
+					return io.ReadAll(file)
+				}
 			},
 		},
 		{
-			name:      "open directory",
-			published: true,
+			name: "candidate mismatch",
+			configure: func(operations *deploymentEntryOperations) {
+				calls := 0
+				operations.readFile = func(file *os.File) ([]byte, error) {
+					calls++
+					if calls == 2 {
+						return []byte("drift"), nil
+					}
+
+					return io.ReadAll(file)
+				}
+			},
+		},
+		{
+			name: "exchange",
+			configure: func(operations *deploymentEntryOperations) {
+				operations.exchange = func(*os.File, string, string) error { return errDeploymentCoverage }
+			},
+		},
+		{
+			name: "open directory",
 			configure: func(operations *deploymentEntryOperations) {
 				operations.openDirectory = func(*os.Root, string) (*os.File, error) {
 					return nil, errDeploymentCoverage
@@ -789,13 +880,13 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			published: true,
 			configure: func(operations *deploymentEntryOperations) {
 				calls := 0
-				operations.readFile = func(root *os.Root, name string) ([]byte, error) {
+				operations.readFile = func(file *os.File) ([]byte, error) {
 					calls++
-					if calls == 2 {
+					if calls == 4 {
 						return nil, errDeploymentCoverage
 					}
 
-					return root.ReadFile(name)
+					return io.ReadAll(file)
 				}
 			},
 		},
@@ -804,13 +895,38 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 			published: true,
 			configure: func(operations *deploymentEntryOperations) {
 				calls := 0
-				operations.readFile = func(root *os.Root, name string) ([]byte, error) {
+				operations.readFile = func(file *os.File) ([]byte, error) {
 					calls++
-					if calls == 2 {
+					if calls == 4 {
 						return []byte("drift"), nil
 					}
 
-					return root.ReadFile(name)
+					return io.ReadAll(file)
+				}
+			},
+		},
+		{
+			name:      "rollback exchange",
+			published: true,
+			configure: func(operations *deploymentEntryOperations) {
+				readCalls := 0
+				operations.readFile = func(file *os.File) ([]byte, error) {
+					readCalls++
+					if readCalls == 3 {
+						return []byte("drift"), nil
+					}
+
+					return io.ReadAll(file)
+				}
+				exchange := operations.exchange
+				exchangeCalls := 0
+				operations.exchange = func(directory *os.File, first, second string) error {
+					exchangeCalls++
+					if exchangeCalls == 2 {
+						return errDeploymentCoverage
+					}
+
+					return exchange(directory, first, second)
 				}
 			},
 		},
@@ -829,6 +945,13 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 				operations.writeFile = func(*os.File, []byte) (int, error) {
 					return 0, errDeploymentCoverage
 				}
+				operations.remove = func(*os.Root, string) error { return errDeploymentCoverage }
+			},
+		},
+		{
+			name:      "remove displaced entry",
+			published: true,
+			configure: func(operations *deploymentEntryOperations) {
 				operations.remove = func(*os.Root, string) error { return errDeploymentCoverage }
 			},
 		},
@@ -853,7 +976,170 @@ func TestReplaceDeploymentEntryFailureBoundaries(t *testing.T) {
 	}
 }
 
-//nolint:funlen // Each case stops at a distinct transaction proof boundary and must verify rescue.
+func TestExchangeDeploymentEntriesRejectsMissingEntry(t *testing.T) {
+	t.Parallel()
+
+	directory, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := directory.Close(); closeErr != nil {
+			t.Errorf("Close() error = %v", closeErr)
+		}
+	})
+	if err = exchangeDeploymentEntries(directory, "missing-first", "missing-second"); err == nil {
+		t.Fatal("exchangeDeploymentEntries(missing) succeeded")
+	}
+}
+
+//nolint:cyclop // The ordered path swaps reproduce one descriptor-versus-path lookup race.
+func TestReplaceDeploymentEntryReadsTheRetainedDescriptor(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	path := filepath.Join(repository, composeFileValue)
+	if err := os.WriteFile(path, []byte("foreign"), 0o600); err != nil {
+		t.Fatalf("WriteFile(foreign) error = %v", err)
+	}
+	operations := defaultDeploymentEntryOperations()
+	exchange := operations.exchange
+	exchangeCalls := 0
+	operations.exchange = func(directory *os.File, first, second string) error {
+		exchangeCalls++
+
+		return exchange(directory, first, second)
+	}
+	lstat := operations.lstat
+	lstatCalls := 0
+	operations.lstat = func(root *os.Root, name string) (os.FileInfo, error) {
+		lstatCalls++
+		if lstatCalls == 1 {
+			info, err := lstat(root, name)
+			if err != nil {
+				return nil, err
+			}
+			if err = os.Rename(path, path+".held"); err != nil {
+				return nil, fmt.Errorf("retain opened entry: %w", err)
+			}
+			if err = os.WriteFile(path, []byte("before"), 0o600); err != nil {
+				return nil, fmt.Errorf("write temporary replacement: %w", err)
+			}
+
+			return info, nil
+		}
+		if lstatCalls == 2 {
+			if err := os.Remove(path); err != nil {
+				return nil, fmt.Errorf("remove temporary replacement: %w", err)
+			}
+			if err := os.Rename(path+".held", path); err != nil {
+				return nil, fmt.Errorf("restore opened entry: %w", err)
+			}
+		}
+
+		return lstat(root, name)
+	}
+	published, err := replaceDeploymentEntryWithOperations(
+		repository, composeFileValue, []byte("before"), []byte("after"), operations,
+	)
+	content, readErr := os.ReadFile(path) //nolint:gosec // The path is rooted in t.TempDir.
+	if !errors.Is(err, errDeploymentEditInvalid) || published || readErr != nil ||
+		string(content) != "foreign" || exchangeCalls != 0 {
+		t.Fatalf(
+			"descriptor-bound replacement = published %t, err %v, content %q, read %v, exchanges %d",
+			published, err, content, readErr, exchangeCalls,
+		)
+	}
+}
+
+//nolint:cyclop // One assertion proves the replacement, publication state, and cleanup together.
+func TestReplaceDeploymentEntryPreservesConcurrentReplacement(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	path := filepath.Join(repository, composeFileValue)
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	operations := defaultDeploymentEntryOperations()
+	exchange := operations.exchange
+	firstExchange := true
+	var replacement os.FileInfo
+	operations.exchange = func(directory *os.File, first, second string) error {
+		if firstExchange {
+			firstExchange = false
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove concurrent source: %w", err)
+			}
+			if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+				return fmt.Errorf("write concurrent source: %w", err)
+			}
+			var err error
+			replacement, err = os.Lstat(path)
+			if err != nil {
+				return fmt.Errorf("inspect concurrent source: %w", err)
+			}
+		}
+
+		return exchange(directory, first, second)
+	}
+	published, err := replaceDeploymentEntryWithOperations(
+		repository, composeFileValue, []byte("before"), []byte("after"), operations,
+	)
+	content, readErr := os.ReadFile(path) //nolint:gosec // The path is rooted in t.TempDir.
+	current, statErr := os.Lstat(path)
+	temporary, globErr := filepath.Glob(filepath.Join(repository, "."+composeFileValue+".maniud-*"))
+	if err == nil || published || readErr != nil || string(content) != "before" || statErr != nil ||
+		replacement == nil || !os.SameFile(replacement, current) ||
+		globErr != nil || len(temporary) != 0 {
+		t.Fatalf(
+			"concurrent replacement = published %t, err %v, content %q, read/stat %v/%v, same %t, temporary %q, glob %v",
+			published, err, content, readErr, statErr, replacement != nil && current != nil &&
+				os.SameFile(replacement, current), temporary, globErr,
+		)
+	}
+}
+
+//nolint:cyclop // One assertion proves the replacement, publication state, and rescue together.
+func TestReplaceDeploymentEntryPreservesPostExchangeDriftAsRescue(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	path := filepath.Join(repository, composeFileValue)
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	operations := defaultDeploymentEntryOperations()
+	exchange := operations.exchange
+	operations.exchange = func(directory *os.File, first, second string) error {
+		if err := exchange(directory, first, second); err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove published candidate: %w", err)
+		}
+
+		return os.WriteFile(path, []byte("foreign"), 0o600)
+	}
+	published, err := replaceDeploymentEntryWithOperations(
+		repository, composeFileValue, []byte("before"), []byte("after"), operations,
+	)
+	content, readErr := os.ReadFile(path) //nolint:gosec // The path is rooted in t.TempDir.
+	rescues, globErr := filepath.Glob(filepath.Join(repository, "."+composeFileValue+".maniud-*"))
+	if err == nil || !published || readErr != nil || string(content) != "foreign" ||
+		globErr != nil || len(rescues) != 1 {
+		t.Fatalf(
+			"post-exchange drift = published %t, err %v, content %q, read %v, rescues %q, glob %v",
+			published, err, content, readErr, rescues, globErr,
+		)
+	}
+	rescue, rescueErr := os.ReadFile(rescues[0])
+	if rescueErr != nil || string(rescue) != "before" {
+		t.Fatalf("rescue = %q, %v", rescue, rescueErr)
+	}
+}
+
+//nolint:cyclop,funlen // Each case stops at a distinct transaction proof boundary and must verify rescue.
 func TestStageDeploymentEditFailureBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -950,6 +1236,42 @@ func TestStageDeploymentEditFailureBoundaries(t *testing.T) {
 					func(context.Context, string) (string, error) { return draft.base.tree, nil }
 			},
 		},
+		{
+			name: "confirmed content mismatch",
+			configure: func(_ *testing.T, draft *tuiDeploymentDraft) (
+				func(string, string, []byte, []byte) (bool, error),
+				func(context.Context, string, []string) ([]byte, error),
+				func(context.Context, string) (string, error),
+			) {
+				draft.confirmation.content = draft.source.Content
+
+				return replaceDeploymentEntry, stagedTUIDiff, writeGitTree
+			},
+		},
+		{
+			name: "confirmed diff mismatch",
+			configure: func(_ *testing.T, draft *tuiDeploymentDraft) (
+				func(string, string, []byte, []byte) (bool, error),
+				func(context.Context, string, []string) ([]byte, error),
+				func(context.Context, string) (string, error),
+			) {
+				draft.confirmation.diff = append(draft.confirmation.diff, '\n')
+
+				return replaceDeploymentEntry, stagedTUIDiff, writeGitTree
+			},
+		},
+		{
+			name: "confirmed tree mismatch",
+			configure: func(_ *testing.T, draft *tuiDeploymentDraft) (
+				func(string, string, []byte, []byte) (bool, error),
+				func(context.Context, string, []string) ([]byte, error),
+				func(context.Context, string) (string, error),
+			) {
+				draft.confirmation.expectedTree = draft.base.tree
+
+				return replaceDeploymentEntry, stagedTUIDiff, writeGitTree
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -985,6 +1307,36 @@ func TestStageDeploymentEditFailureBoundaries(t *testing.T) {
 		}
 		assertTUIDeploymentContent(t, draft.repository, draft.entry, draft.source.Content)
 	})
+
+	t.Run("attribute drift after publication", func(t *testing.T) {
+		t.Parallel()
+
+		draft := newDeploymentDraftFixture(t)
+		path, err := absoluteGitPath(t.Context(), draft.repository, "info/attributes")
+		if err != nil {
+			t.Fatalf("absoluteGitPath(info/attributes) error = %v", err)
+		}
+		replace := func(repository, entry string, before, after []byte) (bool, error) {
+			published, replaceErr := replaceDeploymentEntry(repository, entry, before, after)
+			if replaceErr == nil {
+				replaceErr = os.WriteFile(path, []byte("unrelated text\n"), 0o600)
+			}
+			if replaceErr != nil {
+				return published, errors.Join(errDeploymentEditInvalid, replaceErr)
+			}
+
+			return published, nil
+		}
+		if _, _, err = stageDeploymentEditWith(
+			t.Context(), draft, replace, stagedTUIDiff, writeGitTree,
+		); !errors.Is(err, errDeploymentEditInvalid) {
+			t.Fatalf("stageDeploymentEditWith(attribute drift) error = %v", err)
+		}
+		assertTUIDeploymentContent(t, draft.repository, draft.entry, draft.source.Content)
+		if _, err = cleanGitTree(t.Context(), draft.repository); err != nil {
+			t.Fatalf("attribute drift rescue left repository dirty: %v", err)
+		}
+	})
 }
 
 func newDeploymentDraftFixture(t *testing.T) tuiDeploymentDraft {
@@ -1015,7 +1367,7 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 			t.Context(), "Update api deployment", false,
 			func(context.Context, tuiStagedProof, string, bool) error { return errDeploymentCoverage },
 		)
-		if err != nil || !result.NeedsUnsignedApproval || result.Committed {
+		if err != nil || result.Outcome != tui.CommitNeedsUnsignedApproval {
 			t.Fatalf("commitWith(signed fallback) = %#v, %v", result, err)
 		}
 	})
@@ -1023,10 +1375,9 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		commitErr error
-		wantErr   error
 	}{
-		{name: "unsigned commit error", commitErr: errDeploymentCoverage, wantErr: errDeploymentCoverage},
-		{name: "unproven outcome", wantErr: errDeploymentEditInvalid},
+		{name: "unsigned commit error", commitErr: errDeploymentCoverage},
+		{name: "unproven outcome"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -1036,7 +1387,8 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 				t.Context(), "Update api deployment", true,
 				func(context.Context, tuiStagedProof, string, bool) error { return test.commitErr },
 			)
-			if !errors.Is(err, test.wantErr) || result.Committed || result.NeedsUnsignedApproval {
+			if !isDeploymentFailure(err, tui.DeploymentCommitFailed) ||
+				result.Outcome != 0 {
 				t.Fatalf("commitWith(%s) = %#v, %v", test.name, result, err)
 			}
 		})
@@ -1055,10 +1407,32 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 				return errDeploymentCoverage
 			},
 		)
-		if !errors.Is(err, context.Canceled) || result.Committed {
+		if !errors.Is(err, context.Canceled) || result.Outcome != 0 {
 			t.Fatalf("commitWith(cancelled) = %#v, %v", result, err)
 		}
 	})
+
+	for _, test := range []struct {
+		name      string
+		commitErr error
+	}{
+		{name: "failed with changed stage", commitErr: errDeploymentCoverage},
+		{name: "unproven with changed stage"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			workspace, _, _ := newStagedDeploymentWorkspace(t)
+			staged := *workspace.staged
+			staged.proof.expectedTree = strings.Repeat("a", 40)
+			result, err := workspace.settleCommit(
+				t.Context(), staged, "Update api deployment", true, test.commitErr,
+			)
+			if !isDeploymentFailure(err, tui.DeploymentWorktreeUnknown) || result.Outcome != 0 {
+				t.Fatalf("settleCommit(%s) = %#v, %v", test.name, result, err)
+			}
+		})
+	}
 
 	t.Run("validation unavailable", func(t *testing.T) {
 		t.Parallel()
@@ -1072,7 +1446,7 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 				return commitTUIStagedProof(ctx, proof, message, unsigned)
 			},
 		)
-		if err != nil || !result.Committed || !result.ValidationUnavailable {
+		if err != nil || result.Outcome != tui.CommitValidationUnavailable {
 			t.Fatalf("commitWith(validation unavailable) = %#v, %v", result, err)
 		}
 	})
@@ -1094,10 +1468,40 @@ func TestDeploymentCommitSettlementBoundaries(t *testing.T) {
 				return nil
 			},
 		)
-		if err == nil || result.Committed {
+		if err != nil || result.Outcome != tui.CommitNeedsUnsignedApproval {
 			t.Fatalf("commitWith(hostile signer) = %#v, %v", result, err)
 		}
 	})
+}
+
+func isDeploymentFailure(err error, code tui.DeploymentFailure) bool {
+	action, valid := errors.AsType[*tui.DeploymentActionError](err)
+
+	return valid && action.Code == code
+}
+
+func TestPublicDeploymentActionErrorClassification(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		err  error
+		want tui.DeploymentFailure
+	}{
+		{errDeploymentWorktreeUnknown, tui.DeploymentWorktreeUnknown},
+		{errDeploymentPublishFailed, tui.DeploymentPublishFailed},
+		{errDeploymentCoverage, tui.DeploymentValidationFailed},
+	} {
+		err := publicDeploymentActionError(test.err, tui.DeploymentValidationFailed)
+		if !isDeploymentFailure(err, test.want) || !errors.Is(err, errDeploymentEditInvalid) {
+			t.Fatalf("publicDeploymentActionError(%v) = %v, want %q", test.err, err, test.want)
+		}
+	}
+	for _, target := range []error{context.Canceled, context.DeadlineExceeded} {
+		err := publicDeploymentActionError(target, tui.DeploymentCommitFailed)
+		if !isDeploymentFailure(err, tui.DeploymentCommitFailed) || !errors.Is(err, target) {
+			t.Fatalf("publicDeploymentActionError(%v) = %v", target, err)
+		}
+	}
 }
 
 func newStagedDeploymentWorkspace(
@@ -1114,6 +1518,9 @@ func newStagedDeploymentWorkspace(
 	if _, err := workspace.Stage(t.Context()); err != nil {
 		t.Fatalf("Stage() error = %v", err)
 	}
+	if workspace.draft != nil {
+		t.Fatal("Stage() retained a second draft representation")
+	}
 
 	return workspace, request, repository
 }
@@ -1122,10 +1529,12 @@ func TestDeploymentDiscardReportsRollbackFailure(t *testing.T) {
 	t.Parallel()
 
 	workspace, _, _ := newStagedDeploymentWorkspace(t)
-	workspace.staged.draft.base.head = strings.Repeat("a", 40)
+	invalidHead := strings.Repeat("a", 40)
+	workspace.staged.draft.base.head = invalidHead
+	workspace.staged.proof.base.head = invalidHead
 	err := workspace.Discard(t.Context())
-	if err == nil {
-		t.Fatal("Discard(mismatched base) succeeded")
+	if !isDeploymentFailure(err, tui.DeploymentWorktreeUnknown) {
+		t.Fatalf("Discard(mismatched base) error = %v", err)
 	}
 }
 
@@ -1184,13 +1593,16 @@ func TestDeploymentRestoreRejectsInvalidHistoricalCandidates(t *testing.T) {
 		missingServiceRevision,
 		missingDependencyRevision,
 		deletedRevision,
-		currentRevision,
 	} {
 		if _, restoreErr := workspace.PreviewRestore(t.Context(), request, revision); !errors.Is(
 			restoreErr, errDeploymentEditInvalid,
 		) {
 			t.Fatalf("PreviewRestore(%s) error = %v", revision, restoreErr)
 		}
+	}
+	currentPreview, err := workspace.PreviewRestore(t.Context(), request, currentRevision)
+	if err != nil || !currentPreview.NoChanges || workspace.draft != nil {
+		t.Fatalf("PreviewRestore(current) = %#v, %v", currentPreview, err)
 	}
 	bindPreview, err := workspace.PreviewRestore(t.Context(), request, bindRevision)
 	if err != nil || bindPreview.Restore != bindRevision {
@@ -1244,6 +1656,19 @@ func TestDeploymentRestoreRejectsInvalidHistoricalCandidates(t *testing.T) {
 		err, errDeploymentEditInvalid,
 	) {
 		t.Fatalf("PreviewRestore(scope unavailable) error = %v", err)
+	}
+
+	commitDeploymentContent(t, repository, deploymentOtherServiceFixture(), "current service missing")
+	currentSource, err := loadTrackedComposeSource(t.Context(), path, repository, environment, runtimeBase)
+	if err != nil {
+		t.Fatalf("loadTrackedComposeSource(missing current service) error = %v", err)
+	}
+	workspace.draft = nil
+	request = application.Request{Source: currentSource, Service: applyServiceValue}
+	if _, err = workspace.PreviewRestore(t.Context(), request, bindRevision); !errors.Is(
+		err, errDeploymentEditInvalid,
+	) {
+		t.Fatalf("PreviewRestore(missing current service) error = %v", err)
 	}
 }
 

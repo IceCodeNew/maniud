@@ -3,16 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
+	"slices"
 	"sync"
-	"time"
 
 	"github.com/IceCodeNew/maniud/containerconfig"
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -21,15 +16,18 @@ import (
 )
 
 type tuiDeploymentDraft struct {
-	request    application.Request
-	source     compose.Source
-	candidate  compose.Source
-	repository string
-	entry      string
-	base       gitTreeState
-	fields     []application.DeploymentField
-	restore    string
-	scope      compose.RepositoryScope
+	request      application.Request
+	source       compose.Source
+	candidate    compose.Source
+	confirmation tuiDeploymentConfirmation
+	repository   string
+	entry        string
+	base         gitTreeState
+	fields       []application.DeploymentField
+	current      containerconfig.Spec
+	proposed     containerconfig.Spec
+	restore      string
+	scope        compose.RepositoryScope
 }
 
 type tuiStagedDeployment struct {
@@ -45,6 +43,25 @@ type tuiDeploymentWorkspace struct {
 	runtimeBase      string
 	draft            *tuiDeploymentDraft
 	staged           *tuiStagedDeployment
+}
+
+func publicDeploymentActionError(err error, fallback tui.DeploymentFailure) error {
+	code := fallback
+	switch {
+	case errors.Is(err, errDeploymentWorktreeUnknown):
+		code = tui.DeploymentWorktreeUnknown
+	case errors.Is(err, errDeploymentPublishFailed):
+		code = tui.DeploymentPublishFailed
+	}
+	action := &tui.DeploymentActionError{Code: code}
+	if errors.Is(err, context.Canceled) {
+		return errors.Join(action, errDeploymentEditInvalid, context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.Join(action, errDeploymentEditInvalid, context.DeadlineExceeded)
+	}
+
+	return errors.Join(action, errDeploymentEditInvalid)
 }
 
 func defaultTUIDeploymentWorkspace(environment map[string]string) *tuiDeploymentWorkspace {
@@ -69,23 +86,18 @@ func (workspace *tuiDeploymentWorkspace) Fields(
 
 	source, _, _, _, err := workspace.openRequest(ctx, request) //nolint:dogsled // This read needs only the proven source.
 	if err != nil {
-		return nil, err
+		return nil, publicDeploymentActionError(err, tui.DeploymentPreconditionFailed)
 	}
 	project, err := compose.Load(ctx, source)
 	if err != nil {
-		return nil, errDeploymentEditInvalid
+		return nil, publicDeploymentActionError(err, tui.DeploymentUnsupportedSource)
 	}
 	spec, err := project.ServiceSpec(request.Service)
 	if err != nil {
-		return nil, errDeploymentEditInvalid
+		return nil, publicDeploymentActionError(err, tui.DeploymentUnsupportedSource)
 	}
 
-	fields := make([]tui.DeploymentFieldState, 0, len(application.DeploymentFields()))
-	for _, field := range application.DeploymentFields() {
-		fields = append(fields, deploymentFieldState(spec, field))
-	}
-
-	return fields, nil
+	return application.DeploymentFieldStates(spec), nil
 }
 
 func (workspace *tuiDeploymentWorkspace) Preview(
@@ -98,100 +110,119 @@ func (workspace *tuiDeploymentWorkspace) Preview(
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
+	workspace.draft = nil
 
 	field, err := application.ParseDeploymentField(fieldID)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentValidationFailed,
+		)
 	}
 	patch, err := parseDeploymentPatch(field, value, unset)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, err
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentValidationFailed,
+		)
 	}
+
+	return workspace.previewPatches(ctx, request, []application.DeploymentPatch{patch})
+}
+
+func (workspace *tuiDeploymentWorkspace) PreviewPatches(
+	ctx context.Context,
+	request application.Request,
+	patches []application.DeploymentPatch,
+) (tui.DeploymentEditPreview, error) {
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	if workspace.staged != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
+	}
+	workspace.draft = nil
+
+	return workspace.previewPatches(ctx, request, patches)
+}
+
+//nolint:funcorder // Preview and PreviewPatches share this private transaction boundary.
+func (workspace *tuiDeploymentWorkspace) previewPatches(
+	ctx context.Context,
+	request application.Request,
+	patches []application.DeploymentPatch,
+) (tui.DeploymentEditPreview, error) {
 	source, repository, entry, base, err := workspace.openRequest(ctx, request)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, err
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
 	}
-	candidate, err := prepareDeploymentEdit(ctx, source, request.Service, []application.DeploymentPatch{patch})
-	if err != nil || len(candidate.fields) == 0 {
-		return tui.DeploymentEditPreview{}, errors.Join(err, errDeploymentEditInvalid)
+	candidate, err := prepareDeploymentEdit(ctx, source, request.Service, patches)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentUnsupportedSource,
+		)
+	}
+	if len(candidate.fields) == 0 {
+		workspace.draft = nil
+
+		return tui.DeploymentEditPreview{NoChanges: true}, nil
 	}
 	scope, err := workspace.requestScope(ctx, request, source)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, err
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
 	}
 	draft := tuiDeploymentDraft{
 		request: request, source: source, candidate: candidate.source, repository: repository,
-		entry: entry, base: base, fields: candidate.fields, scope: scope,
+		entry: entry, base: base, fields: candidate.fields,
+		current: candidate.current, proposed: candidate.proposed, scope: scope,
 	}
+
+	preview, err := workspace.confirmDeploymentPreview(ctx, draft)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
+	}
+
+	return preview, nil
+}
+
+//nolint:funcorder // Preview and restore share this private pre-mutation confirmation boundary.
+func (workspace *tuiDeploymentWorkspace) confirmDeploymentPreview(
+	ctx context.Context,
+	draft tuiDeploymentDraft,
+) (tui.DeploymentEditPreview, error) {
+	confirmation, noChanges, err := prepareDeploymentConfirmation(ctx, draft)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, err
+	}
+	if noChanges {
+		workspace.draft = nil
+
+		return tui.DeploymentEditPreview{NoChanges: true}, nil
+	}
+	draft.confirmation = confirmation
 	workspace.draft = &draft
 
 	return publicDeploymentPreview(draft), nil
 }
 
-//nolint:cyclop,funlen // The closed field catalog parses into one application-owned value family.
 func parseDeploymentPatch(
 	field application.DeploymentField,
 	value string,
 	unset bool,
 ) (application.DeploymentPatch, error) {
-	if unset {
-		patch, err := application.NewDeploymentPatch(field, application.DeploymentUnset{})
-		if err != nil {
-			return application.DeploymentPatch{}, errDeploymentEditInvalid
-		}
-
-		return patch, nil
-	}
-	if value == "" || len(value) > maximumTUICommitMessage || strings.TrimSpace(value) != value ||
-		strings.ContainsAny(value, "\x00\r\n") {
+	if len(value) > maximumTUICommitMessage {
 		return application.DeploymentPatch{}, errDeploymentEditInvalid
 	}
-
-	var parsed application.DeploymentValue
-	var err error
-	switch field {
-	case application.DeploymentCPUs:
-		var number float64
-		number, err = strconv.ParseFloat(value, 32)
-		parsed = application.DeploymentCPU(number)
-	case application.DeploymentMemory, application.DeploymentSharedMemory:
-		var number int64
-		number, err = strconv.ParseInt(value, 10, 64)
-		parsed = application.DeploymentBytes(number)
-	case application.DeploymentPIDs:
-		var number int64
-		number, err = strconv.ParseInt(value, 10, 64)
-		parsed = application.DeploymentInteger(number)
-	case application.DeploymentHealthRetries:
-		var number int
-		number, err = strconv.Atoi(value)
-		parsed = application.DeploymentRetries(number)
-	case application.DeploymentRestart:
-		parsed = application.DeploymentRestartPolicy(value)
-	case application.DeploymentStopGrace, application.DeploymentHealthInterval,
-		application.DeploymentHealthTimeout, application.DeploymentHealthStartPeriod,
-		application.DeploymentHealthStartInterval:
-		var duration time.Duration
-		duration, err = time.ParseDuration(value)
-		parsed = application.DeploymentDuration(duration)
-	case application.DeploymentInit, application.DeploymentReadOnly:
-		var enabled bool
-		enabled, err = strconv.ParseBool(value)
-		parsed = application.DeploymentBoolean(enabled)
-	case application.DeploymentNoNewPrivileges:
-		if value != "true" {
-			err = errDeploymentEditInvalid
-		}
-		parsed = application.DeploymentEnabled{}
-	default:
-		err = errDeploymentEditInvalid
-	}
-	if err != nil {
-		return application.DeploymentPatch{}, errDeploymentEditInvalid
-	}
-	patch, err := application.NewDeploymentPatch(field, parsed)
+	patch, err := application.ParseDeploymentPatch(field.ID(), value, unset)
 	if err != nil {
 		return application.DeploymentPatch{}, errDeploymentEditInvalid
 	}
@@ -199,119 +230,43 @@ func parseDeploymentPatch(
 	return patch, nil
 }
 
-//nolint:cyclop,funlen // Every closed application field has one stable display projection.
-func deploymentFieldState(
-	spec containerconfig.Spec,
-	field application.DeploymentField,
-) tui.DeploymentFieldState {
-	result := tui.DeploymentFieldState{ID: field.ID(), AllowsUnset: field.AllowsUnset(), Available: true}
-	switch field {
-	case application.DeploymentCPUs:
-		result.Value, result.Present = spec.CPUs, spec.CPUs != ""
-	case application.DeploymentMemory:
-		result.Value, result.Present = strconv.FormatInt(spec.MemoryBytes, 10), spec.MemoryBytes != 0
-	case application.DeploymentPIDs:
-		result.Value, result.Present = deploymentOptionalInt64(spec.PidsLimit)
-	case application.DeploymentRestart:
-		result.Value, result.Present = spec.Restart, spec.Restart != ""
-	case application.DeploymentSharedMemory:
-		result.Value, result.Present = strconv.FormatInt(spec.SharedMemoryBytes, 10), spec.SharedMemoryBytes != 0
-	case application.DeploymentStopGrace:
-		if spec.StopTimeout != nil {
-			result.Value = (time.Duration(*spec.StopTimeout) * time.Second).String()
-			result.Present = true
-		}
-	case application.DeploymentInit:
-		result.Value, result.Present = deploymentOptionalBool(spec.Init)
-	case application.DeploymentReadOnly:
-		result.Value, result.Present = deploymentOptionalBool(spec.ReadOnly)
-	case application.DeploymentNoNewPrivileges:
-		result.Present = spec.NoNewPrivileges
-		result.Available = !spec.NoNewPrivileges
-		if result.Present {
-			result.Value = "true"
-		}
-	case application.DeploymentHealthInterval:
-		result.Value, result.Present, result.Available = deploymentHealthString(spec.Healthcheck, func(
-			health *containerconfig.Healthcheck,
-		) string {
-			return health.Interval
-		})
-	case application.DeploymentHealthTimeout:
-		result.Value, result.Present, result.Available = deploymentHealthString(spec.Healthcheck, func(
-			health *containerconfig.Healthcheck,
-		) string {
-			return health.Timeout
-		})
-	case application.DeploymentHealthRetries:
-		result.Available = spec.Healthcheck != nil && !spec.Healthcheck.Disabled
-		if result.Available {
-			result.Value, result.Present = deploymentOptionalInt(spec.Healthcheck.Retries)
-		}
-	case application.DeploymentHealthStartPeriod:
-		result.Value, result.Present, result.Available = deploymentHealthString(spec.Healthcheck, func(
-			health *containerconfig.Healthcheck,
-		) string {
-			return health.StartPeriod
-		})
-	case application.DeploymentHealthStartInterval:
-		result.Value, result.Present, result.Available = deploymentHealthString(spec.Healthcheck, func(
-			health *containerconfig.Healthcheck,
-		) string {
-			return health.StartInterval
-		})
-	default:
-		result.Available = false
-	}
-
-	return result
-}
-
-func deploymentOptionalInt64(value *int64) (string, bool) {
-	if value == nil {
-		return "", false
-	}
-
-	return strconv.FormatInt(*value, 10), true
-}
-
-func deploymentOptionalInt(value *int) (string, bool) {
-	if value == nil {
-		return "", false
-	}
-
-	return strconv.Itoa(*value), true
-}
-
-func deploymentOptionalBool(value *bool) (string, bool) {
-	if value == nil {
-		return "", false
-	}
-
-	return strconv.FormatBool(*value), true
-}
-
-func deploymentHealthString(
-	health *containerconfig.Healthcheck,
-	selectValue func(*containerconfig.Healthcheck) string,
-) (string, bool, bool) {
-	if health == nil || health.Disabled {
-		return "", false, false
-	}
-	value := selectValue(health)
-
-	return value, value != "", true
-}
-
 func publicDeploymentPreview(draft tuiDeploymentDraft) tui.DeploymentEditPreview {
-	fieldIDs := make([]string, len(draft.fields))
-	for index, field := range draft.fields {
-		fieldIDs[index] = field.ID()
+	return tui.DeploymentEditPreview{
+		ComposePath: draft.entry,
+		Changes:     deploymentFieldChanges(draft.current, draft.proposed, draft.fields),
+		Restore:     draft.restore,
+		Diff:        string(draft.confirmation.diff),
+	}
+}
+
+func deploymentFieldChanges(
+	current containerconfig.Spec,
+	proposed containerconfig.Spec,
+	fields []application.DeploymentField,
+) []tui.DeploymentFieldChange {
+	selected := make(map[application.DeploymentField]struct{}, len(fields))
+	for _, field := range fields {
+		selected[field] = struct{}{}
+	}
+	currentStates := application.DeploymentFieldStates(current)
+	proposedStates := application.DeploymentFieldStates(proposed)
+	changes := make([]tui.DeploymentFieldChange, 0, len(fields))
+	for index, field := range application.DeploymentFields() {
+		if _, valid := selected[field]; !valid {
+			continue
+		}
+		before := currentStates[index]
+		after := proposedStates[index]
+		if before.Value == after.Value && before.Present == after.Present {
+			continue
+		}
+		changes = append(changes, tui.DeploymentFieldChange{
+			FieldID: field.ID(), CurrentValue: before.Value, CurrentPresent: before.Present,
+			ProposedValue: after.Value, ProposedPresent: after.Present,
+		})
 	}
 
-	return tui.DeploymentEditPreview{
-		ComposePath: draft.entry, FieldIDs: fieldIDs, Restore: draft.restore,
-	}
+	return changes
 }
 
 //nolint:cyclop,funcorder // This private request proof stays before the transaction methods that consume it.
@@ -375,14 +330,19 @@ func (workspace *tuiDeploymentWorkspace) Stage(
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.draft == nil || workspace.staged != nil {
-		return tui.StagedDeploymentEdit{}, errDeploymentEditInvalid
+		return tui.StagedDeploymentEdit{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
 
 	draft := *workspace.draft
 	staged, diff, err := stageDeploymentEdit(ctx, draft)
 	if err != nil {
-		return tui.StagedDeploymentEdit{}, err
+		return tui.StagedDeploymentEdit{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
 	}
+	workspace.draft = nil
 	workspace.staged = &staged
 	message := "Update " + draft.request.Service + " deployment"
 	if draft.restore != "" {
@@ -399,7 +359,6 @@ func stageDeploymentEdit(
 	return stageDeploymentEditWith(ctx, draft, replaceDeploymentEntry, stagedTUIDiff, writeGitTree)
 }
 
-//nolint:cyclop // Each linear branch rejects or rescues one transaction proof boundary.
 func stageDeploymentEditWith(
 	ctx context.Context,
 	draft tuiDeploymentDraft,
@@ -407,7 +366,7 @@ func stageDeploymentEditWith(
 	diffStaged func(context.Context, string, []string) ([]byte, error),
 	writeTree func(context.Context, string) (string, error),
 ) (tuiStagedDeployment, []byte, error) {
-	if !deploymentAttributesSafe(ctx, draft.repository, draft.base.tree, draft.entry) {
+	if draft.confirmation.expectedTree == "" {
 		return tuiStagedDeployment{}, nil, errDeploymentEditInvalid
 	}
 	state, err := cleanGitTreeWithAttributeSource(ctx, draft.repository, draft.base.tree)
@@ -417,30 +376,21 @@ func stageDeploymentEditWith(
 	rollback := func(stageErr error) (tuiStagedDeployment, []byte, error) {
 		rescueCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
 		defer cancel()
-
-		return tuiStagedDeployment{}, nil, errors.Join(stageErr, rollbackDeploymentEdit(rescueCtx, draft))
-	}
-	published, err := replace(
-		draft.repository, draft.entry, draft.source.Content, draft.candidate.Content,
-	)
-	if err != nil {
-		if published {
-			return rollback(err)
+		rollbackErr := rollbackDeploymentEdit(rescueCtx, draft)
+		if rollbackErr != nil {
+			return tuiStagedDeployment{}, nil, errors.Join(
+				errDeploymentWorktreeUnknown, stageErr, rollbackErr,
+			)
 		}
 
+		return tuiStagedDeployment{}, nil, errors.Join(errDeploymentPublishFailed, stageErr)
+	}
+	if err = stageConfirmedDeploymentWith(
+		ctx, draft, replace, defaultDeploymentGitFileOperations(),
+	); err != nil {
 		return tuiStagedDeployment{}, nil, err
 	}
 	paths := []string{draft.entry}
-	if _, err = runGit(
-		ctx, draft.repository, "--attr-source="+draft.base.tree, "add", "--", draft.entry,
-	); err != nil {
-		return rollback(err)
-	}
-	if !exactStagedPathStatusWithAttributes(
-		ctx, draft.repository, paths, "M", draft.base.tree,
-	) {
-		return rollback(errDeploymentEditInvalid)
-	}
 	diff, err := diffStaged(ctx, draft.repository, paths)
 	if err != nil {
 		return rollback(err)
@@ -457,19 +407,11 @@ func stageDeploymentEditWith(
 	if err != nil {
 		return rollback(errDeploymentEditInvalid)
 	}
-
-	return tuiStagedDeployment{draft: draft, proof: proof, content: content}, diff, nil
-}
-
-func deploymentAttributesSafe(ctx context.Context, repository, tree, entry string) bool {
-	output, err := runGit(
-		ctx, repository, "--attr-source="+tree, "check-attr", "-z", "--all", "--", entry,
-	)
-	if err != nil {
-		return false
+	if !deploymentConfirmationMatches(draft.confirmation, content, diff, expectedTree) {
+		return rollback(errDeploymentEditInvalid)
 	}
 
-	return deploymentAttributeOutputSafe(output, entry)
+	return tuiStagedDeployment{draft: draft, proof: proof, content: content}, diff, nil
 }
 
 func deploymentAttributeOutputSafe(output []byte, entry string) bool {
@@ -498,15 +440,7 @@ func validatedStagedDeploymentContent(
 		return nil, errDeploymentEditInvalid
 	}
 	content := file.Content
-	source, err := draft.candidate.WithSemanticallyEquivalentEntryContent(content)
-	if err != nil {
-		return nil, errDeploymentEditInvalid
-	}
-	project, err := compose.Load(ctx, source)
-	if err != nil {
-		return nil, errDeploymentEditInvalid
-	}
-	if _, err = project.ServiceSpec(draft.request.Service); err != nil {
+	if err = validateDeploymentContent(ctx, draft, content); err != nil {
 		return nil, errDeploymentEditInvalid
 	}
 
@@ -528,135 +462,107 @@ func deploymentTreeContains(
 	return err == nil && bytes.Equal(actual, content)
 }
 
-type deploymentEntryOperations struct {
-	openRoot      func(string) (*os.Root, error)
-	lstat         func(*os.Root, string) (os.FileInfo, error)
-	readFile      func(*os.Root, string) ([]byte, error)
-	openFile      func(*os.Root, string, os.FileMode) (*os.File, error)
-	writeFile     func(*os.File, []byte) (int, error)
-	syncFile      func(*os.File) error
-	closeFile     func(*os.File) error
-	rename        func(*os.Root, string, string) error
-	openDirectory func(*os.Root, string) (*os.File, error)
-	remove        func(*os.Root, string) error
-	closeRoot     func(*os.Root) error
-}
-
-func defaultDeploymentEntryOperations() deploymentEntryOperations {
-	return deploymentEntryOperations{
-		openRoot: os.OpenRoot,
-		lstat:    (*os.Root).Lstat,
-		readFile: (*os.Root).ReadFile,
-		openFile: func(root *os.Root, name string, mode os.FileMode) (*os.File, error) {
-			return root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-		},
-		writeFile: (*os.File).Write,
-		syncFile:  (*os.File).Sync,
-		closeFile: (*os.File).Close,
-		rename:    (*os.Root).Rename,
-		openDirectory: func(root *os.Root, name string) (*os.File, error) {
-			return root.Open(name)
-		},
-		remove:    (*os.Root).Remove,
-		closeRoot: (*os.Root).Close,
-	}
-}
-
-func replaceDeploymentEntry(
-	repository string,
-	entry string,
-	before []byte,
-	after []byte,
-) (published bool, returnErr error) {
-	return replaceDeploymentEntryWithOperations(
-		repository, entry, before, after, defaultDeploymentEntryOperations(),
+func rollbackDeploymentEdit(ctx context.Context, draft tuiDeploymentDraft) (returnErr error) {
+	return rollbackDeploymentEditWith(
+		ctx, draft, replaceDeploymentEntry, defaultDeploymentGitFileOperations(),
 	)
 }
 
-//nolint:cyclop,funlen // Each injected filesystem step contributes to the same atomic publication proof.
-func replaceDeploymentEntryWithOperations(
-	repository string,
-	entry string,
-	before []byte,
-	after []byte,
-	operations deploymentEntryOperations,
-) (published bool, returnErr error) {
-	root, err := operations.openRoot(repository)
+//nolint:cyclop,funlen // Index lock ownership, worktree compensation, and publication form one rollback transaction.
+func rollbackDeploymentEditWith(
+	ctx context.Context,
+	draft tuiDeploymentDraft,
+	replace func(string, string, []byte, []byte) (bool, error),
+	operations deploymentGitFileOperations,
+) (returnErr error) {
+	indexPath, err := absoluteGitPath(ctx, draft.repository, "index")
 	if err != nil {
-		return false, errDeploymentEditInvalid
+		return errDeploymentEditInvalid
 	}
-	defer func() { returnErr = errors.Join(returnErr, operations.closeRoot(root)) }()
-	name := filepath.FromSlash(entry)
-	info, err := operations.lstat(root, name)
-	if err != nil || !info.Mode().IsRegular() {
-		return false, errDeploymentEditInvalid
-	}
-	current, err := operations.readFile(root, name)
-	if err != nil || !bytes.Equal(current, before) {
-		return false, errDeploymentEditInvalid
-	}
-	directory := filepath.Dir(name)
-	temporary := filepath.Join(directory, "."+filepath.Base(name)+".maniud-"+rand.Text())
-	file, err := operations.openFile(root, temporary, info.Mode().Perm())
+	originalDigest, err := createDeploymentIndexLockWithOperations(indexPath, operations)
 	if err != nil {
-		return false, fmt.Errorf("create deployment edit: %w", err)
+		return err
 	}
+	lockPath := indexPath + ".lock"
+	lockOwned := true
 	defer func() {
-		if !published {
-			returnErr = errors.Join(returnErr, operations.remove(root, temporary))
+		if !lockOwned {
+			return
+		}
+		if removeErr := operations.remove(lockPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			returnErr = errors.Join(returnErr, removeErr)
 		}
 	}()
-	written, writeErr := operations.writeFile(file, after)
-	if writeErr == nil && written != len(after) {
-		writeErr = io.ErrShortWrite
+
+	head, err := resolveGitObject(ctx, draft.repository, "HEAD^{commit}")
+	if err != nil || head != draft.base.head {
+		return errDeploymentEditInvalid
 	}
-	syncErr := operations.syncFile(file)
-	closeErr := operations.closeFile(file)
-	if writeErr != nil || syncErr != nil || closeErr != nil {
-		return false, errors.Join(writeErr, syncErr, closeErr)
-	}
-	if err = operations.rename(root, temporary, name); err != nil {
-		return false, fmt.Errorf("publish deployment edit: %w", err)
-	}
-	published = true
-	directoryFile, err := operations.openDirectory(root, directory)
+	indexTree, err := deploymentIndexTree(ctx, draft.repository, lockPath)
 	if err != nil {
-		return true, fmt.Errorf("open deployment edit directory: %w", err)
+		return err
 	}
-	syncErr = operations.syncFile(directoryFile)
-	closeErr = operations.closeFile(directoryFile)
-	if syncErr != nil || closeErr != nil {
-		return true, errors.Join(syncErr, closeErr)
-	}
-	current, err = operations.readFile(root, name)
-	if err != nil || !bytes.Equal(current, after) {
-		return true, errDeploymentEditInvalid
-	}
-
-	return true, nil
-}
-
-func rollbackDeploymentEdit(ctx context.Context, draft tuiDeploymentDraft) error {
-	_, resetErr := runGit(
-		ctx, draft.repository, "--attr-source="+draft.base.tree,
-		"reset", "--quiet", "HEAD", "--", draft.entry,
+	baseEntry, baseFound, baseErr := readGitTreeEntry(ctx, draft.repository, draft.base.tree, draft.entry)
+	confirmedEntry, confirmedFound, confirmedErr := readGitTreeEntry(
+		ctx, draft.repository, draft.confirmation.expectedTree, draft.entry,
 	)
-	_, replaceErr := replaceDeploymentEntry(
+	indexEntry, indexFound, indexErr := readGitTreeEntry(ctx, draft.repository, indexTree, draft.entry)
+	if baseErr != nil || confirmedErr != nil || indexErr != nil || !baseFound || !confirmedFound || !indexFound {
+		return errors.Join(errDeploymentEditInvalid, baseErr, confirmedErr, indexErr)
+	}
+	indexChanged := indexEntry == confirmedEntry
+	indexTargetDrifted := !indexChanged && indexEntry != baseEntry
+	if indexChanged {
+		if _, err = runGitProcess(
+			ctx, draft.repository, false, nil, []string{"GIT_INDEX_FILE=" + lockPath},
+			"reset", "--quiet", draft.base.tree, "--", draft.entry,
+		); err != nil {
+			return err
+		}
+		indexTree, err = deploymentIndexTree(ctx, draft.repository, lockPath)
+		resetEntry, resetFound, resetErr := readGitTreeEntry(ctx, draft.repository, indexTree, draft.entry)
+		if err != nil || resetErr != nil || !resetFound || resetEntry != baseEntry {
+			return errors.Join(errDeploymentEditInvalid, err, resetErr)
+		}
+	}
+
+	_, replaceErr := replace(
 		draft.repository, draft.entry, draft.candidate.Content, draft.source.Content,
 	)
-	state, stateErr := cleanGitTreeWithAttributeSource(ctx, draft.repository, draft.base.tree)
-	if stateErr == nil && state != draft.base {
-		stateErr = errDeploymentEditInvalid
+	if indexTargetDrifted {
+		return errors.Join(errDeploymentEditInvalid, replaceErr)
+	}
+	if replaceErr != nil {
+		return replaceErr
+	}
+	currentDigest, digestErr := deploymentIndexDigestWithOperations(indexPath, operations)
+	head, headErr := resolveGitObject(ctx, draft.repository, "HEAD^{commit}")
+	if digestErr != nil || currentDigest != originalDigest || headErr != nil || head != draft.base.head {
+		_, compensateErr := replace(
+			draft.repository, draft.entry, draft.source.Content, draft.candidate.Content,
+		)
+
+		return errors.Join(errDeploymentEditInvalid, digestErr, headErr, compensateErr)
+	}
+	if indexChanged {
+		if err = operations.rename(lockPath, indexPath); err != nil {
+			_, compensateErr := replace(
+				draft.repository, draft.entry, draft.source.Content, draft.candidate.Content,
+			)
+
+			return errors.Join(err, compensateErr)
+		}
+		lockOwned = false
 	}
 
-	return errors.Join(resetErr, replaceErr, stateErr)
+	return nil
 }
 
 func (workspace *tuiDeploymentWorkspace) Commit(
 	ctx context.Context,
 	message string,
 	unsigned bool,
-) (tui.DeploymentCommitResult, error) {
+) (tui.CommitResult, error) {
 	return workspace.commitWith(ctx, message, unsigned, commitTUIStagedProof)
 }
 
@@ -666,20 +572,24 @@ func (workspace *tuiDeploymentWorkspace) commitWith(
 	message string,
 	unsigned bool,
 	commit func(context.Context, tuiStagedProof, string, bool) error,
-) (tui.DeploymentCommitResult, error) {
+) (tui.CommitResult, error) {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged == nil || !validTUICommitMessage(message) {
-		return tui.DeploymentCommitResult{}, errDeploymentEditInvalid
+		return tui.CommitResult{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
 	staged := *workspace.staged
 	if !verifyTUIStagedProof(ctx, staged.proof) ||
 		!deploymentTreeContains(ctx, staged.proof, staged.draft.entry, staged.content) {
-		return tui.DeploymentCommitResult{}, errDeploymentEditInvalid
+		return tui.CommitResult{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
 	if !unsigned {
 		if err := validateGitProcessConfiguration(ctx, staged.draft.repository); err != nil {
-			return tui.DeploymentCommitResult{}, err
+			return tui.CommitResult{Outcome: tui.CommitNeedsUnsignedApproval}, nil
 		}
 	}
 
@@ -695,33 +605,46 @@ func (workspace *tuiDeploymentWorkspace) settleCommit(
 	message string,
 	unsigned bool,
 	commitErr error,
-) (tui.DeploymentCommitResult, error) {
+) (tui.CommitResult, error) {
 	proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
 	defer cancel()
 	committedHead, unchanged := proveTUIStagedCommit(proofCtx, staged.proof, message, !unsigned)
-	if committedHead != "" && deploymentTreeContains(
+	committed := committedHead != "" && deploymentTreeContains(
 		proofCtx, staged.proof, staged.draft.entry, staged.content,
-	) {
+	)
+	if committed {
 		workspace.staged = nil
 		workspace.draft = nil
 		request, requestErr := workspace.committedRequest(proofCtx, staged, committedHead)
 		if requestErr != nil {
-			return tui.DeploymentCommitResult{Committed: true, ValidationUnavailable: true}, nil
+			return tui.CommitResult{Outcome: tui.CommitValidationUnavailable}, nil
 		}
 
-		return tui.DeploymentCommitResult{Request: request, Committed: true}, nil
+		return tui.CommitResult{Request: request, Outcome: tui.CommitSucceeded}, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return tui.DeploymentCommitResult{}, fmt.Errorf("commit deployment edit: %w", err)
+	cancelErr := ctx.Err()
+	needsUnsigned, outcomeErr := resolveUnsettledTUICommit(cancelErr, commitErr, unsigned, unchanged)
+	if outcomeErr != nil {
+		if !unchanged {
+			return tui.CommitResult{}, publicDeploymentActionError(
+				outcomeErr, tui.DeploymentWorktreeUnknown,
+			)
+		}
+
+		return tui.CommitResult{}, publicDeploymentActionError(
+			outcomeErr, tui.DeploymentCommitFailed,
+		)
 	}
-	if !unsigned && unchanged {
-		return tui.DeploymentCommitResult{NeedsUnsignedApproval: true}, nil
-	}
-	if commitErr != nil {
-		return tui.DeploymentCommitResult{}, commitErr
+	if needsUnsigned {
+		return tui.CommitResult{Outcome: tui.CommitNeedsUnsignedApproval}, nil
 	}
 
-	return tui.DeploymentCommitResult{}, errDeploymentEditInvalid
+	code := tui.DeploymentCommitFailed
+	if !unchanged {
+		code = tui.DeploymentWorktreeUnknown
+	}
+
+	return tui.CommitResult{}, publicDeploymentActionError(errDeploymentEditInvalid, code)
 }
 
 //nolint:funcorder // Readback stays next to Commit because it proves that method's only successful result.
@@ -773,19 +696,25 @@ func (workspace *tuiDeploymentWorkspace) Discard(ctx context.Context) error {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged == nil {
+		workspace.draft = nil
+
 		return nil
 	}
 	staged := *workspace.staged
-	if !verifyTUIStagedProof(ctx, staged.proof) ||
+	if staged.proof.repository != staged.draft.repository || staged.proof.base != staged.draft.base ||
+		!slices.Equal(staged.proof.paths, []string{staged.draft.entry}) || staged.proof.indexStatus != "M" ||
+		staged.proof.attributeSource != staged.draft.base.tree ||
+		staged.proof.expectedTree != staged.draft.confirmation.expectedTree ||
 		!deploymentTreeContains(ctx, staged.proof, staged.draft.entry, staged.content) {
-		return errDeploymentEditInvalid
+		return publicDeploymentActionError(errDeploymentEditInvalid, tui.DeploymentWorktreeUnknown)
 	}
 	rescueCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
 	defer cancel()
 	if err := rollbackDeploymentEdit(rescueCtx, staged.draft); err != nil {
-		return err
+		return publicDeploymentActionError(err, tui.DeploymentWorktreeUnknown)
 	}
 	workspace.staged = nil
+	workspace.draft = &staged.draft
 
 	return nil
 }

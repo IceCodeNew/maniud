@@ -1,13 +1,14 @@
 package cli
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/IceCodeNew/maniud/containerconfig"
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/tui"
@@ -25,14 +26,21 @@ func (workspace *tuiDeploymentWorkspace) History(
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged != nil {
-		return nil, errDeploymentEditInvalid
+		return nil, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
 	_, repository, entry, _, err := workspace.openRequest(ctx, request)
 	if err != nil {
-		return nil, err
+		return nil, publicDeploymentActionError(err, tui.DeploymentPreconditionFailed)
 	}
 
-	return deploymentHistory(ctx, repository, entry)
+	history, err := deploymentHistory(ctx, repository, entry)
+	if err != nil {
+		return nil, publicDeploymentActionError(err, tui.DeploymentHistoryUnavailable)
+	}
+
+	return history, nil
 }
 
 func deploymentHistory(
@@ -97,7 +105,6 @@ func parseDeploymentHistory(output []byte) ([]tui.DeploymentHistoryEntry, error)
 	return history, nil
 }
 
-//nolint:cyclop // Revision membership, blob identity, Compose validation, and scope proof must converge together.
 func (workspace *tuiDeploymentWorkspace) PreviewRestore(
 	ctx context.Context,
 	request application.Request,
@@ -106,54 +113,109 @@ func (workspace *tuiDeploymentWorkspace) PreviewRestore(
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.staged != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			errDeploymentEditInvalid, tui.DeploymentPreconditionFailed,
+		)
 	}
+	workspace.draft = nil
 	source, repository, entry, base, err := workspace.openRequest(ctx, request)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, err
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
 	}
+	candidate, proposed, err := workspace.deploymentRestoreCandidate(
+		ctx, request, source, repository, entry, base, revision,
+	)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentHistoryEntryInvalid,
+		)
+	}
+	current, err := deploymentServiceSpec(ctx, source, request.Service)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
+	}
+	scope, err := workspace.requestScope(ctx, request, source)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
+	}
+	draft := tuiDeploymentDraft{
+		request: request, source: source, candidate: candidate, repository: repository,
+		entry: entry, base: base, fields: application.DeploymentFields(),
+		current: current, proposed: proposed, restore: revision, scope: scope,
+	}
+
+	preview, err := workspace.confirmDeploymentPreview(ctx, draft)
+	if err != nil {
+		return tui.DeploymentEditPreview{}, publicDeploymentActionError(
+			err, tui.DeploymentPreconditionFailed,
+		)
+	}
+
+	return preview, nil
+}
+
+func (workspace *tuiDeploymentWorkspace) deploymentRestoreCandidate(
+	ctx context.Context,
+	request application.Request,
+	source compose.Source,
+	repository string,
+	entry string,
+	base gitTreeState,
+	revision string,
+) (compose.Source, containerconfig.Spec, error) {
 	history, err := deploymentHistory(ctx, repository, entry)
 	if err != nil || !slices.ContainsFunc(history, func(item tui.DeploymentHistoryEntry) bool {
 		return item.Revision == revision
 	}) {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return compose.Source{}, containerconfig.Spec{}, errors.Join(errDeploymentEditInvalid, err)
 	}
 	tree, err := resolveGitObject(ctx, repository, revision+"^{tree}")
 	if err != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return compose.Source{}, containerconfig.Spec{}, err
 	}
 	treeEntry, found, err := readGitTreeEntry(ctx, repository, tree, entry)
 	if err != nil || !found || !treeEntry.regularFile() {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return compose.Source{}, containerconfig.Spec{}, errors.Join(errDeploymentEditInvalid, err)
 	}
 	content, err := readGitBlob(ctx, repository, treeEntry.object)
-	if err != nil || bytes.Equal(content, source.Content) {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+	if err != nil {
+		return compose.Source{}, containerconfig.Spec{}, err
 	}
 	candidate, err := captureDeploymentRestore(
 		ctx, source, base.tree, content, workspace.environment, workspace.runtimeBase,
 	)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, err
+		return compose.Source{}, containerconfig.Spec{}, err
 	}
-	project, err := compose.Load(ctx, candidate)
+	proposed, err := deploymentServiceSpec(ctx, candidate, request.Service)
 	if err != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
+		return compose.Source{}, containerconfig.Spec{}, err
 	}
-	if _, err = project.ServiceSpec(request.Service); err != nil {
-		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
-	}
-	scope, err := workspace.requestScope(ctx, request, source)
-	if err != nil {
-		return tui.DeploymentEditPreview{}, err
-	}
-	draft := tuiDeploymentDraft{
-		request: request, source: source, candidate: candidate, repository: repository,
-		entry: entry, base: base, restore: revision, scope: scope,
-	}
-	workspace.draft = &draft
 
-	return publicDeploymentPreview(draft), nil
+	return candidate, proposed, nil
+}
+
+func deploymentServiceSpec(
+	ctx context.Context,
+	source compose.Source,
+	service string,
+) (containerconfig.Spec, error) {
+	project, err := compose.Load(ctx, source)
+	if err != nil {
+		return containerconfig.Spec{}, errDeploymentEditInvalid
+	}
+	spec, err := project.ServiceSpec(service)
+	if err != nil {
+		return containerconfig.Spec{}, errDeploymentEditInvalid
+	}
+
+	return spec, nil
 }
 
 func captureDeploymentRestore(
