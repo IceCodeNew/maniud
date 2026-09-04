@@ -1,6 +1,13 @@
 package docker
 
-import containertypes "github.com/moby/moby/api/types/container"
+import (
+	"math"
+
+	containertypes "github.com/moby/moby/api/types/container"
+
+	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/domain"
+)
 
 // ContainerState is Docker's typed lifecycle state at one inspect snapshot.
 type ContainerState string
@@ -71,4 +78,52 @@ func removingState(state *containertypes.State) bool {
 
 func deadState(state *containertypes.State) bool {
 	return stoppedState(state) && state.Dead
+}
+
+func dockerWorkloadHealth(
+	observed *containertypes.Health,
+	configured *domain.Healthcheck,
+) (application.WorkloadHealth, bool) {
+	active := configured != nil && !configured.Disabled
+	if !active {
+		return inactiveDockerWorkloadHealth(observed)
+	}
+	if observed == nil || observed.Status == "" && observed.FailingStreak == 0 {
+		return application.WorkloadHealth{Status: application.WorkloadHealthUnknown}, true
+	}
+	if observed.FailingStreak < 0 || uint64(observed.FailingStreak) > math.MaxUint32 {
+		return application.WorkloadHealth{}, false
+	}
+
+	status, valid := dockerHealthStatus(observed.Status)
+	if !valid {
+		return application.WorkloadHealth{}, false
+	}
+
+	return application.WorkloadHealth{
+		Status: status, FailingStreak: uint32(observed.FailingStreak),
+	}, true
+}
+
+func inactiveDockerWorkloadHealth(observed *containertypes.Health) (application.WorkloadHealth, bool) {
+	if observed != nil && (observed.Status != "" || observed.FailingStreak != 0 || len(observed.Log) != 0) {
+		return application.WorkloadHealth{}, false
+	}
+
+	return application.WorkloadHealth{Status: application.WorkloadHealthAbsent}, true
+}
+
+func dockerHealthStatus(status containertypes.HealthStatus) (application.WorkloadHealthStatus, bool) {
+	switch status {
+	case containertypes.Starting:
+		return application.WorkloadHealthStarting, true
+	case containertypes.Healthy:
+		return application.WorkloadHealthHealthy, true
+	case containertypes.Unhealthy:
+		return application.WorkloadHealthUnhealthy, true
+	case containertypes.NoHealthcheck:
+		return "", false
+	default:
+		return "", false
+	}
 }

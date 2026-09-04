@@ -146,6 +146,7 @@ func existingWorkloadProbe(probe ContainerProbe) application.WorkloadTransitionP
 			Lifecycle:           applicationWorkloadLifecycle(container.State),
 			Ownership:           container.Ownership,
 		},
+		Health: container.Health,
 	}
 }
 

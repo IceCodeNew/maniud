@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IceCodeNew/maniud/containerconfig"
 )
@@ -71,6 +72,10 @@ func inspectionFromDocument(
 	if !valid {
 		return Inspection{}, validationError(containerconfig.ValidationInvalidValue, "/State")
 	}
+	startedAt, valid := observedStartedAt(payload.State.StartedAt)
+	if !valid {
+		return Inspection{}, validationError(containerconfig.ValidationInvalidValue, "/State/StartedAt")
+	}
 	spec, runtimeMounts, err := observedSpec(
 		payload.ID,
 		payload.Name,
@@ -81,13 +86,58 @@ func inspectionFromDocument(
 	if err != nil {
 		return Inspection{}, err
 	}
+	health, valid := observedHealth(payload.State.Health, spec.Healthcheck)
+	if !valid {
+		return Inspection{}, validationError(containerconfig.ValidationInvalidValue, "/State/Health")
+	}
 
 	return Inspection{
 		ID: payload.ID, Name: payload.Name, ImageID: payload.Image,
-		ImageReference: payload.ImageName, ImageDigest: payload.ImageDigest,
-		State: state, Spec: spec, RuntimeMounts: runtimeMounts,
+		StartedAt: startedAt, ImageReference: payload.ImageName, ImageDigest: payload.ImageDigest,
+		State: state, Health: health, Spec: spec, RuntimeMounts: runtimeMounts,
 		RawLabels: cloneStringMap(payload.Config.Labels),
 	}, nil
+}
+
+func observedStartedAt(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, true
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return startedAt.UTC(), true
+}
+
+//nolint:cyclop // Native health states and configured-health presence form one strict projection boundary.
+func observedHealth(value *inspectHealth, configured *containerconfig.Healthcheck) (Health, bool) {
+	active := configured != nil && !configured.Disabled
+	if value == nil || value.Status == "" && value.FailingStreak == 0 {
+		if active {
+			return Health{Status: HealthUnknown}, true
+		}
+
+		return Health{Status: HealthAbsent}, true
+	}
+	if value.Status == "" || value.FailingStreak < 0 || uint64(value.FailingStreak) > math.MaxUint32 || !active {
+		return Health{}, false
+	}
+
+	health := Health{FailingStreak: uint32(value.FailingStreak)}
+	switch value.Status {
+	case "starting":
+		health.Status = HealthStarting
+	case "healthy":
+		health.Status = HealthHealthy
+	case "unhealthy":
+		health.Status = HealthUnhealthy
+	default:
+		return Health{}, false
+	}
+
+	return health, true
 }
 
 func validID(value string) bool {

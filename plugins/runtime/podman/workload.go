@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	podmanconfig "github.com/IceCodeNew/maniud/containerconfig/podman"
 
@@ -61,12 +62,14 @@ const (
 type Container struct {
 	ID               string
 	Name             string
+	StartedAt        time.Time
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
 	WorkloadSpec     domain.WorkloadSpec
 	RuntimeMounts    []domain.RuntimeMount
 	State            ContainerState
+	Health           application.WorkloadHealth
 	Ownership        domain.WorkloadOwnership
 }
 
@@ -193,11 +196,13 @@ func podmanWorkloadObservation(
 		return application.WorkloadObservation{
 			ID:                   probe.Container.ID,
 			State:                application.WorkloadObservationPresent,
+			StartedAt:            probe.Container.StartedAt,
 			ConfigurationDigest:  containerConfigurationDigest(probe.Container),
 			StorageDigest:        storageDigest,
 			RuntimeMounts:        slices.Clone(probe.Container.RuntimeMounts),
 			ConfigurationMatches: containerConfigurationMatches(probe.Container, workload, apiVersion),
-			Running:              probe.Container.State == ContainerRunning,
+			Lifecycle:            podmanWorkloadLifecycle(probe.Container.State),
+			Health:               probe.Container.Health,
 			Ownership:            probe.Container.Ownership,
 		}, nil
 	case ContainerProbeUnknown:

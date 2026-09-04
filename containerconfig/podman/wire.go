@@ -20,11 +20,19 @@ type inspectDocument struct {
 
 //nolint:tagliatelle // Native Libpod inspect owns these established wire names.
 type inspectState struct {
-	Status     string `json:"Status"`
-	Running    bool   `json:"Running"`
-	Paused     bool   `json:"Paused"`
-	Restarting bool   `json:"Restarting"`
-	Dead       bool   `json:"Dead"`
+	Status     string         `json:"Status"`
+	Running    bool           `json:"Running"`
+	Paused     bool           `json:"Paused"`
+	Restarting bool           `json:"Restarting"`
+	Dead       bool           `json:"Dead"`
+	StartedAt  string         `json:"StartedAt"`
+	Health     *inspectHealth `json:"Health"`
+}
+
+//nolint:tagliatelle // Native Libpod health state owns these established wire names.
+type inspectHealth struct {
+	Status        string `json:"Status"`
+	FailingStreak int64  `json:"FailingStreak"`
 }
 
 //nolint:tagliatelle // Native Libpod health configuration owns these established wire names.

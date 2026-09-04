@@ -5,6 +5,7 @@ package podman
 import (
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/IceCodeNew/maniud/containerconfig"
 )
@@ -68,6 +69,28 @@ const (
 	StateExited
 )
 
+// HealthStatus is the bounded health state from one native inspect snapshot.
+type HealthStatus uint8
+
+const (
+	// HealthUnknown means an active healthcheck has no observable verdict.
+	HealthUnknown HealthStatus = iota
+	// HealthAbsent means the container has no active healthcheck.
+	HealthAbsent
+	// HealthStarting means the healthcheck has not reached a verdict.
+	HealthStarting
+	// HealthHealthy means the native healthcheck is passing.
+	HealthHealthy
+	// HealthUnhealthy means the native healthcheck is failing.
+	HealthUnhealthy
+)
+
+// Health contains bounded native health metadata without command output.
+type Health struct {
+	Status        HealthStatus
+	FailingStreak uint32
+}
+
 // RuntimeMount contains inspect-only identity that cannot be reconstructed
 // from portable configuration, including anonymous-volume names and sources.
 type RuntimeMount struct {
@@ -84,10 +107,12 @@ type RuntimeMount struct {
 type Inspection struct {
 	ID             string
 	Name           string
+	StartedAt      time.Time
 	ImageID        string
 	ImageReference string
 	ImageDigest    string
 	State          State
+	Health         Health
 	Spec           containerconfig.Spec
 	RuntimeMounts  []RuntimeMount
 	RawLabels      map[string]string

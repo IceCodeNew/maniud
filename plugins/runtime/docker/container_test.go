@@ -333,7 +333,8 @@ func TestProbeContainerObservesUnmanagedID(t *testing.T) {
 
 	probe, err := client.ProbeContainer(context.Background(), testContainerID)
 	if err != nil || probe.State != ContainerProbeObserved ||
-		probe.Container.Ownership.Status != domain.OwnershipUnmanaged || probe.Container.Running {
+		probe.Container.Ownership.Status != domain.OwnershipUnmanaged ||
+		probe.Container.State != ContainerCreated {
 		t.Fatalf("ProbeContainer(unmanaged) = %#v, %v", probe, err)
 	}
 }

@@ -305,6 +305,7 @@ func podmanWorkloadEffectEvidence(
 		RuntimeMounts:        slices.Clone(container.RuntimeMounts),
 		ConfigurationMatches: containerConfigurationMatches(container, workload, apiVersion),
 		Lifecycle:            podmanWorkloadLifecycle(container.State),
+		Health:               container.Health,
 		Ownership:            container.Ownership,
 	}, true
 }
