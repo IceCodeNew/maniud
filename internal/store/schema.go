@@ -11,7 +11,7 @@ type rowQueryer interface {
 
 const (
 	currentSchemaVersion = 1
-	currentObjectCount   = 7
+	currentObjectCount   = 8
 	schemaTableName      = "schema_version"
 	schemaTableSQL       = "CREATE TABLE schema_version (" +
 		"singleton INTEGER PRIMARY KEY CHECK (singleton = 1), " +
@@ -34,6 +34,9 @@ const (
 		"(typeof(effective_digest) = 'blob' AND length(effective_digest) = 32 AND effective_digest != zeroblob(32)), " +
 		"execution_digest BLOB NOT NULL CHECK " +
 		"(typeof(execution_digest) = 'blob' AND length(execution_digest) = 32 AND execution_digest != zeroblob(32)), " +
+		"repository_version INTEGER, " +
+		"repository_scope_digest BLOB, " +
+		"repository_location_digest BLOB, " +
 		"base_transaction_id BLOB CHECK (base_transaction_id IS NULL OR " +
 		"(typeof(base_transaction_id) = 'blob' AND length(base_transaction_id) = 16)), " +
 		"predecessor_workload_id TEXT CHECK (predecessor_workload_id IS NULL OR " +
@@ -44,6 +47,15 @@ const (
 		"FOREIGN KEY (service_id) REFERENCES writer_leases(service_id), " +
 		"FOREIGN KEY (base_transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id), " +
+		"CHECK ((repository_version IS NULL AND repository_scope_digest IS NULL " +
+		"AND repository_location_digest IS NULL) OR " +
+		"(repository_version IS NOT NULL AND repository_scope_digest IS NOT NULL " +
+		"AND repository_location_digest IS NOT NULL " +
+		"AND repository_version = 1 AND typeof(repository_version) = 'integer' " +
+		"AND typeof(repository_scope_digest) = 'blob' AND length(repository_scope_digest) = 32 " +
+		"AND repository_scope_digest != zeroblob(32) " +
+		"AND typeof(repository_location_digest) = 'blob' AND length(repository_location_digest) = 32 " +
+		"AND repository_location_digest != zeroblob(32))), " +
 		"CHECK ((kind = 'bootstrap' AND base_transaction_id IS NULL AND predecessor_workload_id IS NULL) OR " +
 		"(kind = 'adopt' AND base_transaction_id IS NULL AND predecessor_workload_id IS NOT NULL) OR " +
 		"(kind = 'upgrade' AND base_transaction_id IS NOT NULL AND predecessor_workload_id IS NOT NULL))) " +
@@ -51,6 +63,10 @@ const (
 	journalUnresolvedIndexName = "journal_one_unresolved_transaction_per_service"
 	journalUnresolvedIndexSQL  = "CREATE UNIQUE INDEX journal_one_unresolved_transaction_per_service " +
 		"ON journal_transactions(service_id) WHERE state IN ('active', 'degraded')"
+	journalRepositoryInventoryIndexName = "journal_unresolved_repository_inventory"
+	journalRepositoryInventoryIndexSQL  = "CREATE INDEX journal_unresolved_repository_inventory " +
+		"ON journal_transactions(repository_scope_digest, repository_location_digest, transaction_id) " +
+		"WHERE state IN ('active', 'degraded')"
 	journalActionTableName = "journal_actions"
 	journalActionTableSQL  = "CREATE TABLE journal_actions (" +
 		"transaction_id BLOB NOT NULL CHECK (typeof(transaction_id) = 'blob' AND length(transaction_id) = 16), " +
@@ -104,8 +120,8 @@ const (
 	initialSchemaSQL = schemaTableSQL + "; " +
 		"INSERT INTO schema_version (singleton, version) VALUES (1, 1); " +
 		writerLeaseTableSQL + "; " + journalTransactionTableSQL + "; " +
-		journalUnresolvedIndexSQL + "; " + journalActionTableSQL + "; " +
-		appliedServiceTableSQL + "; " + backupIndexTableSQL
+		journalUnresolvedIndexSQL + "; " + journalRepositoryInventoryIndexSQL + "; " +
+		journalActionTableSQL + "; " + appliedServiceTableSQL + "; " + backupIndexTableSQL
 )
 
 func ensureInitialSchema(ctx context.Context, database *sql.DB) error {
@@ -155,28 +171,34 @@ func initializeSchema(ctx context.Context, database *sql.DB) error {
 }
 
 type schemaFacts struct {
-	objectCount           int
-	schemaDefinition      string
-	writerLeaseDefinition string
-	transactionDefinition string
-	unresolvedDefinition  string
-	actionDefinition      string
-	appliedDefinition     string
-	backupDefinition      string
-	schemaRows            int
-	invalidSchemaRows     int
+	objectCount                   int
+	schemaDefinition              string
+	writerLeaseDefinition         string
+	transactionDefinition         string
+	unresolvedDefinition          string
+	repositoryInventoryDefinition string
+	actionDefinition              string
+	appliedDefinition             string
+	backupDefinition              string
+	schemaRows                    int
+	invalidSchemaRows             int
 }
 
 func (facts schemaFacts) valid() bool {
 	return facts.objectCount == currentObjectCount &&
-		facts.schemaDefinition == schemaTableSQL &&
+		facts.definitionsValid() &&
+		facts.schemaRows == 1 && facts.invalidSchemaRows == 0
+}
+
+func (facts schemaFacts) definitionsValid() bool {
+	return facts.schemaDefinition == schemaTableSQL &&
 		facts.writerLeaseDefinition == writerLeaseTableSQL &&
 		facts.transactionDefinition == journalTransactionTableSQL &&
 		facts.unresolvedDefinition == journalUnresolvedIndexSQL &&
+		facts.repositoryInventoryDefinition == journalRepositoryInventoryIndexSQL &&
 		facts.actionDefinition == journalActionTableSQL &&
 		facts.appliedDefinition == appliedServiceTableSQL &&
-		facts.backupDefinition == backupIndexTableSQL &&
-		facts.schemaRows == 1 && facts.invalidSchemaRows == 0
+		facts.backupDefinition == backupIndexTableSQL
 }
 
 func validateSchema(ctx context.Context, database rowQueryer) error {
@@ -213,6 +235,8 @@ func readSchemaFacts(
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'journal_transactions'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'index' "+
 			" AND name = 'journal_one_unresolved_transaction_per_service'), ''), "+
+			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'index' "+
+			" AND name = 'journal_unresolved_repository_inventory'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'journal_actions'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'applied_services'), ''), "+
 			"coalesce((SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workload_backups'), ''), "+
@@ -226,6 +250,7 @@ func readSchemaFacts(
 		&facts.writerLeaseDefinition,
 		&facts.transactionDefinition,
 		&facts.unresolvedDefinition,
+		&facts.repositoryInventoryDefinition,
 		&facts.actionDefinition,
 		&facts.appliedDefinition,
 		&facts.backupDefinition,
@@ -271,6 +296,15 @@ SELECT
     typeof(source_digest) != 'blob' OR length(source_digest) != 32 OR source_digest = zeroblob(32) OR
     typeof(effective_digest) != 'blob' OR length(effective_digest) != 32 OR effective_digest = zeroblob(32) OR
     typeof(execution_digest) != 'blob' OR length(execution_digest) != 32 OR execution_digest = zeroblob(32) OR
+    ((repository_version IS NULL OR repository_scope_digest IS NULL OR repository_location_digest IS NULL) AND
+      (repository_version IS NOT NULL OR repository_scope_digest IS NOT NULL OR
+        repository_location_digest IS NOT NULL)) OR
+    (repository_version IS NOT NULL AND
+      (typeof(repository_version) != 'integer' OR repository_version != 1 OR
+        typeof(repository_scope_digest) != 'blob' OR length(repository_scope_digest) != 32 OR
+          repository_scope_digest = zeroblob(32) OR
+        typeof(repository_location_digest) != 'blob' OR length(repository_location_digest) != 32 OR
+          repository_location_digest = zeroblob(32))) OR
     (base_transaction_id IS NOT NULL AND
       (typeof(base_transaction_id) != 'blob' OR length(base_transaction_id) != 16)) OR
     (predecessor_workload_id IS NOT NULL AND

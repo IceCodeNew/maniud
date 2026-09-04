@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,6 +20,8 @@ const (
 	testRepositoryEntry     = "deploy/compose.yaml"
 	testRootRepositoryEntry = "compose.yaml"
 	testRuntimePath         = "data"
+	testRepositoryBranch    = "main"
+	testRepositoryRemote    = "https://example.com/repo.git"
 )
 
 var errRepositoryFixture = errors.New("repository fixture path is unavailable")
@@ -112,6 +115,131 @@ func TestRepositoryDigestBindsEntryDocument(t *testing.T) {
 	}
 }
 
+func TestRepositoryProvenanceBindsCanonicalGitInputs(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(string(filepath.Separator), "srv", "maniud")
+	remote := "https://example.com/team/desired.git"
+	scope, err := NewRepositoryScope(root, remote, testRepositoryBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	if !scope.Valid() || scope.Version != RepositoryProvenanceVersion ||
+		scope.Digest.String() != "sha256:18af3c4f7199d3dcaa57fd12af93af2a2b368dcf37752da6391ec0685db2f934" {
+		t.Fatalf("NewRepositoryScope() = %#v", scope)
+	}
+
+	source := domain.Hash([]byte("committed source"))
+	provenance, err := scope.Bind(testRepositoryEntry, source)
+	if err != nil {
+		t.Fatalf("RepositoryScope.Bind() error = %v", err)
+	}
+	if !provenance.ValidFor(source) || provenance.Scope != scope.Digest ||
+		provenance.Location.String() != "sha256:413f0373caea180d73b610357e5967796f7f6a299fb0130846796bd6cdb00fb1" {
+		t.Fatalf("RepositoryScope.Bind() = %#v", provenance)
+	}
+
+	assertRepositoryScopeInputs(t, scope, []struct {
+		root   string
+		remote string
+		branch string
+	}{
+		{root: filepath.Join(string(filepath.Separator), "srv", "other"), remote: remote, branch: testRepositoryBranch},
+		{root: root, remote: "https://example.com/team/other.git", branch: testRepositoryBranch},
+		{root: root, remote: "https://example.com/team/desired.git", branch: "release"},
+	})
+}
+
+func assertRepositoryScopeInputs(
+	t *testing.T,
+	scope RepositoryScope,
+	inputs []struct {
+		root   string
+		remote string
+		branch string
+	},
+) {
+	t.Helper()
+
+	for _, input := range inputs {
+		other, scopeErr := NewRepositoryScope(input.root, input.remote, input.branch)
+		if scopeErr != nil || other.Digest == scope.Digest {
+			t.Fatalf("NewRepositoryScope(%q, %q, %q) = %#v, %v", input.root, input.remote, input.branch, other, scopeErr)
+		}
+	}
+}
+
+func TestRepositoryProvenanceRejectsIncompleteInputs(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(string(filepath.Separator), "srv", "maniud")
+	assertInvalidRepositoryScopeInputs(t, []struct {
+		root   string
+		remote string
+		branch string
+	}{
+		{root: contractRelative, remote: testRepositoryRemote, branch: testRepositoryBranch},
+		{root: root + "/../maniud", remote: testRepositoryRemote, branch: testRepositoryBranch},
+		{root: root, remote: "", branch: testRepositoryBranch},
+		{root: root, remote: testRepositoryRemote, branch: ""},
+		{root: root, remote: "bad\x00remote", branch: testRepositoryBranch},
+		{root: root, remote: testRepositoryRemote, branch: string([]byte{0xff})},
+		{root: root, remote: strings.Repeat("x", maxSourceBytes+1), branch: testRepositoryBranch},
+	})
+
+	scope, err := NewRepositoryScope(root, testRepositoryRemote, testRepositoryBranch)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	assertInvalidRepositoryProvenance(t, scope)
+}
+
+func assertInvalidRepositoryScopeInputs(
+	t *testing.T,
+	inputs []struct {
+		root   string
+		remote string
+		branch string
+	},
+) {
+	t.Helper()
+
+	for _, input := range inputs {
+		scope, err := NewRepositoryScope(input.root, input.remote, input.branch)
+		if !errors.Is(err, ErrInvalidSource) || scope != (RepositoryScope{}) {
+			t.Fatalf("NewRepositoryScope(%q, %q, %q) = %#v, %v", input.root, input.remote, input.branch, scope, err)
+		}
+	}
+}
+
+func assertInvalidRepositoryProvenance(t *testing.T, scope RepositoryScope) {
+	t.Helper()
+
+	if _, locationErr := scope.Location("../outside.yaml"); !errors.Is(locationErr, ErrInvalidSource) {
+		t.Fatalf("RepositoryScope.Location(escaping) error = %v", locationErr)
+	}
+	provenance, bindErr := scope.Bind(testRepositoryEntry, domain.Digest{})
+	if !errors.Is(bindErr, ErrInvalidSource) || provenance != (RepositoryProvenance{}) {
+		t.Fatalf("RepositoryScope.Bind(empty source) = %#v, %v", provenance, bindErr)
+	}
+	if _, locationErr := (RepositoryScope{}).Location(testRepositoryEntry); !errors.Is(locationErr, ErrInvalidSource) {
+		t.Fatalf("RepositoryScope.Location(invalid scope) error = %v", locationErr)
+	}
+	if (RepositoryScope{Version: RepositoryProvenanceVersion, Digest: domain.Digest{}}).Valid() ||
+		(RepositoryScope{Version: RepositoryProvenanceVersion + 1, Digest: scope.Digest}).Valid() {
+		t.Fatal("RepositoryScope.Valid() accepted incomplete or unknown evidence")
+	}
+
+	provenance, bindErr = scope.Bind(testRepositoryEntry, domain.Hash([]byte("source")))
+	if bindErr != nil {
+		t.Fatalf("RepositoryScope.Bind() error = %v", bindErr)
+	}
+	if provenance.ValidFor(domain.Hash([]byte("different"))) ||
+		(RepositoryProvenance{}).ValidFor(provenance.Source) {
+		t.Fatal("RepositoryProvenance.ValidFor() accepted incomplete or mismatched evidence")
+	}
+}
+
 func TestCaptureRepositorySourceRejectsUntrackedOrEscapingReferences(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +275,36 @@ func TestCaptureRepositorySourceRejectsUntrackedOrEscapingReferences(t *testing.
 		if !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("CaptureRepositorySource(%q) error = %v", content, err)
 		}
+	}
+}
+
+func TestCaptureRepositorySourcePreservesSafeParseDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	_, err := CaptureRepositorySource(
+		t.TempDir(),
+		testRootRepositoryEntry,
+		nil,
+		repositoryFixtureReader(map[string][]byte{
+			testRootRepositoryEntry: []byte("services:\n  api:\n    image: [\n"),
+		}),
+		func(string) (RepositoryPathSnapshot, error) {
+			return RepositoryPathSnapshot{}, errRepositoryFixture
+		},
+	)
+	diagnostic, ok := errors.AsType[*SourceDiagnosticError](err)
+	if !ok || diagnostic.File != testRootRepositoryEntry || diagnostic.Reason != DiagnosticYAMLSyntax ||
+		diagnostic.Line != 4 || diagnostic.Column != 1 {
+		t.Fatalf("CaptureRepositorySource() diagnostic = %#v, error %v", diagnostic, err)
+	}
+	_, _, diagnostic = repositoryDocumentReferencesDetailed([]byte(`services:
+  base: &base
+    image: busybox
+  api: *base
+`), ".")
+	if diagnostic == nil || diagnostic.Reason != DiagnosticYAMLUnsupported ||
+		diagnostic.Line != 4 || diagnostic.Column != 8 {
+		t.Fatalf("unsupported YAML diagnostic = %#v", diagnostic)
 	}
 }
 

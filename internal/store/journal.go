@@ -47,28 +47,36 @@ const (
 // TransactionIntent binds one transaction to its desired and runtime execution
 // identities without persisting recoverable workload configuration.
 type TransactionIntent struct {
-	Kind                  TransactionKind
-	Runtime               domain.RuntimeKind
-	SourceDigest          domain.Digest
-	EffectiveDigest       domain.Digest
-	ExecutionDigest       domain.Digest
-	BaseTransactionID     TransactionID
-	HasBaseTransaction    bool
-	PredecessorWorkloadID string
+	Kind                     TransactionKind
+	Runtime                  domain.RuntimeKind
+	SourceDigest             domain.Digest
+	EffectiveDigest          domain.Digest
+	ExecutionDigest          domain.Digest
+	RepositoryVersion        int
+	RepositoryScopeDigest    domain.Digest
+	RepositoryLocationDigest domain.Digest
+	HasRepository            bool
+	BaseTransactionID        TransactionID
+	HasBaseTransaction       bool
+	PredecessorWorkloadID    string
 }
 
 // Transaction is one immutable transaction identity and its current state.
 type Transaction struct {
-	ID                    TransactionID
-	Kind                  TransactionKind
-	State                 TransactionState
-	Runtime               domain.RuntimeKind
-	SourceDigest          domain.Digest
-	EffectiveDigest       domain.Digest
-	ExecutionDigest       domain.Digest
-	BaseTransactionID     TransactionID
-	HasBaseTransaction    bool
-	PredecessorWorkloadID string
+	ID                       TransactionID
+	Kind                     TransactionKind
+	State                    TransactionState
+	Runtime                  domain.RuntimeKind
+	SourceDigest             domain.Digest
+	EffectiveDigest          domain.Digest
+	ExecutionDigest          domain.Digest
+	RepositoryVersion        int
+	RepositoryScopeDigest    domain.Digest
+	RepositoryLocationDigest domain.Digest
+	HasRepository            bool
+	BaseTransactionID        TransactionID
+	HasBaseTransaction       bool
+	PredecessorWorkloadID    string
 }
 
 // AppliedServiceIntent is the complete opaque baseline published when a

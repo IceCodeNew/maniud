@@ -118,6 +118,89 @@ services:
 	}
 }
 
+func TestLoadReturnsStableSourceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		content    string
+		wantReason DiagnosticReason
+		wantLine   int
+		wantColumn int
+	}{
+		{
+			name: "syntax", content: "services:\n  api:\n    image: [\n",
+			wantReason: DiagnosticYAMLSyntax, wantLine: 4, wantColumn: 1,
+		},
+		{
+			name:       "duplicate mapping key",
+			content:    "services:\n  api:\n    image: first\n    image: second\n",
+			wantReason: DiagnosticYAMLStructure, wantLine: 4, wantColumn: 5,
+		},
+		{
+			name:       "unsupported alias",
+			content:    "services:\n  base: &base\n    image: busybox\n  api: *base\n",
+			wantReason: DiagnosticYAMLUnsupported, wantLine: 4, wantColumn: 8,
+		},
+		{
+			name:       "compose validation",
+			content:    "services:\n  api:\n    unexpected: true\n",
+			wantReason: DiagnosticComposeValidation,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Load(t.Context(), testSource(t, test.content))
+			diagnostic, ok := errors.AsType[*SourceDiagnosticError](err)
+			if !ok {
+				t.Fatalf("Load() error = %T %v, want SourceDiagnosticError", err, err)
+			}
+			if diagnostic.Reason != test.wantReason || diagnostic.Line != test.wantLine ||
+				diagnostic.Column != test.wantColumn {
+				t.Fatalf("Load() diagnostic = %#v", diagnostic)
+			}
+			if diagnostic.Error() != ErrInvalidSource.Error() || !errors.Is(diagnostic, ErrInvalidSource) {
+				t.Fatalf("diagnostic contract = %q, errors.Is = %t", diagnostic, errors.Is(diagnostic, ErrInvalidSource))
+			}
+		})
+	}
+}
+
+func FuzzLoadSourceDiagnosticDoesNotExposeContent(f *testing.F) {
+	f.Add([]byte("services:\n  api:\n    image: [\n"))
+	f.Add([]byte("services:\n  api:\n    image: first\n    image: second\n"))
+	f.Add([]byte("services: []\n"))
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		_, err := Load(t.Context(), Source{
+			Content: content, WorkingDir: t.TempDir(), Environment: make(map[string]string),
+		})
+		diagnostic, ok := errors.AsType[*SourceDiagnosticError](err)
+		if !ok {
+			return
+		}
+		if diagnostic.Error() != ErrInvalidSource.Error() || diagnostic.Line < 0 || diagnostic.Column < 0 {
+			t.Fatalf("unsafe diagnostic = %#v, error %q", diagnostic, diagnostic.Error())
+		}
+	})
+}
+
+func TestSourceDiagnosticFallbackHasNoPosition(t *testing.T) {
+	t.Parallel()
+
+	diagnostic := sourceYAMLError(DiagnosticYAMLSyntax, ErrInvalidSource)
+	if diagnostic.Line != 0 || diagnostic.Column != 0 {
+		t.Fatalf("sourceYAMLError(fallback) = %#v", diagnostic)
+	}
+	diagnostic = newSourceDiagnostic(DiagnosticComposeValidation, -1, -1)
+	if diagnostic.Line != 0 || diagnostic.Column != 0 {
+		t.Fatalf("newSourceDiagnostic(negative) = %#v", diagnostic)
+	}
+}
+
 func TestLoadRejectsAmbientEnvironment(t *testing.T) {
 	const variable = "MANIUD_COMPOSE_AMBIENT_TEST"
 
