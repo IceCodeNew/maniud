@@ -1,3 +1,4 @@
+//nolint:goconst // Scenario labels remain beside the bootstrap cases they identify.
 package application
 
 import (

@@ -43,11 +43,13 @@ func TestBindMutationPersistsRepositoryProvenance(t *testing.T) {
 	}
 	operation.request.Repository = provenance
 	state := openMutationTestStore(t)
+	t.Cleanup(func() { closeMutationTestStore(t, state) })
 
 	mutation, err := operation.service.bindMutation(t.Context(), operation.request, state)
 	if err != nil {
 		t.Fatalf("bindMutation() error = %v", err)
 	}
+	t.Cleanup(func() { closeBoundMutation(t, mutation) })
 	transaction := mutation.preparation.Transaction
 	if mutation.preparation.repository != provenance || !transaction.HasRepository ||
 		transaction.RepositoryVersion != provenance.Version ||
@@ -83,7 +85,6 @@ func TestBindMutationPersistsRepositoryProvenance(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Prepare(invalid provenance) error = %v", err)
 	}
-	closeMutationTestStore(t, state)
 }
 
 func TestBindMutationStartsOnlyRequiredTransactions(t *testing.T) {
@@ -261,7 +262,8 @@ func appliedMutationObservation(
 		StorageDigest:        storageDigest,
 		RuntimeMounts:        runtimeMounts,
 		ConfigurationMatches: configurationMatches,
-		Running:              true,
+		Lifecycle:            WorkloadLifecycleRunning,
+		Health:               WorkloadHealth{Status: WorkloadHealthAbsent},
 		Ownership: domain.WorkloadOwnership{
 			Status:           domain.OwnershipManaged,
 			Service:          workload.ServiceName,

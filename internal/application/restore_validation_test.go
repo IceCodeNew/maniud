@@ -1,3 +1,4 @@
+//nolint:funlen // The malformed suffix matrix is clearer as one contiguous state-machine scenario.
 package application
 
 import (
@@ -91,6 +92,24 @@ func TestPrepareRestoreJourneyRejectsMissingStopAndInvalidSuffix(t *testing.T) {
 	}
 
 	prepareRestoreMutation(t, state, mutation)
+	sequence := int64(len(mutation.preparation.Actions) + 1)
+	healthStop := workloadHealthStopIntent(
+		sequence,
+		mutation.preparation.Workload,
+		mutation.preparation.Transaction.ID.String(),
+	)
+	mutation.preparation.Actions = append(mutation.preparation.Actions, store.Action{
+		TransactionID: mutation.preparation.Transaction.ID,
+		Sequence:      sequence,
+		Kind:          healthStop.Kind,
+		State:         store.ActionStateIntent,
+		IntentDigest:  healthStop.IntentDigest,
+	})
+	if _, err := prepareRestoreJourney(t.Context(), mutation); !errors.Is(err, ErrConflictingState) {
+		t.Fatalf("prepareRestoreJourney(incomplete health stop) = %v", err)
+	}
+
+	prepareRestoreMutation(t, state, mutation)
 	mutation.preparation.Actions = append(mutation.preparation.Actions, store.Action{
 		TransactionID: mutation.preparation.Transaction.ID,
 		Sequence:      int64(len(mutation.preparation.Actions) + 1),
@@ -147,6 +166,75 @@ func TestRestoreExecutionRejectsCompletedNegativeTransitions(t *testing.T) {
 	}
 }
 
+func TestPrepareRestoreJourneyRejectsMalformedRetrySuffix(t *testing.T) {
+	t.Parallel()
+
+	state, mutation, _ := newStoppedRestoreRetryMutation(t)
+	defer closeBootstrapMutation(t, state, mutation)
+	journey, err := prepareRestoreJourney(t.Context(), mutation)
+	if err != nil {
+		t.Fatalf("prepareRestoreJourney() = %v", err)
+	}
+	sequence := int64(len(mutation.preparation.Actions) + 1)
+	satisfied := workloadTransitionPostcondition(journey.restoreStart, true).Digest
+	retry := completedTransitionAction(
+		mutation.preparation.Transaction.ID,
+		sequence,
+		journey.restoreStart,
+		satisfied,
+	)
+	validRetries := mutation.preparation
+	validRetries.Actions = append(append([]store.Action(nil), validRetries.Actions...), retry)
+	validRetries.Actions = append(validRetries.Actions, completedTransitionAction(
+		validRetries.Transaction.ID,
+		sequence+1,
+		journey.restoreStart,
+		satisfied,
+	))
+	validMutation := *mutation
+	validMutation.preparation = validRetries
+	if _, prepareErr := prepareRestoreJourney(t.Context(), &validMutation); prepareErr != nil {
+		t.Fatalf("prepareRestoreJourney(completed retries) = %v", prepareErr)
+	}
+
+	for _, mutate := range []func(*store.Action){
+		func(action *store.Action) { action.IntentDigest = domain.Digest{} },
+		func(action *store.Action) { action.State = store.ActionStateIntent },
+		func(action *store.Action) { action.PostconditionDigest = nil },
+	} {
+		candidate := mutation.preparation
+		candidate.Actions = append(append([]store.Action(nil), candidate.Actions...), retry)
+		mutate(&candidate.Actions[len(candidate.Actions)-1])
+		candidate.Actions = append(candidate.Actions, completedTransitionAction(
+			candidate.Transaction.ID,
+			sequence+1,
+			journey.restoreStart,
+			satisfied,
+		))
+		copyMutation := *mutation
+		copyMutation.preparation = candidate
+		if _, prepareErr := prepareRestoreJourney(t.Context(), &copyMutation); !errors.Is(prepareErr, ErrConflictingState) {
+			t.Fatalf("prepareRestoreJourney(malformed retry) = %v", prepareErr)
+		}
+	}
+
+	candidate := mutation.preparation
+	candidate.Actions = append([]store.Action(nil), candidate.Actions...)
+	for index := range candidate.Actions {
+		if candidate.Actions[index].Kind == workloadRestoreStartActionKind {
+			candidate.Actions[index].State = store.ActionStateIntent
+
+			break
+		}
+	}
+	candidate.Actions = append(candidate.Actions, retry)
+	copyMutation := *mutation
+	copyMutation.preparation = candidate
+	if _, prepareErr := prepareRestoreJourney(t.Context(), &copyMutation); !errors.Is(prepareErr, ErrConflictingState) {
+		t.Fatalf("prepareRestoreJourney(incomplete initial start) = %v", prepareErr)
+	}
+}
+
 func TestCompleteRestoreContainsProbeAndStateFailures(t *testing.T) {
 	t.Parallel()
 
@@ -166,6 +254,11 @@ func TestCompleteRestoreContainsProbeAndStateFailures(t *testing.T) {
 	}
 
 	runtime.predecessor = restore.After
+	mutation.preparation.Applied.Healthcheck = true
+	if err := completeRestore(t.Context(), mutation, runtime, restore); !errors.Is(err, ErrHealthDegraded) {
+		t.Fatalf("completeRestore(unobservable health) = %v", err)
+	}
+	mutation.preparation.Applied.Healthcheck = false
 	if err := mutation.lock.Close(); err != nil {
 		t.Fatalf("Close(service lock) error = %v", err)
 	}

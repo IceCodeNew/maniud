@@ -188,7 +188,7 @@ func validEvidenceName(value string) bool {
 func validPlanKind(kind PlanKind) bool {
 	switch kind {
 	case PlanBootstrap, PlanAdopt, PlanUnchanged, PlanUpgrade, PlanResume,
-		PlanProbeUnknownEffect, PlanRestore:
+		PlanProbeUnknownEffect, PlanRestore, PlanHealthDegraded:
 		return true
 	default:
 		return false
@@ -206,7 +206,7 @@ func validSnapshotTransaction(snapshot OperationSnapshot) bool {
 	}
 
 	switch store.TransactionState(transaction.State) {
-	case store.TransactionActive, store.TransactionDegraded:
+	case store.TransactionActive, store.TransactionDegraded, store.TransactionHealthDegraded:
 		return true
 	case store.TransactionFailed, store.TransactionSucceeded:
 		return false

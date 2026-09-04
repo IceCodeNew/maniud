@@ -22,6 +22,8 @@ type restoreJourney struct {
 	restoreStart   WorkloadTransition
 	nextSequence   int64
 	recoveryCursor int
+	retryCursor    int
+	retrySequence  int64
 }
 
 type restoreExecution struct {
@@ -60,6 +62,12 @@ func runRestore(ctx context.Context, mutation *boundMutation, runtime restoreRun
 		journey:  journey,
 		cursor:   journey.recoveryCursor,
 		sequence: journey.nextSequence,
+	}
+	if journey.retrySequence > 0 {
+		execution.journey.discard = false
+		execution.journey.reverseRename = false
+		execution.cursor = journey.retryCursor
+		execution.sequence = journey.retrySequence
 	}
 	if err = execution.discard(ctx); err != nil {
 		return err
@@ -220,12 +228,38 @@ func prepareRestoreJourney(ctx context.Context, mutation *boundMutation) (restor
 		return empty, err
 	}
 
-	journey := newRestoreJourney(upgrade, coreActions, evidence.discard, evidence.reverseRename)
-	if !validRestoreSuffix(preparation, journey) {
+	recoveryCursor, err := completedHealthStopPrefix(preparation, coreActions)
+	if err != nil {
+		return empty, err
+	}
+
+	journey := newRestoreJourney(upgrade, recoveryCursor, evidence.discard, evidence.reverseRename)
+	journey, valid := validatedRestoreSuffix(preparation, journey)
+	if !valid {
 		return empty, ErrConflictingState
 	}
 
 	return journey, nil
+}
+
+func completedHealthStopPrefix(preparation Preparation, coreActions int) (int, error) {
+	if coreActions >= len(preparation.Actions) ||
+		preparation.Actions[coreActions].Kind != workloadHealthStopActionKind {
+		return coreActions, nil
+	}
+
+	action := preparation.Actions[coreActions]
+	intent := workloadHealthStopIntent(
+		int64(coreActions+1),
+		preparation.Workload,
+		preparation.Transaction.ID.String(),
+	)
+	if action.State != store.ActionStateCompleted || action.PostconditionDigest == nil ||
+		!actionMatchesExpected(action, preparation.Transaction.ID, intent) {
+		return 0, ErrConflictingState
+	}
+
+	return coreActions + 1, nil
 }
 
 func validateCompletedRestoreCore(
@@ -481,7 +515,7 @@ func coreContainsAction(actions []store.Action, kind string) bool {
 	return false
 }
 
-func validRestoreSuffix(preparation Preparation, journey restoreJourney) bool {
+func validatedRestoreSuffix(preparation Preparation, journey restoreJourney) (restoreJourney, bool) {
 	expected := make([]store.ActionIntent, 0, restoreActionCapacity)
 	sequence := journey.nextSequence
 	if journey.discard {
@@ -500,17 +534,52 @@ func validRestoreSuffix(preparation Preparation, journey restoreJourney) bool {
 
 	expected = append(expected, workloadTransitionIntent(sequence, journey.restoreStart))
 	suffix := preparation.Actions[journey.coreActions:]
-	if len(suffix) > len(expected) {
-		return false
-	}
-
-	for index, action := range suffix {
+	prefix := min(len(suffix), len(expected))
+	for index, action := range suffix[:prefix] {
 		if !actionMatchesExpected(action, preparation.Transaction.ID, expected[index]) {
-			return false
+			return restoreJourney{}, false
 		}
 	}
+	if len(suffix) <= len(expected) {
+		return journey, true
+	}
 
-	return true
+	return validatedRestoreRetries(preparation.Transaction.ID, journey, suffix, expected, sequence)
+}
+
+func validatedRestoreRetries(
+	transactionID store.TransactionID,
+	journey restoreJourney,
+	suffix []store.Action,
+	expected []store.ActionIntent,
+	sequence int64,
+) (restoreJourney, bool) {
+	for index, action := range suffix[len(expected):] {
+		if index > 0 {
+			previous := suffix[len(expected)+index-1]
+			_, err := completedTransitionResult(previous, journey.restoreStart)
+			if previous.State != store.ActionStateCompleted || err != nil {
+				return restoreJourney{}, false
+			}
+		}
+		sequence++
+		if !actionMatchesExpected(
+			action,
+			transactionID,
+			workloadTransitionIntent(sequence, journey.restoreStart),
+		) {
+			return restoreJourney{}, false
+		}
+		journey.retryCursor = journey.coreActions + len(expected) + index
+		journey.retrySequence = sequence
+	}
+	initialStart := suffix[len(expected)-1]
+	satisfied, err := completedTransitionResult(initialStart, journey.restoreStart)
+	if initialStart.State != store.ActionStateCompleted || !satisfied || err != nil {
+		return restoreJourney{}, false
+	}
+
+	return journey, true
 }
 
 func completeRestore(
@@ -526,6 +595,13 @@ func completeRestore(
 
 	if probe.State != WorkloadEffectProbeObserved || probe.Workload != restore.After {
 		return ErrConflictingState
+	}
+	if err = requireWorkloadConvergence(
+		mutation.preparation.Applied.Healthcheck,
+		probe.Workload.Lifecycle,
+		probe.Health,
+	); err != nil {
+		return err
 	}
 
 	transaction, err := mutation.lock.SetTransactionState(

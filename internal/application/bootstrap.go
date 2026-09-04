@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -133,6 +134,24 @@ func completeAppliedMutation(
 	operation string,
 	backup *store.BackupIndexIntent,
 ) error {
+	evidence, err := proveAppliedMutation(ctx, mutation, runtime, operation)
+	if err != nil {
+		return err
+	}
+	if err = settleMutationConvergence(ctx, mutation, evidence); err != nil {
+		return err
+	}
+
+	return publishAppliedMutation(ctx, mutation, evidence, operation, backup)
+}
+
+func proveAppliedMutation(
+	ctx context.Context,
+	mutation *boundMutation,
+	runtime WorkloadStartRuntime,
+	operation string,
+) (WorkloadEffectEvidence, error) {
+	var empty WorkloadEffectEvidence
 	preparation := mutation.preparation
 	probe, err := runtime.ProbeStartedWorkload(
 		ctx,
@@ -140,7 +159,7 @@ func completeAppliedMutation(
 		preparation.Transaction.ID.String(),
 	)
 	if err != nil {
-		return fmt.Errorf("prove %s workload: %w", operation, err)
+		return empty, fmt.Errorf("prove %s workload: %w", operation, err)
 	}
 
 	if probe.State != WorkloadEffectProbeObserved || !startedWorkloadMatches(
@@ -148,10 +167,53 @@ func completeAppliedMutation(
 		preparation.Workload,
 		preparation.Transaction.ID.String(),
 	) {
-		return ErrConflictingState
+		return empty, ErrConflictingState
 	}
 
-	intent := appliedServiceIntent(preparation.Workload, probe.Workload)
+	return probe.Workload, nil
+}
+
+func settleMutationConvergence(
+	ctx context.Context,
+	mutation *boundMutation,
+	evidence WorkloadEffectEvidence,
+) error {
+	err := requireWorkloadConvergence(
+		activeHealthcheck(mutation.preparation.Workload),
+		evidence.Lifecycle,
+		evidence.Health,
+	)
+	if err == nil || errors.Is(err, ErrHealthPending) {
+		return err
+	}
+	if mutation.preparation.Transaction.State == store.TransactionHealthDegraded {
+		return err
+	}
+
+	transaction, stateErr := mutation.lock.SetTransactionState(
+		context.WithoutCancel(ctx),
+		mutation.preparation.Transaction.ID,
+		store.TransactionHealthDegraded,
+	)
+	if stateErr != nil {
+		return errors.Join(err, fmt.Errorf("record degraded health convergence: %w", stateErr))
+	}
+	mutation.preparation.Transaction = transaction
+	mutation.publishTransaction(EventTransactionDegraded)
+
+	return err
+}
+
+func publishAppliedMutation(
+	ctx context.Context,
+	mutation *boundMutation,
+	evidence WorkloadEffectEvidence,
+	operation string,
+	backup *store.BackupIndexIntent,
+) error {
+	preparation := mutation.preparation
+
+	intent := appliedServiceIntent(preparation.Workload, evidence)
 	intent.Backup = backup
 	applied, err := mutation.lock.CommitAppliedService(
 		ctx,
@@ -183,12 +245,14 @@ func appliedServiceIntent(
 		ReferenceDigest:        workload.Image.ReferenceDigest,
 		PlatformManifestDigest: workload.Image.PlatformManifest,
 		ImageConfigDigest:      workload.Image.ImageConfig,
+		Healthcheck:            activeHealthcheck(workload),
 	}
 }
 
 func validBootstrapMutation(mutation *boundMutation) bool {
 	if mutation == nil || mutation.lock == nil || !mutation.preparation.HasTransaction ||
-		mutation.preparation.Transaction.State != store.TransactionActive {
+		mutation.preparation.Transaction.State != store.TransactionActive &&
+			mutation.preparation.Transaction.State != store.TransactionHealthDegraded {
 		return false
 	}
 
@@ -206,6 +270,9 @@ func validBootstrapPlan(kind PlanKind, observation WorkloadObservationState, act
 
 	if kind == PlanResume {
 		return validBootstrapActions(actions) && (len(actions) > 0 || observation == WorkloadObservationMissing)
+	}
+	if kind == PlanHealthDegraded {
+		return validBootstrapActions(actions) && len(actions) > 0
 	}
 
 	return kind == PlanProbeUnknownEffect && len(actions) > 0 && validBootstrapActions(actions)

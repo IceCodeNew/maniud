@@ -1,3 +1,4 @@
+//nolint:goconst // Transition boundary labels remain local to their fixture tables.
 package application
 
 import (

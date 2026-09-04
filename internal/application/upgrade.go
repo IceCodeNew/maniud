@@ -89,7 +89,6 @@ func runUpgrade(
 		execution.create,
 		execution.restore,
 		execution.start,
-		execution.remove,
 	}
 	for _, stage := range stages {
 		err = stage(ctx)
@@ -98,7 +97,7 @@ func runUpgrade(
 		}
 	}
 
-	return completeUpgrade(ctx, mutation, runtime, execution.publication)
+	return completeUpgrade(ctx, &execution)
 }
 
 func (execution *upgradeExecution) stop(ctx context.Context) error {
@@ -532,11 +531,26 @@ func resolveUpgradeFailure(
 
 func completeUpgrade(
 	ctx context.Context,
-	mutation *boundMutation,
-	runtime WorkloadStartRuntime,
-	publication backup.Publication,
+	execution *upgradeExecution,
 ) error {
-	return completeAppliedMutation(ctx, mutation, runtime, "upgrade", backupIndexIntent(publication))
+	evidence, err := proveAppliedMutation(ctx, execution.mutation, execution.runtime, "upgrade")
+	if err != nil {
+		return err
+	}
+	if err = settleMutationConvergence(ctx, execution.mutation, evidence); err != nil {
+		return err
+	}
+	if err = execution.remove(ctx); err != nil {
+		return err
+	}
+
+	return publishAppliedMutation(
+		ctx,
+		execution.mutation,
+		evidence,
+		"upgrade",
+		backupIndexIntent(execution.publication),
+	)
 }
 
 func newUpgradeJourney(preparation Preparation) upgradeJourney {
@@ -602,17 +616,31 @@ func validUpgradeMutation(mutation *boundMutation) bool {
 	preparation := mutation.preparation
 	if !preparation.HasTransaction || !preparation.HasApplied ||
 		preparation.Transaction.Kind != store.TransactionUpgrade ||
-		preparation.Transaction.State != store.TransactionActive ||
 		preparation.Transaction.BaseTransactionID != preparation.Applied.TransactionID ||
 		preparation.Transaction.PredecessorWorkloadID != preparation.Applied.WorkloadID {
+		return false
+	}
+	if !validUpgradeTransactionState(preparation.Transaction.State) {
 		return false
 	}
 
 	return activeUpgradePlan(preparation.Plan.Kind) && validUpgradeActions(preparation.Actions)
 }
 
+func validUpgradeTransactionState(state store.TransactionState) bool {
+	switch state {
+	case store.TransactionActive, store.TransactionHealthDegraded:
+		return true
+	case store.TransactionDegraded, store.TransactionFailed, store.TransactionSucceeded:
+		return false
+	default:
+		return false
+	}
+}
+
 func activeUpgradePlan(kind PlanKind) bool {
-	return kind == PlanUpgrade || kind == PlanResume || kind == PlanProbeUnknownEffect
+	return kind == PlanUpgrade || kind == PlanResume || kind == PlanProbeUnknownEffect ||
+		kind == PlanHealthDegraded
 }
 
 func validUpgradeActions(actions []store.Action) bool {

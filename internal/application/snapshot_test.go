@@ -102,7 +102,7 @@ func TestApplyFacadeRetriesOneJournalDrift(t *testing.T) {
 		t.Fatalf("prepare snapshot fixture: %v", err)
 	}
 	transaction := exactTransaction(prepareApplyEvidence(
-		desired, missingObservation(), store.Transaction{}, false, store.AppliedService{}, false,
+		desired, missingObservation(), store.Transaction{}, false, store.AppliedService{}, false, time.Time{},
 	), store.TransactionActive)
 	intent := action(transaction, 1, store.ActionStateIntent)
 	completed := action(transaction, 1, store.ActionStateCompleted)
@@ -132,7 +132,7 @@ func TestApplyFacadeRejectsRepeatedJournalDrift(t *testing.T) {
 		t.Fatalf("prepare snapshot fixture: %v", err)
 	}
 	transaction := exactTransaction(prepareApplyEvidence(
-		desired, missingObservation(), store.Transaction{}, false, store.AppliedService{}, false,
+		desired, missingObservation(), store.Transaction{}, false, store.AppliedService{}, false, time.Time{},
 	), store.TransactionActive)
 	intent := action(transaction, 1, store.ActionStateIntent)
 	completed := action(transaction, 1, store.ActionStateCompleted)
@@ -467,15 +467,111 @@ func TestOperationSnapshotProjectsUpgradeAndAppliedIdentities(t *testing.T) {
 		ConfigurationDigest: digest, StorageDigest: digest, ReferenceDigest: digest,
 		PlatformManifestDigest: digest, ImageConfigDigest: digest,
 	}
-	facade := &ApplyFacade{now: func() time.Time { return time.Unix(1, 0) }}
-	snapshot := operationSnapshot(facade, Preparation{
+	facade := &ApplyFacade{}
+	capturedAt := time.Unix(1, 0).UTC()
+	snapshot := operationSnapshot(facade, capturedAt, Preparation{
 		Plan: Plan{Kind: PlanRestore}, Execution: testExecutionEvidence(),
 		Transaction: transaction, HasTransaction: true, Applied: applied, HasApplied: true,
 	})
-	if snapshot.Transaction.BaseTransaction != transaction.BaseTransactionID.String() ||
+	if snapshot.CapturedAt != capturedAt ||
+		snapshot.Transaction.BaseTransaction != transaction.BaseTransactionID.String() ||
 		snapshot.Applied.Transaction != applied.TransactionID.String() ||
 		snapshot.Applied.ImageConfig != digest.String() {
 		t.Fatalf("operationSnapshot() = %#v", snapshot)
+	}
+}
+
+//nolint:funlen // One table exposes the complete transaction/plan projection matrix.
+func TestHealthResolutionForSnapshotProjectsApplicationOwnedDecision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		preparation      Preparation
+		action           HealthResolutionAction
+		restoresPrevious bool
+	}{
+		{name: "no transaction"},
+		{
+			name: "pending adoption", action: HealthResolutionCancelAdoption,
+			preparation: Preparation{
+				HasTransaction: true, Transaction: store.Transaction{Kind: store.TransactionAdopt},
+				Plan: Plan{Health: HealthConvergencePending},
+			},
+		},
+		{
+			name: "settled adoption",
+			preparation: Preparation{
+				HasTransaction: true, Transaction: store.Transaction{Kind: store.TransactionAdopt},
+			},
+		},
+		{
+			name: "degraded bootstrap", action: HealthResolutionRollback,
+			preparation: Preparation{
+				HasTransaction: true,
+				Transaction: store.Transaction{
+					Kind: store.TransactionBootstrap, State: store.TransactionHealthDegraded,
+				},
+				Plan: Plan{Health: HealthConvergenceDegraded},
+			},
+		},
+		{
+			name: "degraded upgrade", action: HealthResolutionRollback, restoresPrevious: true,
+			preparation: Preparation{
+				HasTransaction: true,
+				Transaction: store.Transaction{
+					Kind: store.TransactionUpgrade, State: store.TransactionHealthDegraded,
+				},
+				Plan: Plan{Health: HealthConvergenceDegraded},
+			},
+		},
+		{
+			name: "stopped predecessor", action: HealthResolutionRetryRestoreStart,
+			preparation: Preparation{
+				HasTransaction: true,
+				Transaction: store.Transaction{
+					Kind: store.TransactionUpgrade, State: store.TransactionDegraded,
+				},
+				Plan: Plan{
+					Kind: PlanRestore, Health: HealthConvergenceDegraded,
+					Observation: WorkloadObservation{
+						State: WorkloadObservationPresent, Lifecycle: WorkloadLifecycleExited,
+					},
+				},
+			},
+		},
+		{
+			name: "running predecessor",
+			preparation: Preparation{
+				HasTransaction: true,
+				Transaction: store.Transaction{
+					Kind: store.TransactionUpgrade, State: store.TransactionDegraded,
+				},
+				Plan: Plan{
+					Kind: PlanRestore, Health: HealthConvergenceDegraded,
+					Observation: WorkloadObservation{
+						State: WorkloadObservationPresent, Lifecycle: WorkloadLifecycleRunning,
+					},
+				},
+			},
+		},
+		{
+			name: "unknown transaction",
+			preparation: Preparation{
+				HasTransaction: true, Transaction: store.Transaction{Kind: store.TransactionKind("unknown")},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			action, restoresPrevious := healthResolutionForSnapshot(test.preparation)
+			if action != test.action || restoresPrevious != test.restoresPrevious {
+				t.Fatalf("healthResolutionForSnapshot() = %q, %t", action, restoresPrevious)
+			}
+		})
 	}
 }
 

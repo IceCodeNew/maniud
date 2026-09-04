@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -285,7 +286,15 @@ func (service *service) prepareObserved(ctx context.Context, desired desiredAppl
 		return empty, ErrConflictingState
 	}
 
-	preparation := prepareApplyEvidence(desired, observation, transaction, found, applied, hasApplied)
+	preparation := prepareApplyEvidence(
+		desired,
+		observation,
+		transaction,
+		found,
+		applied,
+		hasApplied,
+		time.Now().UTC(),
+	)
 
 	if found {
 		preparation, err = service.prepareRecovery(ctx, preparation)
@@ -309,6 +318,7 @@ func prepareApplyEvidence(
 	hasTransaction bool,
 	applied store.AppliedService,
 	hasApplied bool,
+	capturedAt time.Time,
 ) Preparation {
 	return Preparation{
 		Plan: Plan{
@@ -321,6 +331,7 @@ func prepareApplyEvidence(
 			Source:      desired.workload.SourceDigest,
 			Desired:     desired.workload.EffectiveDigest,
 			Observation: observation,
+			HealthPoll:  healthPollInterval(desired.workload, observation.StartedAt, capturedAt),
 		},
 		Workload:       desired.workload,
 		Execution:      desired.execution,
@@ -375,9 +386,61 @@ func classifyPreparedApply(preparation Preparation) (Preparation, error) {
 		return Preparation{}, err
 	}
 
+	preparation.Plan.Health = planHealthConvergence(preparation)
 	preparation.Plan.Warnings = mountProbeFallbackWarnings(preparation)
 
 	return preparation, nil
+}
+
+func planHealthConvergence(preparation Preparation) HealthConvergence {
+	if !healthGatedRecovery(preparation) {
+		return HealthConvergenceNone
+	}
+
+	active := activeHealthcheck(preparation.Workload)
+	if preparation.Plan.Kind == PlanRestore {
+		active = preparation.HasApplied && preparation.Applied.Healthcheck
+	}
+	err := requireWorkloadConvergence(
+		active,
+		preparation.Plan.Observation.Lifecycle,
+		preparation.Plan.Observation.Health,
+	)
+	switch {
+	case err == nil:
+		return HealthConvergenceHealthy
+	case errors.Is(err, ErrHealthPending):
+		return HealthConvergencePending
+	default:
+		return HealthConvergenceDegraded
+	}
+}
+
+func healthGatedRecovery(preparation Preparation) bool {
+	if !preparation.HasTransaction {
+		return false
+	}
+	if preparation.Transaction.State == store.TransactionHealthDegraded {
+		return true
+	}
+	if preparation.Transaction.Kind == store.TransactionAdopt {
+		return true
+	}
+	if preparation.Plan.Kind == PlanRestore {
+		return completedActionKind(preparation.Actions, workloadRestoreStartActionKind)
+	}
+
+	return completedActionKind(preparation.Actions, workloadStartActionKind)
+}
+
+func completedActionKind(actions []store.Action, kind string) bool {
+	for _, action := range actions {
+		if action.Kind == kind {
+			return action.State == store.ActionStateCompleted && action.PostconditionDigest != nil
+		}
+	}
+
+	return false
 }
 
 func validRuntimeEvidence(evidence RuntimeEvidence) bool {
@@ -400,16 +463,23 @@ func validWorkloadObservation(observation WorkloadObservation, workload domain.D
 }
 
 func validMissingWorkloadObservation(observation WorkloadObservation) bool {
-	return observation.ID == "" && observation.ConfigurationDigest == (domain.Digest{}) &&
+	return observation.ID == "" && observation.StartedAt.IsZero() &&
+		observation.ConfigurationDigest == (domain.Digest{}) &&
 		observation.StorageDigest == (domain.Digest{}) && observation.RuntimeMounts == nil &&
-		!observation.ConfigurationMatches && !observation.Running &&
+		!observation.ConfigurationMatches && observation.Lifecycle == WorkloadLifecycleUnknown &&
+		observation.Health == (WorkloadHealth{}) &&
 		observation.Ownership == (domain.WorkloadOwnership{})
 }
 
 func validPresentWorkloadObservation(observation WorkloadObservation) bool {
 	return observation.ID != "" && observation.ConfigurationDigest != (domain.Digest{}) &&
-		observation.StorageDigest != (domain.Digest{}) &&
+		observation.StorageDigest != (domain.Digest{}) && validWorkloadLifecycle(observation.Lifecycle) &&
+		validWorkloadHealth(observation.Health) && validObservationStartedAt(observation.StartedAt) &&
 		observation.Ownership.Status <= domain.OwnershipManaged
+}
+
+func validObservationStartedAt(value time.Time) bool {
+	return value.IsZero() || value.Location() == time.UTC
 }
 
 func transactionMatches(

@@ -1,3 +1,4 @@
+//nolint:cyclop,funlen // The table-driven branch matrix intentionally checks every independent boundary.
 package application
 
 import (
@@ -24,6 +25,7 @@ func TestApplicationTransactionBranchMatrix(t *testing.T) {
 		PlanResume,
 		PlanProbeUnknownEffect,
 		PlanRestore,
+		PlanHealthDegraded,
 	} {
 		preparation := Preparation{Plan: Plan{Kind: kind}}
 		_ = transactionIntent(preparation)
@@ -42,6 +44,100 @@ func TestApplicationTransactionBranchMatrix(t *testing.T) {
 		store.Action{Kind: workloadRenameActionKind},
 	) {
 		t.Fatal("rename without completed discard was accepted")
+	}
+}
+
+func TestHealthRecoveryBranchMatrix(t *testing.T) {
+	t.Parallel()
+
+	if healthGatedRecovery(Preparation{}) {
+		t.Fatal("healthGatedRecovery() accepted preparation without a transaction")
+	}
+	for _, preparation := range []Preparation{
+		{
+			HasTransaction: true,
+			Transaction:    store.Transaction{State: store.TransactionHealthDegraded},
+		},
+		{
+			HasTransaction: true,
+			Transaction:    store.Transaction{Kind: store.TransactionAdopt, State: store.TransactionActive},
+		},
+	} {
+		if !healthGatedRecovery(preparation) {
+			t.Fatalf("healthGatedRecovery(%#v) = false", preparation.Transaction)
+		}
+	}
+
+	completed := domain.Hash([]byte("completed health gate"))
+	preparation := Preparation{
+		HasTransaction: true,
+		Plan:           Plan{Kind: PlanRestore},
+		Actions: []store.Action{{
+			Kind: workloadRestoreStartActionKind, State: store.ActionStateCompleted,
+			PostconditionDigest: &completed,
+		}},
+	}
+	if !healthGatedRecovery(preparation) {
+		t.Fatal("healthGatedRecovery(restore start) = false")
+	}
+
+	transaction := store.Transaction{
+		ID: store.TransactionID{1}, Kind: store.TransactionBootstrap, State: store.TransactionHealthDegraded,
+	}
+	if kind, err := classifyRecovery(transaction, nil); err != nil || kind != PlanHealthDegraded {
+		t.Fatalf("classifyRecovery(health degraded) = %q, %v", kind, err)
+	}
+	pending := action(transaction, 1, store.ActionStateIntent)
+	pending.Kind = workloadStartActionKind
+	if _, err := classifyRecovery(transaction, []store.Action{pending}); !errors.Is(err, ErrConflictingState) {
+		t.Fatalf("classifyRecovery(invalid health action) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		kind   store.TransactionKind
+		action string
+		valid  bool
+	}{
+		{kind: store.TransactionBootstrap, action: workloadHealthStopActionKind, valid: true},
+		{kind: store.TransactionUpgrade, action: workloadHealthStopActionKind, valid: true},
+		{kind: store.TransactionBootstrap, action: workloadDiscardActionKind, valid: true},
+		{kind: store.TransactionAdopt, action: workloadHealthStopActionKind},
+		{kind: store.TransactionUpgrade, action: workloadDiscardActionKind},
+	} {
+		if got := validHealthResolutionPendingAction(
+			store.Transaction{Kind: test.kind}, store.Action{Kind: test.action},
+		); got != test.valid {
+			t.Fatalf("validHealthResolutionPendingAction(%q, %q) = %t", test.kind, test.action, got)
+		}
+	}
+
+	if !validBootstrapPlan(
+		PlanHealthDegraded,
+		WorkloadObservationPresent,
+		[]store.Action{{Kind: workloadCreateActionKind}},
+	) {
+		t.Fatal("validBootstrapPlan(health degraded) = false")
+	}
+	for _, state := range []store.TransactionState{
+		store.TransactionDegraded, store.TransactionFailed, store.TransactionSucceeded, store.TransactionState("new"),
+	} {
+		if validUpgradeTransactionState(state) {
+			t.Fatalf("validUpgradeTransactionState(%q) = true", state)
+		}
+	}
+	state, mutation, _ := newUpgradeMutation(t)
+	defer closeBootstrapMutation(t, state, mutation)
+	if _, err := bindPreparedTransaction(
+		t.Context(), mutation.lock, Preparation{Plan: Plan{Kind: PlanHealthDegraded}},
+	); !errors.Is(err, ErrConflictingState) {
+		t.Fatalf("bindPreparedTransaction(health degraded without transaction) = %v", err)
+	}
+	mutation.preparation.Transaction.State = store.TransactionFailed
+	if validUpgradeMutation(mutation) {
+		t.Fatal("validUpgradeMutation(failed transaction) = true")
+	}
+	if !validUpgradeTransactionState(store.TransactionHealthDegraded) {
+		t.Fatal("validUpgradeTransactionState(health degraded) = false")
 	}
 }
 
@@ -124,6 +220,9 @@ func TestRestoreStorageIntentAndPublicationBranches(t *testing.T) {
 	cancel()
 	if _, err = loadRestorePublication(cancelled, published.mutation); err == nil {
 		t.Fatal("loadRestorePublication(cancelled) succeeded")
+	}
+	if _, _, err = upgradeHealthStopAction(cancelled, published.mutation); err == nil {
+		t.Fatal("upgradeHealthStopAction(cancelled publication) succeeded")
 	}
 
 	missing := newStorageTestFixture(t, false)

@@ -1,6 +1,8 @@
 package application
 
 import (
+	"time"
+
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/store"
@@ -24,6 +26,24 @@ const (
 	PlanProbeUnknownEffect PlanKind = "probe-unknown-effect"
 	// PlanRestore recovers the previous workload for a degraded transaction.
 	PlanRestore PlanKind = "restore"
+	// PlanHealthDegraded retains the current workload until health recovers or
+	// the operator explicitly chooses rollback.
+	PlanHealthDegraded PlanKind = "health-degraded"
+)
+
+// HealthConvergence is the bounded read-only state of an unresolved
+// transaction's current health gate.
+type HealthConvergence string
+
+const (
+	// HealthConvergenceNone means the transaction has not reached a health gate.
+	HealthConvergenceNone HealthConvergence = ""
+	// HealthConvergencePending means read-only polling may observe convergence.
+	HealthConvergencePending HealthConvergence = "pending"
+	// HealthConvergenceHealthy means the existing transaction may resume once.
+	HealthConvergenceHealthy HealthConvergence = "healthy"
+	// HealthConvergenceDegraded requires an explicit operator decision.
+	HealthConvergenceDegraded HealthConvergence = "degraded"
 )
 
 // WarningCode identifies a stable operator-facing apply warning.
@@ -68,11 +88,13 @@ const (
 type WorkloadObservation struct {
 	ID                   string
 	State                WorkloadObservationState
+	StartedAt            time.Time
 	ConfigurationDigest  domain.Digest
 	StorageDigest        domain.Digest
 	RuntimeMounts        []domain.RuntimeMount
 	ConfigurationMatches bool
-	Running              bool
+	Lifecycle            WorkloadLifecycle
+	Health               WorkloadHealth
 	Ownership            domain.WorkloadOwnership
 }
 
@@ -87,6 +109,8 @@ type Plan struct {
 	Source      domain.Digest
 	Desired     domain.Digest
 	Observation WorkloadObservation
+	HealthPoll  time.Duration
+	Health      HealthConvergence
 	Warnings    []Warning
 }
 
@@ -128,7 +152,7 @@ func classifyNewApply(
 }
 
 func classifyUnappliedWorkload(observation WorkloadObservation) (PlanKind, error) {
-	if !observation.Running {
+	if observation.Lifecycle != WorkloadLifecycleRunning {
 		return "", ErrConflictingState
 	}
 
@@ -154,7 +178,8 @@ func classifyAppliedWorkload(
 	execution RuntimeEvidence,
 	applied store.AppliedService,
 ) (PlanKind, error) {
-	if observation.State != WorkloadObservationPresent || !observation.Running ||
+	if observation.State != WorkloadObservationPresent ||
+		observation.Lifecycle != WorkloadLifecycleRunning ||
 		!observationMatchesApplied(observation, workload, applied) ||
 		!appliedMatchesExecution(applied, execution) {
 		return "", ErrConflictingState
@@ -214,6 +239,7 @@ func observationIdentityMatchesApplied(
 		workloadStorageMatches(applied.StorageDigest, observation.RuntimeMounts, predecessor)
 }
 
+//nolint:cyclop // The closed durable transaction states share one recovery classification boundary.
 func classifyRecovery(transaction store.Transaction, actions []store.Action) (PlanKind, error) {
 	pending, err := recoveryPendingAction(transaction, actions)
 	if err != nil {
@@ -223,6 +249,12 @@ func classifyRecovery(transaction store.Transaction, actions []store.Action) (Pl
 	switch transaction.State {
 	case store.TransactionActive:
 		return classifyActiveRecovery(pending)
+	case store.TransactionHealthDegraded:
+		if pending != nil && !validHealthResolutionPendingAction(transaction, *pending) {
+			return "", ErrConflictingState
+		}
+
+		return PlanHealthDegraded, nil
 	case store.TransactionDegraded:
 		if pending != nil && !validRestorePendingAction(actions, *pending) {
 			return "", ErrConflictingState
@@ -234,6 +266,14 @@ func classifyRecovery(transaction store.Transaction, actions []store.Action) (Pl
 	default:
 		return "", ErrConflictingState
 	}
+}
+
+func validHealthResolutionPendingAction(transaction store.Transaction, pending store.Action) bool {
+	if pending.Kind == workloadHealthStopActionKind {
+		return transaction.Kind == store.TransactionBootstrap || transaction.Kind == store.TransactionUpgrade
+	}
+
+	return transaction.Kind == store.TransactionBootstrap && pending.Kind == workloadDiscardActionKind
 }
 
 func validRestorePendingAction(actions []store.Action, pending store.Action) bool {
@@ -314,7 +354,7 @@ func mountProbeFallbackWarnings(preparation Preparation) []Warning {
 
 func persistentUpgradeWithoutMountProbe(preparation Preparation) bool {
 	switch preparation.Plan.Kind {
-	case PlanUpgrade, PlanResume, PlanProbeUnknownEffect, PlanRestore:
+	case PlanUpgrade, PlanResume, PlanProbeUnknownEffect, PlanRestore, PlanHealthDegraded:
 	case PlanBootstrap, PlanAdopt, PlanUnchanged:
 		return false
 	default:

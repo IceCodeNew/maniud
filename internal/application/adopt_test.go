@@ -1,3 +1,4 @@
+//nolint:goconst // Scenario labels remain beside the mutations they identify.
 package application
 
 import (
@@ -77,6 +78,82 @@ func TestRunAdoptResumesActionlessTransaction(t *testing.T) {
 	}
 }
 
+func TestRunAdoptPreservesPendingAndDegradedHealthEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		health WorkloadHealth
+		want   error
+		state  store.TransactionState
+	}{
+		{
+			name: "pending", health: WorkloadHealth{Status: WorkloadHealthStarting},
+			want: ErrHealthPending, state: store.TransactionActive,
+		},
+		{
+			name: "degraded", health: WorkloadHealth{Status: WorkloadHealthUnhealthy, FailingStreak: 3},
+			want: ErrHealthDegraded, state: store.TransactionHealthDegraded,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, mutation := newAdoptMutation(t)
+			t.Cleanup(func() { closeBootstrapMutation(t, state, mutation) })
+			mutation.preparation.Workload.Healthcheck = &domain.Healthcheck{
+				Test: []string{testHealthCommand, testTrueCommand},
+			}
+			observation := mutation.preparation.Plan.Observation
+			observation.Health = test.health
+
+			err := runAdopt(t.Context(), mutation, &adoptRuntimeFixture{observation: observation})
+			if !errors.Is(err, test.want) || mutation.preparation.Transaction.State != test.state {
+				t.Fatalf("runAdopt(%s) = %v, transaction %#v", test.name, err, mutation.preparation.Transaction)
+			}
+		})
+	}
+}
+
+func TestSettleAdoptionHealthDegradedPreservesCauseOnJournalFailure(t *testing.T) {
+	t.Parallel()
+
+	state, mutation := newAdoptMutation(t)
+	if err := mutation.lock.Close(); err != nil {
+		t.Fatalf("ServiceLock.Close() error = %v", err)
+	}
+	defer closeMutationTestStore(t, state)
+
+	err := settleAdoptionHealthDegraded(t.Context(), mutation, ErrHealthDegraded)
+	if !errors.Is(err, ErrHealthDegraded) || !errors.Is(err, store.ErrInvalidState) {
+		t.Fatalf("settleAdoptionHealthDegraded(closed lock) error = %v", err)
+	}
+}
+
+func TestSettleAdoptionHealthDegradedSkipsSettledTransaction(t *testing.T) {
+	t.Parallel()
+
+	state, mutation := newAdoptMutation(t)
+	transaction, err := mutation.lock.SetTransactionState(
+		t.Context(),
+		mutation.preparation.Transaction.ID,
+		store.TransactionHealthDegraded,
+	)
+	if err != nil {
+		t.Fatalf("SetTransactionState(health degraded) error = %v", err)
+	}
+	mutation.preparation.Transaction = transaction
+	if err = mutation.lock.Close(); err != nil {
+		t.Fatalf("ServiceLock.Close() error = %v", err)
+	}
+	defer closeMutationTestStore(t, state)
+
+	err = settleAdoptionHealthDegraded(t.Context(), mutation, ErrHealthDegraded)
+	if !errors.Is(err, ErrHealthDegraded) || errors.Is(err, store.ErrInvalidState) {
+		t.Fatalf("settleAdoptionHealthDegraded(settled transaction) error = %v", err)
+	}
+}
+
 func TestRunAdoptRejectsDriftAndProbeFailure(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +218,11 @@ func adoptObservationDriftTests() []adoptObservationDriftTest {
 			mutate: func(value *WorkloadObservation) { value.ConfigurationMatches = false },
 			err:    ErrConflictingState,
 		},
-		{name: "stopped", mutate: func(value *WorkloadObservation) { value.Running = false }, err: ErrConflictingState},
+		{
+			name:   "stopped",
+			mutate: func(value *WorkloadObservation) { value.Lifecycle = WorkloadLifecycleExited },
+			err:    ErrConflictingState,
+		},
 		{
 			name: "managed",
 			mutate: func(value *WorkloadObservation) {
