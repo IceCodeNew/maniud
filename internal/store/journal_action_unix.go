@@ -126,7 +126,7 @@ func reuseActionIntent(
 		"UPDATE journal_actions SET kind = kind "+
 			"WHERE transaction_id = ? AND sequence = ? "+
 			"AND EXISTS (SELECT 1 FROM journal_transactions "+
-			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded')) "+
+			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded', 'health_degraded')) "+
 			"AND EXISTS (SELECT 1 FROM writer_leases "+
 			"WHERE service_id = ? AND epoch = ? AND owner = ?)",
 		identifier[:],
@@ -157,7 +157,7 @@ func insertActionIntent(
 			"(transaction_id, sequence, kind, state, intent_digest, postcondition_digest) "+
 			"SELECT ?, ?, ?, 'intent', ?, NULL "+
 			"WHERE EXISTS (SELECT 1 FROM journal_transactions "+
-			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded')) "+
+			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded', 'health_degraded')) "+
 			"AND EXISTS (SELECT 1 FROM writer_leases "+
 			"WHERE service_id = ? AND epoch = ? AND owner = ?) "+
 			"AND NOT EXISTS (SELECT 1 FROM journal_actions "+
@@ -198,7 +198,7 @@ func (lock *ServiceLock) updateAction(
 		}
 
 		statement += "AND EXISTS (SELECT 1 FROM journal_transactions " +
-			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded')) " +
+			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded', 'health_degraded')) " +
 			"AND EXISTS (SELECT 1 FROM writer_leases " +
 			"WHERE service_id = ? AND epoch = ? AND owner = ?)"
 

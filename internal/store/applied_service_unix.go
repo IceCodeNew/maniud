@@ -84,7 +84,7 @@ func commitAppliedService(
 		return replayAppliedService(ctx, transaction, record, current, found, intent)
 	}
 
-	if record.State != TransactionActive {
+	if record.State != TransactionActive && record.State != TransactionHealthDegraded {
 		return Transaction{}, ErrInvalidState
 	}
 
@@ -176,7 +176,7 @@ func replaceAppliedService(
 	result, err := transaction.ExecContext(
 		ctx,
 		"UPDATE applied_services SET transaction_id = ?, workload_id = ?, configuration_digest = ?, "+
-			"storage_digest = ?, reference_digest = ?, platform_manifest_digest = ?, image_config_digest = ? "+
+			"storage_digest = ?, reference_digest = ?, platform_manifest_digest = ?, image_config_digest = ?, healthcheck = ? "+
 			"WHERE service_id = ? AND transaction_id = ? AND workload_id = ?",
 		record.ID[:],
 		intent.WorkloadID,
@@ -185,6 +185,7 @@ func replaceAppliedService(
 		intent.ReferenceDigest[:],
 		intent.PlatformManifestDigest[:],
 		intent.ImageConfigDigest[:],
+		intent.Healthcheck,
 		serviceID[:],
 		record.BaseTransactionID[:],
 		record.PredecessorWorkloadID,
@@ -205,7 +206,7 @@ func finishAppliedTransaction(
 	result, err := transaction.ExecContext(
 		ctx,
 		"UPDATE journal_transactions SET state = 'succeeded' "+
-			"WHERE transaction_id = ? AND service_id = ? AND state = 'active' "+
+			"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'health_degraded') "+
 			"AND NOT EXISTS (SELECT 1 FROM journal_actions "+
 			"WHERE transaction_id = ? AND state != 'completed') "+
 			"AND EXISTS (SELECT 1 FROM writer_leases "+
@@ -238,6 +239,7 @@ func appliedServiceRecord(transaction Transaction, intent AppliedServiceIntent) 
 		ReferenceDigest:        intent.ReferenceDigest,
 		PlatformManifestDigest: intent.PlatformManifestDigest,
 		ImageConfigDigest:      intent.ImageConfigDigest,
+		Healthcheck:            intent.Healthcheck,
 	}
 }
 
@@ -252,7 +254,7 @@ func insertAppliedService(
 		ctx,
 		"INSERT INTO applied_services "+
 			"(service_id, transaction_id, workload_id, configuration_digest, storage_digest, reference_digest, "+
-			"platform_manifest_digest, image_config_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			"platform_manifest_digest, image_config_digest, healthcheck) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		serviceID[:],
 		identifier[:],
 		intent.WorkloadID,
@@ -261,6 +263,7 @@ func insertAppliedService(
 		intent.ReferenceDigest[:],
 		intent.PlatformManifestDigest[:],
 		intent.ImageConfigDigest[:],
+		intent.Healthcheck,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert applied service: %w", err)
@@ -279,7 +282,7 @@ func appliedService(
 		"SELECT applied.transaction_id, journal.kind, journal.runtime, journal.source_digest, "+
 			"journal.effective_digest, journal.execution_digest, applied.workload_id, "+
 			"applied.configuration_digest, applied.storage_digest, applied.reference_digest, applied.platform_manifest_digest, "+
-			"applied.image_config_digest FROM applied_services AS applied "+
+			"applied.image_config_digest, applied.healthcheck FROM applied_services AS applied "+
 			"JOIN journal_transactions AS journal USING (transaction_id) WHERE applied.service_id = ?",
 		serviceID[:],
 	)
@@ -292,6 +295,7 @@ func appliedService(
 	return record, err == nil, err
 }
 
+//nolint:funlen // The scanner keeps one SQL row and its complete integrity validation together.
 func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, error) {
 	var (
 		record        AppliedService
@@ -306,6 +310,7 @@ func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, er
 		reference     []byte
 		manifest      []byte
 		imageConfig   []byte
+		healthcheck   int
 	)
 
 	err := row.Scan(
@@ -321,6 +326,7 @@ func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, er
 		&reference,
 		&manifest,
 		&imageConfig,
+		&healthcheck,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -337,6 +343,10 @@ func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, er
 
 	record.Kind = TransactionKind(kind)
 	record.Runtime = parsedRuntime
+	if healthcheck != 0 && healthcheck != 1 {
+		return AppliedService{}, ErrInvalidState
+	}
+	record.Healthcheck = healthcheck == 1
 	if !validTransactionKind(record.Kind) || !copyAppliedServiceIdentity(
 		&record,
 		identifier,

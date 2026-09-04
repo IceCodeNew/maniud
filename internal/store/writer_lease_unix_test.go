@@ -155,9 +155,9 @@ func TestWriterLeaseRecoversAfterProcessDeath(t *testing.T) {
 
 	requireNoError(t, command.Process.Kill())
 
+	waitErr := command.Wait()
 	_ = stdin.Close()
 
-	waitErr := command.Wait()
 	if waitErr == nil {
 		t.Fatal("killed writer helper exited successfully")
 	}

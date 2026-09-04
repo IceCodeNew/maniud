@@ -38,6 +38,9 @@ const (
 	TransactionActive TransactionState = "active"
 	// TransactionDegraded requires recovery of the previously applied workload.
 	TransactionDegraded TransactionState = "degraded"
+	// TransactionHealthDegraded retains the current workload until an explicit
+	// operator rollback or later healthy convergence.
+	TransactionHealthDegraded TransactionState = "health_degraded"
 	// TransactionFailed records a terminal unsuccessful transaction.
 	TransactionFailed TransactionState = "failed"
 	// TransactionSucceeded records a terminal successful transaction.
@@ -88,6 +91,7 @@ type AppliedServiceIntent struct {
 	ReferenceDigest        domain.Digest
 	PlatformManifestDigest domain.Digest
 	ImageConfigDigest      domain.Digest
+	Healthcheck            bool
 	Backup                 *BackupIndexIntent
 }
 
@@ -105,6 +109,7 @@ type AppliedService struct {
 	ReferenceDigest        domain.Digest
 	PlatformManifestDigest domain.Digest
 	ImageConfigDigest      domain.Digest
+	Healthcheck            bool
 }
 
 // BackupIndexIntent binds a complete manifest to the successful upgrade that
