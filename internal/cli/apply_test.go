@@ -89,18 +89,7 @@ func (runtime *applyRuntimeFixture) ObserveWorkload(
 	*runtime.events = append(*runtime.events, "observe")
 
 	return application.WorkloadObservation{
-		State:                application.WorkloadObservationMissing,
-		ConfigurationMatches: false,
-		Running:              false,
-		Ownership: domain.WorkloadOwnership{
-			Status:           domain.OwnershipConflicting,
-			Service:          "",
-			Transaction:      "",
-			DesiredState:     domain.Digest{},
-			Reference:        domain.Digest{},
-			ImageConfig:      domain.Digest{},
-			PlatformManifest: domain.Digest{},
-		},
+		State: application.WorkloadObservationMissing,
 	}, nil
 }
 
@@ -147,6 +136,14 @@ func (operations *applyOperationsFixture) Apply(
 	}
 
 	return operations.applyPlan, operations.applyErr
+}
+
+func (*applyOperationsFixture) ResolveHealth(
+	context.Context,
+	application.Request,
+	application.HealthResolution,
+) (application.Plan, error) {
+	return application.Plan{}, nil
 }
 
 func (*applyOperationsFixture) Snapshot(
@@ -456,6 +453,7 @@ func TestWriteHumanApplyPlanExplainsEveryAction(t *testing.T) {
 		{application.PlanResume, "resume the interrupted operation"},
 		{application.PlanProbeUnknownEffect, "verify an interrupted runtime operation before continuing"},
 		{application.PlanRestore, "restore the previous workload"},
+		{application.PlanHealthDegraded, "wait for workload health or choose rollback"},
 		{application.PlanKind("future"), "process the workload"},
 	}
 	for _, test := range tests {
@@ -1077,6 +1075,9 @@ func TestClassifyApplyFailure(t *testing.T) {
 		{err: registry.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
 		{err: registry.ErrRateLimited, code: domain.ErrorApplyFailed, retryable: true},
 		{err: store.ErrUnavailable, code: domain.ErrorApplyFailed, retryable: true},
+		{err: application.ErrHealthPending, code: domain.ErrorHealthPending, retryable: true},
+		{err: fmt.Errorf("wrapped: %w", application.ErrHealthPending), code: domain.ErrorHealthPending, retryable: true},
+		{err: application.ErrHealthDegraded, code: domain.ErrorHealthDegraded, retryable: false},
 		{err: errApplyTest, code: domain.ErrorApplyFailed, retryable: false},
 	}
 

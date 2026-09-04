@@ -34,6 +34,7 @@ type gitOpsRegistration struct {
 	Repository     string `json:"repository"`
 	Branch         string `json:"branch"`
 	Remote         string `json:"remote"`
+	RemoteURL      string `json:"remote_url,omitempty"`
 	BaselineCommit string `json:"baseline_commit"`
 }
 
@@ -91,20 +92,27 @@ func prepareGitOpsRegistration(path string, registration gitOpsRegistration) err
 
 func reuseGitOpsRegistration(path string, registration gitOpsRegistration) error {
 	existing, err := readGitOpsRegistration(path)
-	switch {
-	case err == nil && existing == registration:
-		return errAlreadyRegisteredSame
-	case err == nil:
-		return errGitOpsRegistrationExists
-	case errors.Is(err, os.ErrNotExist):
-		return nil
-	default:
-		if _, statErr := os.Lstat(path); statErr == nil {
-			return errGitOpsRegistrationExists
+	if err == nil {
+		if existing == registration {
+			return errAlreadyRegisteredSame
+		}
+		if existing.RemoteURL == "" {
+			existing.RemoteURL = registration.RemoteURL
+			if registration.RemoteURL != "" && existing == registration {
+				return nil
+			}
 		}
 
+		return errGitOpsRegistrationExists
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	if _, statErr := os.Lstat(path); statErr == nil {
+		return errGitOpsRegistrationExists
+	}
+
+	return nil
 }
 
 func readGitOpsRegistration(path string) (gitOpsRegistration, error) {
@@ -136,6 +144,7 @@ func validGitOpsRegistration(registration gitOpsRegistration) bool {
 		filepath.Clean(registration.Repository) == registration.Repository &&
 		validGitOpsBranch(registration.Branch) &&
 		registration.Remote == gitOpsRemoteName &&
+		(registration.RemoteURL == "" || validGitRemoteURL(registration.RemoteURL)) &&
 		validGitObjectID(registration.BaselineCommit)
 }
 

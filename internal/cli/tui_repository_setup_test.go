@@ -12,7 +12,20 @@ import (
 	"github.com/IceCodeNew/maniud/internal/tui"
 )
 
-const tuiTestGitHubRepository = "owner/desired-state"
+const (
+	tuiTestGitHubRepository = "owner/desired-state"
+	tuiTestGitHubRemote     = "https://github.com/owner/desired-state.git"
+	tuiTestCloneOperation   = "clone"
+)
+
+func setupTUIRepositoryWith(
+	ctx context.Context,
+	registrationPath string,
+	request tui.RepositorySetupRequest,
+	runGH func(context.Context, string, ...string) error,
+) error {
+	return setupTUIRepositoryWithHost(ctx, registrationPath, request, "", runGH)
+}
 
 func TestTUIRepositorySetupCreatesPrivateGitHubRepositoryWithGH(t *testing.T) {
 	t.Parallel()
@@ -32,11 +45,14 @@ func TestTUIRepositorySetupCreatesPrivateGitHubRepositoryWithGH(t *testing.T) {
 			if directory != root {
 				t.Fatalf("gh directory = %q, want %q", directory, root)
 			}
-			if len(arguments) > 1 && arguments[1] == "clone" {
+			if len(arguments) > 1 && arguments[1] == tuiTestCloneOperation {
 				_, cloneErr := runGit(
 					ctx, directory,
-					"clone", "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+					tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
 				)
+				if cloneErr == nil {
+					_, cloneErr = runGit(ctx, checkout, "remote", "set-url", gitOpsRemoteName, tuiTestGitHubRemote)
+				}
 
 				return cloneErr
 			}
@@ -48,8 +64,8 @@ func TestTUIRepositorySetupCreatesPrivateGitHubRepositoryWithGH(t *testing.T) {
 		t.Fatalf("setupTUIRepositoryWith(create) error = %v", err)
 	}
 	wantCalls := [][]string{
-		{"repo", createOperation, "--private", "--add-readme", tuiTestGitHubRepository},
-		{"repo", "clone", tuiTestGitHubRepository, checkout},
+		{repositoryValue, createOperation, "--private", "--add-readme", tuiTestGitHubRepository},
+		{repositoryValue, tuiTestCloneOperation, tuiTestGitHubRemote, checkout},
 	}
 	if !slices.EqualFunc(calls, wantCalls, slices.Equal) {
 		t.Fatalf("gh calls = %q, want %q", calls, wantCalls)
@@ -93,6 +109,197 @@ func TestTUIRepositorySetupUsesGitForExistingRepository(t *testing.T) {
 	}
 }
 
+func TestTUIRepositorySetupReportsCreatedRemoteWhenRegistrationFails(t *testing.T) {
+	t.Parallel()
+
+	remote := newTUISetupRemote(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "desired-state")
+	registrationPath := t.TempDir()
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository, Checkout: checkout,
+	}
+	err := setupTUIRepositoryWith(
+		t.Context(), registrationPath, request,
+		func(ctx context.Context, directory string, arguments ...string) error {
+			if len(arguments) > 1 && arguments[1] == tuiTestCloneOperation {
+				_, cloneErr := runGit(
+					ctx, directory,
+					tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+				)
+				if cloneErr == nil {
+					_, cloneErr = runGit(ctx, checkout, "remote", "set-url", gitOpsRemoteName, tuiTestGitHubRemote)
+				}
+
+				return cloneErr
+			}
+
+			return nil
+		},
+	)
+	if !errors.Is(err, errTUIRepositoryCreated) {
+		t.Fatalf("setupTUIRepositoryWith(registration failure) error = %v", err)
+	}
+}
+
+func TestTUIRepositorySetupRetriesCreatedGitHubRepositoryWithGH(t *testing.T) {
+	t.Parallel()
+
+	remote := newTUISetupRemote(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "desired-state")
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository,
+		Checkout: checkout, Created: true,
+	}
+	var calls [][]string
+	runGH := func(ctx context.Context, directory string, arguments ...string) error {
+		calls = append(calls, slices.Clone(arguments))
+		_, err := runGit(
+			ctx, directory,
+			tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+		)
+		if err == nil {
+			_, err = runGit(ctx, checkout, "remote", "set-url", gitOpsRemoteName, tuiTestGitHubRemote)
+		}
+
+		return err
+	}
+	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	if err := setupTUIRepositoryWith(t.Context(), registrationPath, request, runGH); err != nil {
+		t.Fatalf("setupTUIRepositoryWith(created clone) error = %v", err)
+	}
+	wantCalls := [][]string{{repositoryValue, tuiTestCloneOperation, tuiTestGitHubRemote, checkout}}
+	if !slices.EqualFunc(calls, wantCalls, slices.Equal) {
+		t.Fatalf("created recovery gh calls = %q, want %q", calls, wantCalls)
+	}
+	assertTUISetupRegistration(t, registrationPath, checkout)
+
+	registrationPath = filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	if err := setupTUIRepositoryWith(
+		t.Context(), registrationPath, request,
+		func(context.Context, string, ...string) error {
+			t.Fatal("created checkout recovery invoked gh")
+
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("setupTUIRepositoryWith(created checkout) error = %v", err)
+	}
+	assertTUISetupRegistration(t, registrationPath, checkout)
+}
+
+func TestTUIRepositorySetupRejectsMismatchedCreatedCheckout(t *testing.T) {
+	t.Parallel()
+
+	remote := newTUISetupRemote(t)
+	checkout := filepath.Join(t.TempDir(), "desired-state")
+	if _, err := runGit(
+		t.Context(), filepath.Dir(checkout),
+		tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+	); err != nil {
+		t.Fatalf("git clone error = %v", err)
+	}
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository,
+		Checkout: checkout, Created: true,
+	}
+	if err := setupTUIRepositoryWith(
+		t.Context(), filepath.Join(t.TempDir(), gitOpsRegistrationName), request,
+		func(context.Context, string, ...string) error {
+			t.Fatal("mismatched created checkout invoked gh")
+
+			return nil
+		},
+	); !errors.Is(err, errGitOpsRepositoryInvalid) || !errors.Is(err, errTUIRepositoryCreated) {
+		t.Fatalf("setupTUIRepositoryWith(mismatched created checkout) error = %v", err)
+	}
+}
+
+func TestTUIRepositorySetupRejectsMismatchedFreshCheckout(t *testing.T) {
+	t.Parallel()
+
+	remote := newTUISetupRemote(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "desired-state")
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository, Checkout: checkout,
+	}
+	err := setupTUIRepositoryWith(
+		t.Context(), filepath.Join(t.TempDir(), gitOpsRegistrationName), request,
+		func(ctx context.Context, directory string, arguments ...string) error {
+			if len(arguments) <= 1 || arguments[1] != tuiTestCloneOperation {
+				return nil
+			}
+			_, cloneErr := runGit(
+				ctx, directory,
+				tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+			)
+
+			return cloneErr
+		},
+	)
+	if !errors.Is(err, errGitOpsRepositoryInvalid) || !errors.Is(err, errTUIRepositoryCreated) {
+		t.Fatalf("setupTUIRepositoryWith(mismatched fresh checkout) error = %v", err)
+	}
+}
+
+func TestTUIRepositorySetupUsesConfiguredGitHubHost(t *testing.T) {
+	t.Parallel()
+
+	const enterpriseRemote = "https://github.example.com/owner/desired-state.git"
+	remote := newTUISetupRemote(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "desired-state")
+	request := tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository, Checkout: checkout,
+	}
+	var calls [][]string
+	runGH := func(ctx context.Context, directory string, arguments ...string) error {
+		calls = append(calls, slices.Clone(arguments))
+		if len(arguments) <= 1 || arguments[1] != tuiTestCloneOperation {
+			return nil
+		}
+		_, err := runGit(
+			ctx, directory,
+			tuiTestCloneOperation, "--quiet", "--origin", gitOpsRemoteName, "--", remote, checkout,
+		)
+		if err == nil {
+			_, err = runGit(ctx, checkout, "remote", "set-url", gitOpsRemoteName, enterpriseRemote)
+		}
+
+		return err
+	}
+	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	if err := setupTUIRepositoryWithHost(
+		t.Context(), registrationPath, request, "github.example.com", runGH,
+	); err != nil {
+		t.Fatalf("setupTUIRepositoryWithHost(create) error = %v", err)
+	}
+	wantCalls := [][]string{
+		{repositoryValue, createOperation, "--private", "--add-readme", tuiTestGitHubRepository},
+		{repositoryValue, tuiTestCloneOperation, enterpriseRemote, checkout},
+	}
+	if !slices.EqualFunc(calls, wantCalls, slices.Equal) {
+		t.Fatalf("enterprise gh calls = %q, want %q", calls, wantCalls)
+	}
+	assertTUISetupRegistration(t, registrationPath, checkout)
+
+	request.Created = true
+	registrationPath = filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	if err := setupTUIRepositoryWithHost(
+		t.Context(), registrationPath, request, "github.example.com",
+		func(context.Context, string, ...string) error {
+			t.Fatal("enterprise recovery invoked gh for an existing checkout")
+
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("setupTUIRepositoryWithHost(recovery) error = %v", err)
+	}
+	assertTUISetupRegistration(t, registrationPath, checkout)
+}
+
 //nolint:cyclop,funlen // Assertions cover independent setup input and dependency failures.
 func TestTUIRepositorySetupContainsInvalidAndUnavailableInputs(t *testing.T) {
 	t.Parallel()
@@ -130,7 +337,7 @@ func TestTUIRepositorySetupContainsInvalidAndUnavailableInputs(t *testing.T) {
 
 			return nil
 		},
-	); !errors.Is(err, errTUIRepositorySetupUnavailable) || ghCalls != 2 {
+	); !errors.Is(err, errTUIRepositorySetupUnavailable) || !errors.Is(err, errTUIRepositoryCreated) || ghCalls != 2 {
 		t.Fatalf("setupTUIRepositoryWith(clone unavailable) error = %v, calls = %d", err, ghCalls)
 	}
 	validCreate.Remote = testInvalidValue
@@ -143,6 +350,8 @@ func TestTUIRepositorySetupContainsInvalidAndUnavailableInputs(t *testing.T) {
 
 	for _, request := range []tui.RepositorySetupRequest{
 		{Checkout: validCreate.Checkout},
+		{Mode: tui.RepositorySetupExisting, Remote: "https://example.com/repo", Checkout: validCreate.Checkout,
+			Created: true},
 		{Mode: tui.RepositorySetupExisting, Remote: "ssh://example.com/repo", Checkout: validCreate.Checkout},
 		{Mode: tui.RepositorySetupExisting, Remote: "https://example.com/repo", Checkout: testRelativePath},
 	} {

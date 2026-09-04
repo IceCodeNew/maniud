@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -16,6 +17,7 @@ type tuiCatalog struct {
 	loadSource       func(context.Context, string) (compose.Source, error)
 	setupRepository  func(context.Context, string, tui.RepositorySetupRequest) error
 	suggestedPath    string
+	githubHost       string
 }
 
 func defaultTUICatalog(
@@ -24,7 +26,7 @@ func defaultTUICatalog(
 ) *tuiCatalog {
 	statePath, err := defaultStatePath(environment)
 	if err != nil {
-		return &tuiCatalog{loadSource: loadSource}
+		return &tuiCatalog{loadSource: loadSource, githubHost: environment["GH_HOST"]}
 	}
 	home := environment["HOME"]
 	suggestedPath := ""
@@ -37,6 +39,7 @@ func defaultTUICatalog(
 		loadSource:       loadSource,
 		setupRepository:  setupTUIRepository,
 		suggestedPath:    suggestedPath,
+		githubHost:       environment["GH_HOST"],
 	}
 }
 
@@ -133,20 +136,55 @@ func (catalog *tuiCatalog) Register(
 	request tui.RepositorySetupRequest,
 ) tui.RegistrationResult {
 	if catalog.setupRepository == nil || catalog.registrationPath == "" {
-		return tui.RegistrationResult{Blocker: tui.BlockerUnavailable}
+		return tui.RegistrationResult{Failure: tui.RepositorySetupUnavailable}
 	}
 	err := catalog.setupRepository(ctx, catalog.registrationPath, request)
 	if err != nil {
-		blocker := tui.BlockerUnavailable
-		if errors.Is(err, errGitOpsRepositoryInvalid) || errors.Is(err, errGitOpsRegistrationExists) ||
-			errors.Is(err, compose.ErrInvalidSource) {
-			blocker = tui.BlockerInvalid
+		failure := repositorySetupFailure(err)
+		recoveryRepository := ""
+		if errors.Is(err, errTUIRepositoryCreated) &&
+			tuiGitHubRecoveryRemote(request.Remote, catalog.githubHost) != "" {
+			recoveryRepository = request.Remote
 		}
 
-		return tui.RegistrationResult{Blocker: blocker}
+		return tui.RegistrationResult{Failure: failure, RecoveryRepository: recoveryRepository}
 	}
 
 	return tui.RegistrationResult{Snapshot: catalog.Snapshot(ctx)}
+}
+
+func repositorySetupFailure(err error) tui.RepositorySetupFailure {
+	switch {
+	case errors.Is(err, errTUIRepositoryCreateFailed):
+		return tui.RepositorySetupGitHubFailed
+	case errors.Is(err, errTUIRepositoryCloneFailed):
+		return tui.RepositorySetupCloneFailed
+	case errors.Is(err, errTUIRepositoryRegistration):
+		return tui.RepositorySetupRegistrationFailed
+	case errors.Is(err, errGitOpsRepositoryInvalid),
+		errors.Is(err, errGitOpsRegistrationExists),
+		errors.Is(err, compose.ErrInvalidSource):
+		return tui.RepositorySetupInvalidInput
+	default:
+		return tui.RepositorySetupUnavailable
+	}
+}
+
+func tuiGitHubRecoveryRemote(repository, configuredHost string) string {
+	host := configuredHost
+	if host == "" {
+		host = "github.com"
+	}
+	rawOrigin := "https://" + host
+	parsed, err := url.Parse(rawOrigin)
+	expectedOrigin := (&url.URL{Scheme: "https", Host: host}).String()
+	if err != nil || !validGitHubRepository(repository) || parsed.Hostname() == "" ||
+		parsed.String() != expectedOrigin {
+		return ""
+	}
+	parsed.Path = "/" + repository + ".git"
+
+	return parsed.String()
 }
 
 func (catalog *tuiCatalog) registration() (gitOpsRegistration, tui.CatalogState) {

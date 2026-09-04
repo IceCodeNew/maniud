@@ -215,6 +215,8 @@ func applyPlanAction(kind application.PlanKind) string {
 		return "verify an interrupted runtime operation before continuing"
 	case application.PlanRestore:
 		return "restore the previous workload"
+	case application.PlanHealthDegraded:
+		return "wait for workload health or choose rollback"
 	default:
 		return "process the workload"
 	}

@@ -49,7 +49,7 @@ func TestRunGitWithUserConfigPreservesSigningEnvironment(t *testing.T) {
 	gitPath := installFakeGit(t)
 	home := t.TempDir()
 	for name, value := range map[string]string{
-		"HOME": home, "XDG_CONFIG_HOME": home + "/config", "XDG_RUNTIME_DIR": home + "/runtime",
+		"HOME": home, xdgConfigHomeEnvironment: home + "/config", "XDG_RUNTIME_DIR": home + "/runtime",
 		"GNUPGHOME": home + "/gnupg", "GPG_TTY": "/dev/ttys001", "SSH_AUTH_SOCK": home + "/agent.sock",
 		"GIT_DIR": "hostile", "GIT_CONFIG_GLOBAL": "hostile",
 	} {
@@ -210,6 +210,7 @@ func TestValidGitRemoteURL(t *testing.T) {
 		"", "relative.git", "/srv/../git", "http://example.invalid/repo",
 		"ssh://example.invalid/repo", "ext::command", "https:///repo",
 		"https://example.invalid/repo#fragment", "file://remote/repo", "file:///repo?query",
+		"https://token@example.invalid/repo", "https://example.invalid/repo?token=secret",
 		"https://example.invalid/repo\nother", "https://example.invalid/%zz",
 	} {
 		if validGitRemoteURL(value) {
