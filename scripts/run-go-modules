@@ -1,18 +1,80 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+modules_file="${MANIUD_GATE_MANIFEST:-}"
+if [[ "${1:-}" == "--modules-from" ]]; then
+	(($# >= 3)) || {
+		printf '%s\n' '--modules-from requires a manifest and command' >&2
+		exit 2
+	}
+	modules_file="$(realpath "$2")"
+	shift 2
+fi
 if (($# == 0)); then
-	printf 'usage: %s command [argument ...]\n' "$0" >&2
+	printf 'usage: %s [--modules-from manifest] command [argument ...]\n' "$0" >&2
 	exit 2
 fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+manifest_mode="full"
+if [[ -n "$modules_file" ]]; then
+	modules_file="$(realpath "$modules_file")"
+	if ! manifest_mode="$(awk -F $'\t' '
+    $1 == "mode" { count++; value = $2 }
+    END {
+      if (count != 1 || (value != "full" && value != "affected")) exit 1
+      print value
+    }
+  ' "$modules_file")"; then
+		printf '%s\n' 'invalid gate manifest: expected one mode row' >&2
+		exit 1
+	fi
+fi
 module_names=()
 while IFS= read -r module_name; do
 	module_names+=("$module_name")
-done < <("$repository_root/scripts/list-go-modules")
+done < <(if [[ -n "$modules_file" ]]; then awk -F $'\t' '$1 == "module" { print $2 }' "$modules_file"; else "$repository_root/scripts/list-go-modules"; fi)
+
+if ((${#module_names[@]} == 0)); then
+	printf '%s\n' 'no modules selected' >&2
+	exit 1
+fi
 
 for module_name in "${module_names[@]}"; do
-	printf '==> %s: %s\n' "$module_name" "$*"
-	(cd "$repository_root/$module_name" && env GOWORK=off "$@")
+	module_command=("$@")
+	if [[ "$manifest_mode" == affected ]]; then
+		packages=()
+		while IFS= read -r package; do
+			packages+=("$package")
+		done < <(awk -F $'\t' -v module="$module_name" '$1 == "package" && $2 == module { print $3 }' "$modules_file")
+		package_arguments=()
+		if ((${#packages[@]} > 0)); then
+			module_path="$(cd "$repository_root/$module_name" && GOWORK=off go list -m -f '{{.Path}}')"
+			for package in "${packages[@]}"; do
+				if [[ "$package" == "$module_path" ]]; then
+					package_arguments+=(.)
+				elif [[ "$package" == "$module_path/"* ]]; then
+					package_arguments+=("./${package#"$module_path/"}")
+				else
+					printf 'package %s is outside affected module %s\n' "$package" "$module_name" >&2
+					exit 1
+				fi
+			done
+		fi
+		expanded=()
+		for argument in "${module_command[@]}"; do
+			if [[ "$argument" == ./... ]]; then
+				if ((${#package_arguments[@]} == 0)); then
+					printf 'no packages selected for affected module %s\n' "$module_name" >&2
+					exit 1
+				fi
+				expanded+=("${package_arguments[@]}")
+			else
+				expanded+=("$argument")
+			fi
+		done
+		module_command=("${expanded[@]}")
+	fi
+	printf '==> %s: %s\n' "$module_name" "${module_command[*]}"
+	(cd "$repository_root/$module_name" && env GOWORK=off "${module_command[@]}")
 done

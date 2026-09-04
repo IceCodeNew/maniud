@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-packages_file=""
+packages_file="${MANIUD_GATE_MANIFEST:-}"
+if [[ -n "$packages_file" ]]; then
+	packages_file="$(realpath "$packages_file")"
+fi
 profile_argument=""
 while (($# > 0)); do
 	case "$1" in
@@ -44,6 +47,55 @@ module_names=()
 while IFS= read -r module_name; do
 	module_names+=("$module_name")
 done < <("$repository_root/scripts/list-go-modules")
+
+# Gate manifests also contain command packages for static analysis and smoke
+# tests. Keep coverage aligned with each module's established package scope.
+select_coverage_packages() {
+	local module_name="$1"
+	local module_directory="$2"
+	shift 2
+	if [[ -z "$packages_file" ]]; then
+		(
+			cd "$module_directory"
+			GOWORK=off CGO_ENABLED="$test_cgo" go list "$@"
+		)
+		return
+	fi
+
+	local selected_file eligible_file
+	selected_file="$(mktemp "$temporary_dir/selected.XXXXXX")"
+	eligible_file="$(mktemp "$temporary_dir/eligible.XXXXXX")"
+	awk -F $'\t' -v module="$module_name" \
+		'$1 == "package" && $2 == module { print $3 }' "$packages_file" >"$selected_file"
+	(
+		cd "$module_directory"
+		GOWORK=off CGO_ENABLED="$test_cgo" go list "$@"
+	) >"$eligible_file" || {
+		rm -f "$selected_file" "$eligible_file"
+		return 1
+	}
+	awk 'NR == FNR { selected[$0] = 1; next } selected[$0]' \
+		"$selected_file" "$eligible_file" || {
+		rm -f "$selected_file" "$eligible_file"
+		return 1
+	}
+	rm -f "$selected_file" "$eligible_file"
+}
+
+load_coverage_packages() {
+	local selection_file
+	coverage_packages=()
+	selection_file="$(mktemp "$temporary_dir/coverage-packages.XXXXXX")"
+	if ! select_coverage_packages "$@" >"$selection_file"; then
+		rm -f "$selection_file"
+		return 1
+	fi
+	while IFS= read -r coverage_package; do
+		coverage_packages+=("$coverage_package")
+	done <"$selection_file"
+	rm -f "$selection_file"
+}
+
 module_profiles=()
 for module_number in "${!module_names[@]}"; do
 	module_name="${module_names[$module_number]}"
@@ -52,23 +104,16 @@ for module_number in "${!module_names[@]}"; do
 	if [[ "$module_name" == "." ]]; then
 		coverage_patterns=(./internal/... ./plugins/...)
 	fi
-	coverage_packages=()
-	if [[ -n "$packages_file" ]]; then
-		while IFS= read -r coverage_package; do
-			coverage_packages+=("$coverage_package")
-		done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
-	else
-		while IFS= read -r coverage_package; do
-			coverage_packages+=("$coverage_package")
-		done < <(
-			cd "$module_directory"
-			GOWORK=off CGO_ENABLED="$test_cgo" go list "${coverage_patterns[@]}"
-		)
+	if ! load_coverage_packages "$module_name" "$module_directory" "${coverage_patterns[@]}"; then
+		exit 1
 	fi
 	if ((${#coverage_packages[@]} == 0)); then
 		continue
 	fi
-	coverpkg="$(IFS=,; printf '%s' "${coverage_packages[*]}")"
+	coverpkg="$(
+		IFS=,
+		printf '%s' "${coverage_packages[*]}"
+	)"
 	module_profile="$temporary_dir/statements-$module_number.cover"
 	module_profiles+=("$module_profile")
 	test_args=(
@@ -117,8 +162,13 @@ absolute_profile="$temporary_dir/statements-absolute.cover"
 } >"$absolute_profile"
 
 repository_module_path="$(cd "$repository_root" && GOWORK=off go list -m -f '{{.Path}}')"
-cover_report="$(GOWORK=off go tool cover -func="$absolute_profile")"
-printf '%s\n' "${cover_report//"$repository_root/"/"$repository_module_path/"}"
+GOWORK=off go tool cover -func="$absolute_profile" | awk \
+	-v directory="$repository_root/" -v module_prefix="$repository_module_path/" '
+  index($1, directory) == 1 {
+    $1 = module_prefix substr($1, length(directory) + 1)
+  }
+  { print }
+'
 awk -v directory="$repository_root/" -v module_prefix="$repository_module_path/" '
   NR == 1 { print; next }
   index($1, directory) == 1 {
@@ -192,13 +242,8 @@ PY
 		if [[ "$module_name" == "." ]]; then
 			coverage_patterns=(./internal/... ./plugins/...)
 		fi
-		coverage_packages=()
-		if [[ -n "$packages_file" ]]; then
-			while IFS= read -r coverage_package; do
-				coverage_packages+=("$coverage_package")
-			done < <(awk -F $'\t' -v module="$module_name" '$1 == module { print $2 }' "$packages_file")
-		else
-			coverage_packages=("${coverage_patterns[@]}")
+		if ! load_coverage_packages "$module_name" "$module_directory" "${coverage_patterns[@]}"; then
+			exit 1
 		fi
 		if ((${#coverage_packages[@]} == 0)); then
 			continue
