@@ -80,7 +80,7 @@ func TestComposeExtensionBoundaries(t *testing.T) {
 	cycle[maniud.Key] = cycle
 	for _, document := range []map[string]any{
 		cycle,
-		{maniud.Key: map[string]any{"services": map[string]any{}}, "x-other": true},
+		{maniud.Key: map[string]any{testServicesKey: map[string]any{}}, "x-other": true},
 		{"x-other": true},
 	} {
 		if _, valid := decodeComposeExtensions(document); valid {

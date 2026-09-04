@@ -115,6 +115,100 @@ func TestRepositoryDigestBindsEntryDocument(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen,goconst,lll // The test proves cloning and digest rebinding across the complete source bundle.
+func TestSourceWithEntryContentClonesAndRebindsRepository(t *testing.T) {
+	t.Parallel()
+
+	files := map[string][]byte{
+		testRepositoryEntry: []byte("name: before\nservices: {}\n"),
+		"deploy/.env":       []byte("SELECTED=before\n"),
+	}
+	source, err := CaptureRepositorySource(
+		t.TempDir(),
+		testRepositoryEntry,
+		nil,
+		repositoryFixtureReader(files),
+		func(string) (RepositoryPathSnapshot, error) { return RepositoryPathSnapshot{}, errRepositoryFixture },
+	)
+	if err != nil {
+		t.Fatalf("CaptureRepositorySource() error = %v", err)
+	}
+	source.Profiles = []string{"selected"}
+	originalDigest := source.Repository.Digest
+	replacement := []byte("name: after\nservices: {}\n")
+
+	updated, err := source.WithEntryContent(replacement)
+	if err != nil {
+		t.Fatalf("WithEntryContent() error = %v", err)
+	}
+	if updated.Repository == source.Repository || updated.Repository.Digest == originalDigest ||
+		!slices.Equal(updated.Content, replacement) ||
+		!reflect.DeepEqual(updated.Environment, source.Environment) ||
+		!slices.Equal(updated.Profiles, source.Profiles) ||
+		!slices.Equal(updated.Repository.Files[testRepositoryEntry].Content, replacement) ||
+		!slices.Equal(updated.Repository.Files["deploy/.env"].Content, files["deploy/.env"]) {
+		t.Fatalf("WithEntryContent() = %#v", updated)
+	}
+	replacement[0] = 'x'
+	updated.Content[1] = 'x'
+	updated.Environment["SELECTED"] = "after"
+	updated.Profiles[0] = "after"
+	secondary := updated.Repository.Files["deploy/.env"]
+	secondary.Content[0] = 'x'
+	if string(source.Content) != "name: before\nservices: {}\n" || source.Environment["SELECTED"] != "before" ||
+		source.Profiles[0] != "selected" || string(source.Repository.Files["deploy/.env"].Content) != "SELECTED=before\n" {
+		t.Fatal("WithEntryContent() shared input storage")
+	}
+
+	plain := Source{Content: []byte("before"), WorkingDir: t.TempDir(), Environment: map[string]string{"A": "1"}, Profiles: []string{"p"}}
+	plainUpdated, err := plain.WithEntryContent([]byte("after"))
+	if err != nil || plainUpdated.Repository != nil || string(plainUpdated.Content) != "after" {
+		t.Fatalf("WithEntryContent(non-repository) = %#v, %v", plainUpdated, err)
+	}
+	invalid := source
+	invalid.Repository = new(RepositorySnapshot)
+	for _, input := range []struct {
+		source  Source
+		content []byte
+	}{
+		{source: source},
+		{source: source, content: make([]byte, maxSourceBytes+1)},
+		{source: invalid, content: []byte("after")},
+	} {
+		if _, err = input.source.WithEntryContent(input.content); !errors.Is(err, ErrInvalidSource) {
+			t.Fatalf("WithEntryContent(invalid) error = %v", err)
+		}
+	}
+}
+
+func TestSourceWithEntryContentRejectsReplacementBeyondRepositoryBudget(t *testing.T) {
+	t.Parallel()
+
+	entryContent := []byte("a")
+	files := map[string]RepositoryFile{
+		testRootRepositoryEntry: {Content: entryContent},
+		"data/remainder":        {Content: make([]byte, maxSourceBytes-1)},
+	}
+	for index := range maximumRepositoryBytes/maxSourceBytes - 1 {
+		files["data/full-"+strconv.Itoa(index)] = RepositoryFile{Content: make([]byte, maxSourceBytes)}
+	}
+	snapshot := &RepositorySnapshot{
+		Root:  t.TempDir(),
+		Entry: testRootRepositoryEntry,
+		Files: files,
+	}
+	snapshot.Digest = repositoryDigest(snapshot.Entry, snapshot.Files, nil, nil)
+	source := Source{
+		Content: entryContent, WorkingDir: snapshot.Root, Environment: map[string]string{}, Repository: snapshot,
+	}
+	if !validRepositorySnapshot(source) {
+		t.Fatal("repository budget fixture is invalid")
+	}
+	if _, err := source.WithEntryContent([]byte("ab")); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("WithEntryContent(over repository budget) error = %v", err)
+	}
+}
+
 func TestRepositoryProvenanceBindsCanonicalGitInputs(t *testing.T) {
 	t.Parallel()
 
