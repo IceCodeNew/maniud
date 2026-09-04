@@ -123,4 +123,4 @@ daemon 会在启动时立即检查仓库，之后按设定间隔继续检查。�
 
 保持 Compose 文件、状态目录、运行时工作负载和备份不变。再次执行同一条 `apply` 命令，或者重启由服务管理器托管的 daemon。编辑状态或备份前，先阅读[恢复说明](docs/recovery.zh-CN.md)。
 
-运行 `maniud COMMAND --help` 可以查看命令语法，[错误参考](docs/errors.zh-CN.md)列出了失败代码。[自定义构建说明](docs/custom-builds.zh-CN.md)介绍了如何只加入需要的运行时。
+运行 `maniud COMMAND --help` 可以查看命令语法，[错误参考](docs/errors.zh-CN.md)列出了失败代码。[自定义构建说明](docs/custom-builds.zh-CN.md)介绍了如何只加入需要的运行时。维护者修改 LLM 依赖时必须遵循 [any-llm-go repin checklist](docs/any-llm-go-repin.md)。

@@ -64,6 +64,15 @@
         "github.com/IceCodeNew/maniud/containerconfig/**"
       ],
       "enabled": false
+    },
+    {
+      "description": "Require manual contract review for the any-llm-go fork pin",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": [
+        "github.com/mozilla-ai/any-llm-go",
+        "github.com/IceCodeNew/any-llm-go"
+      ],
+      "enabled": false
     }
   ],
   "automergeType": "branch",

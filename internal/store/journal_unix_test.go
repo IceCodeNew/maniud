@@ -252,9 +252,10 @@ func TestJournalRecoversUnknownEffectAfterProcessDeath(t *testing.T) {
 
 	requireNoError(t, command.Process.Kill())
 
+	waitErr := command.Wait()
 	_ = stdin.Close()
 
-	if command.Wait() == nil {
+	if waitErr == nil {
 		t.Fatal("killed journal helper exited successfully")
 	}
 

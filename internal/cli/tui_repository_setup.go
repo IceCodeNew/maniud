@@ -14,20 +14,29 @@ import (
 
 const tuiRepositorySetupTimeout = 2 * time.Minute
 
-var errTUIRepositorySetupUnavailable = errors.New("repository setup unavailable")
+var (
+	errTUIRepositorySetupUnavailable = errors.New("repository setup unavailable")
+	errTUIRepositoryCreated          = errors.New("repository created")
+	errTUIRepositoryCreateFailed     = errors.New("GitHub repository creation failed")
+	errTUIRepositoryCloneFailed      = errors.New("repository clone failed")
+	errTUIRepositoryRegistration     = errors.New("repository registration failed")
+)
 
 func setupTUIRepository(
 	ctx context.Context,
 	registrationPath string,
 	request tui.RepositorySetupRequest,
 ) error {
-	return setupTUIRepositoryWith(ctx, registrationPath, request, runTUIRepositoryGH)
+	return setupTUIRepositoryWithHost(
+		ctx, registrationPath, request, os.Getenv("GH_HOST"), runTUIRepositoryGH,
+	)
 }
 
-func setupTUIRepositoryWith(
+func setupTUIRepositoryWithHost(
 	ctx context.Context,
 	registrationPath string,
 	request tui.RepositorySetupRequest,
+	githubHost string,
 	runGH func(context.Context, string, ...string) error,
 ) error {
 	parent, exists, err := inspectTUIRepositoryCheckoutPath(request.Checkout)
@@ -35,19 +44,32 @@ func setupTUIRepositoryWith(
 		return err
 	}
 
+	created := false
 	switch request.Mode {
 	case tui.RepositorySetupCreateGitHub:
-		err = createTUIRepositoryWithGH(ctx, parent, exists, request, runGH)
+		created, err = createTUIRepositoryWithGH(ctx, parent, exists, request, githubHost, runGH)
 	case tui.RepositorySetupExisting:
 		err = useExistingTUIRepository(ctx, parent, exists, request)
 	default:
 		return errGitOpsRepositoryInvalid
 	}
 	if err != nil {
+		if created {
+			return errors.Join(err, errTUIRepositoryCreated)
+		}
+
 		return err
 	}
 
-	return registerTUIRepositoryCheckout(ctx, registrationPath, request)
+	err = registerTUIRepositoryCheckout(ctx, registrationPath, request)
+	if err != nil {
+		err = errors.Join(errTUIRepositoryRegistration, err)
+		if created {
+			return errors.Join(err, errTUIRepositoryCreated)
+		}
+	}
+
+	return err
 }
 
 func createTUIRepositoryWithGH(
@@ -55,16 +77,36 @@ func createTUIRepositoryWithGH(
 	parent string,
 	exists bool,
 	request tui.RepositorySetupRequest,
+	githubHost string,
 	runGH func(context.Context, string, ...string) error,
-) error {
-	if exists || !validGitHubRepository(request.Remote) || runGH == nil {
+) (bool, error) {
+	remote := tuiGitHubRecoveryRemote(request.Remote, githubHost)
+	if remote == "" || runGH == nil {
+		return false, errGitOpsRepositoryInvalid
+	}
+	if exists {
+		if !request.Created {
+			return false, errGitOpsRepositoryInvalid
+		}
+
+		return true, validateTUIRepositoryRemote(ctx, request.Checkout, remote)
+	}
+	if !request.Created {
+		if err := runGH(ctx, parent, "repo", "create", "--private", "--add-readme", request.Remote); err != nil {
+			return false, errors.Join(errTUIRepositoryCreateFailed, errTUIRepositorySetupUnavailable)
+		}
+	}
+	if err := runGH(ctx, parent, "repo", "clone", remote, request.Checkout); err != nil {
+		return true, errors.Join(errTUIRepositoryCloneFailed, errTUIRepositorySetupUnavailable)
+	}
+
+	return true, validateTUIRepositoryRemote(ctx, request.Checkout, remote)
+}
+
+func validateTUIRepositoryRemote(ctx context.Context, checkout, expected string) error {
+	actual, err := gitRemoteURL(ctx, checkout, gitOpsRemoteName)
+	if err != nil || actual != expected {
 		return errGitOpsRepositoryInvalid
-	}
-	if err := runGH(ctx, parent, "repo", "create", "--private", "--add-readme", request.Remote); err != nil {
-		return errTUIRepositorySetupUnavailable
-	}
-	if err := runGH(ctx, parent, "repo", "clone", request.Remote, request.Checkout); err != nil {
-		return errTUIRepositorySetupUnavailable
 	}
 
 	return nil
@@ -76,7 +118,7 @@ func useExistingTUIRepository(
 	exists bool,
 	request tui.RepositorySetupRequest,
 ) error {
-	if !validGitRemoteURL(request.Remote) {
+	if request.Created || !validGitRemoteURL(request.Remote) {
 		return errGitOpsRepositoryInvalid
 	}
 	if exists {
@@ -87,7 +129,7 @@ func useExistingTUIRepository(
 		parent,
 		"clone", "--quiet", "--origin", gitOpsRemoteName, "--", request.Remote, request.Checkout,
 	); err != nil {
-		return errTUIRepositorySetupUnavailable
+		return errors.Join(errTUIRepositoryCloneFailed, errTUIRepositorySetupUnavailable)
 	}
 
 	return nil
@@ -132,7 +174,7 @@ func registerTUIRepositoryCheckout(
 			return errGitOpsRepositoryInvalid
 		}
 	}
-	root, commit, err := proveGitOpsCheckout(ctx, root, branch)
+	root, commit, remote, err := proveGitOpsCheckout(ctx, root, branch)
 	if err != nil {
 		return errGitOpsRepositoryInvalid
 	}
@@ -142,7 +184,7 @@ func registerTUIRepositoryCheckout(
 
 	return writeGitOpsRegistration(registrationPath, gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: root, Branch: branch,
-		Remote: gitOpsRemoteName, BaselineCommit: commit,
+		Remote: gitOpsRemoteName, RemoteURL: remote, BaselineCommit: commit,
 	})
 }
 

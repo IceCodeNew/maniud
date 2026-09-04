@@ -20,6 +20,7 @@ const (
 	testImageDigest      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testImage            = "registry.example.test/example/app@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	testPodmanAPIVersion = "6.1.0"
+	testStartedAt        = "2026-09-02T11:00:00.123456789+01:00"
 )
 
 func minimalSpec() containerconfig.Spec {
@@ -66,7 +67,7 @@ func richInspectDocument() inspectDocument {
 	return inspectDocument{
 		ID: testContainerID, Name: "example-api", Image: testImageID,
 		ImageName: testImage, ImageDigest: testImageDigest,
-		State: &inspectState{Status: "running", Running: true},
+		State: &inspectState{Status: "running", Running: true, StartedAt: testStartedAt},
 		Mounts: []inspectMount{{
 			Type: mountBind, Source: "/srv/data", Destination: "/data",
 			Options: []string{recursiveBind}, ReadWrite: false, Propagation: propagationPrivate,
@@ -158,6 +159,7 @@ func TestDecodeInspectRichConfiguration(t *testing.T) {
 	slices.Sort(want.Environment)
 	if inspection.ID != testContainerID || inspection.ImageID != testImageID ||
 		inspection.ImageReference != testImage || inspection.ImageDigest != testImageDigest ||
+		inspection.StartedAt.Format(time.RFC3339Nano) != "2026-09-02T10:00:00.123456789Z" ||
 		inspection.State != StateRunning || !reflect.DeepEqual(inspection.Spec, want) ||
 		len(inspection.RuntimeMounts) != 2 || inspection.RuntimeMounts[1].Name != "anonymous-volume" ||
 		inspection.RawLabels["com.example.role"] != "api" {

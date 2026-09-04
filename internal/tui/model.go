@@ -3,11 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
 	"reflect"
-	"strings"
-	"unicode"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -19,6 +16,8 @@ const (
 	statusApplyCompleted      = "Apply completed"
 	statusRefreshing          = "Refreshing review"
 	statusReviewLarger        = "Review again at a larger terminal"
+	statusOperationFailed     = "Operation failed"
+	statusHealthDetails       = "Workload health details"
 	keyEscape                 = "esc"
 	keyEnter                  = "enter"
 	keyDown                   = "down"
@@ -31,6 +30,7 @@ const (
 	statusSignedCommitMissing = "Signed commit was not created"
 	statusCommitUnverified    = "Commit result could not be verified"
 	statusDeploymentUnchanged = "Deployment candidate is unchanged"
+	statusConfirmFileMutation = "Confirm file mutation or go back"
 	maximumDisplayBytes       = 64 << 10
 	maximumDisplayRunes       = 16 << 10
 	maximumDisplayCells       = 16 << 10
@@ -38,7 +38,6 @@ const (
 	maximumStagedDiffBytes    = 1 << 20
 	maximumStagedDiffLines    = 16 << 10
 	homeActionCount           = 2
-	repositorySetupModeCount  = 2
 )
 
 func displayLimits() terminaltext.Limits {
@@ -53,43 +52,12 @@ func displayLimits() terminaltext.Limits {
 type catalogResultMsg struct {
 	sequence uint64
 	snapshot CatalogSnapshot
+	err      error
 }
 
 type openResultMsg struct {
 	sequence uint64
 	result   OpenResult
-}
-
-type registrationResultMsg struct {
-	sequence uint64
-	request  RepositorySetupRequest
-	result   RegistrationResult
-}
-
-type servicePreviewResultMsg struct {
-	sequence uint64
-	input    string
-	draft    ServiceDraft
-	err      error
-}
-
-type serviceStageResultMsg struct {
-	sequence uint64
-	preview  servicePreviewPage
-	staged   StagedService
-	err      error
-}
-
-type serviceCommitResultMsg struct {
-	sequence uint64
-	commit   commitServicePage
-	result   ServiceCommitResult
-	err      error
-}
-
-type serviceSuspendResultMsg struct {
-	sequence uint64
-	preview  servicePreviewPage
 	err      error
 }
 
@@ -106,6 +74,15 @@ type applyResultMsg struct {
 	err      error
 }
 
+type healthResolutionResultMsg struct {
+	sequence uint64
+	err      error
+}
+
+type healthPollMsg struct {
+	sequence uint64
+}
+
 type eventMsg struct {
 	sequence uint64
 	event    application.Event
@@ -115,6 +92,10 @@ type contextDoneMsg struct{}
 
 type page interface {
 	isPage()
+}
+
+type textInputPage interface {
+	acceptsTextInput() bool
 }
 
 type homePage struct {
@@ -130,6 +111,8 @@ type openPathPage struct {
 
 func (openPathPage) isPage() {}
 
+func (openPathPage) acceptsTextInput() bool { return true }
+
 type sourceDiagnosticPage struct {
 	previous   page
 	diagnostic SourceDiagnostic
@@ -137,86 +120,6 @@ type sourceDiagnosticPage struct {
 }
 
 func (sourceDiagnosticPage) isPage() {}
-
-type registrationStep uint8
-
-const (
-	registrationModeStep registrationStep = iota
-	registrationRemoteStep
-	registrationCheckoutStep
-)
-
-type registrationPage struct {
-	step          registrationStep
-	mode          RepositorySetupMode
-	remote        string
-	checkout      string
-	suggestedPath string
-	cursor        int
-}
-
-func (registrationPage) isPage() {}
-
-type registrationConfirmationPage struct {
-	registration registrationPage
-	focus        confirmationFocus
-}
-
-func (registrationConfirmationPage) isPage() {}
-
-type addServicePage struct {
-	value string
-}
-
-func (addServicePage) isPage() {}
-
-type servicePreviewPage struct {
-	input string
-	draft ServiceDraft
-}
-
-func (servicePreviewPage) isPage() {}
-
-type stageServiceConfirmationPage struct {
-	preview servicePreviewPage
-	focus   confirmationFocus
-}
-
-func (stageServiceConfirmationPage) isPage() {}
-
-type commitServicePage struct {
-	preview    servicePreviewPage
-	staged     StagedService
-	message    string
-	focus      confirmationFocus
-	editing    bool
-	scroll     int
-	diffWidth  int
-	diffLines  []string
-	deployment *deploymentPreviewPage
-}
-
-func (commitServicePage) isPage() {}
-
-type stagedDiffPage struct {
-	commit commitServicePage
-	scroll int
-}
-
-func (stagedDiffPage) isPage() {}
-
-type unsignedCommitConfirmationPage struct {
-	commit commitServicePage
-	focus  confirmationFocus
-}
-
-func (unsignedCommitConfirmationPage) isPage() {}
-
-type preparationRequiredPage struct {
-	draft ServiceDraft
-}
-
-func (preparationRequiredPage) isPage() {}
 
 type serviceChoice struct {
 	project string
@@ -233,24 +136,53 @@ type selectServicePage struct {
 func (selectServicePage) isPage() {}
 
 type planView struct {
-	kind        string
-	project     string
-	service     string
-	runtime     string
-	platform    string
-	current     string
-	proposed    string
-	status      string
-	warningText string
+	kind             string
+	project          string
+	service          string
+	runtime          string
+	platform         string
+	current          string
+	proposed         string
+	status           string
+	warningText      string
+	health           application.HealthConvergence
+	healthState      string
+	healthPoll       time.Duration
+	healthFails      uint32
+	transaction      string
+	resolution       application.HealthResolutionAction
+	restoresPrevious bool
+	healthProof      application.HealthResolutionObservation
 }
+
+type reviewFocus uint8
+
+const (
+	reviewContinue reviewFocus = iota
+	reviewExplore
+)
 
 type reviewPage struct {
 	request     application.Request
 	plan        planView
 	correlation eventCorrelation
+	focus       reviewFocus
 }
 
 func (reviewPage) isPage() {}
+
+type reviewOptionsPage struct {
+	review reviewPage
+	cursor int
+}
+
+func (reviewOptionsPage) isPage() {}
+
+type explainPage struct {
+	review reviewPage
+}
+
+func (explainPage) isPage() {}
 
 type detailsPage struct {
 	review reviewPage
@@ -258,6 +190,14 @@ type detailsPage struct {
 }
 
 func (detailsPage) isPage() {}
+
+type contextualHelpPage struct {
+	previous page
+	location string
+	keys     string
+}
+
+func (contextualHelpPage) isPage() {}
 
 type confirmationFocus uint8
 
@@ -273,45 +213,57 @@ type confirmationPage struct {
 
 func (confirmationPage) isPage() {}
 
+type healthConfirmationPage struct {
+	review reviewPage
+	focus  confirmationFocus
+}
+
+func (healthConfirmationPage) isPage() {}
+
 type model struct {
 	ctx         context.Context //nolint:containedctx // The model and context share one Bubble Tea session lifetime.
 	catalog     Catalog
 	workspace   ServiceWorkspace
 	deployments DeploymentWorkspace
+	assistant   Assistant
 	operations  Operations
 	events      *EventStream
 	options     Options
 
-	width              int
-	height             int
-	page               page
-	activeRequest      application.Request
-	status             string
-	mutationOutcome    string
-	busy               bool
-	applying           bool
-	sequence           uint64
-	cancel             context.CancelFunc
-	err                error
-	quitAfterOperation bool
-	registrationSeen   bool
-	applyBlocked       bool
-	timeline           sessionTimeline
-	result             Result
+	width               int
+	height              int
+	page                page
+	activeRequest       application.Request
+	status              string
+	mutationOutcome     string
+	busy                bool
+	applying            bool
+	sequence            uint64
+	cancel              context.CancelFunc
+	err                 error
+	quitAfterOperation  bool
+	registrationSeen    bool
+	applyBlocked        bool
+	deploymentFailure   DeploymentFailure
+	configReloadNeeded  bool
+	llmQuestionToResume *llmQuestionPage
+	timeline            sessionTimeline
+	result              Result
 }
 
-func newModelWithDeployments(
+func newModelWithCapabilities(
 	ctx context.Context,
 	catalog Catalog,
 	workspace ServiceWorkspace,
 	deployments DeploymentWorkspace,
+	assistant Assistant,
 	operations Operations,
 	events *EventStream,
 	options Options,
 ) *model {
 	return &model{
 		ctx: ctx, catalog: catalog, workspace: workspace, deployments: deployments,
-		operations: operations, events: events, options: options,
+		assistant: assistant, operations: operations, events: events, options: options,
 		page: homePage{catalog: CatalogSnapshot{State: CatalogMissing}}, status: "Loading services",
 		timeline: newSessionTimeline(),
 	}
@@ -333,7 +285,8 @@ func waitForContext(ctx context.Context) tea.Cmd {
 	}
 }
 
-func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // Bubble Tea requires tea.Model.
+//nolint:cyclop,ireturn // Bubble Tea requires one closed root-message dispatcher and tea.Model.
+func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if command, handled := state.handleWorkspaceMessage(message); handled {
 		return state, command
 	}
@@ -342,7 +295,12 @@ func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:iret
 	}
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
-		state.resize(message.Width, message.Height)
+		return state, state.resize(message.Width, message.Height)
+	case commitDiffResizeMsg:
+		if message.width == state.commitDiffWidth() {
+			state.rewrapCommitDiff()
+			state.clampPageScroll()
+		}
 	case tea.KeyPressMsg:
 		return state, state.handleKey(message)
 	case catalogResultMsg:
@@ -357,12 +315,17 @@ func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:iret
 		return state, state.events.wait(state.ctx)
 	case contextDoneMsg:
 		return state, state.requestQuit()
+	case healthPollMsg:
+		return state, state.handleHealthPoll(message)
 	}
 
 	return state, nil
 }
 
 func (state *model) handleWorkspaceMessage(message tea.Msg) (tea.Cmd, bool) {
+	if command, handled := state.handleLLMMessage(message); handled {
+		return command, true
+	}
 	if command, handled := state.handleServiceWorkspaceMessage(message); handled {
 		return command, true
 	}
@@ -376,49 +339,27 @@ func (state *model) handleOperationMessage(message tea.Msg) (tea.Cmd, bool) {
 		return state.handleSnapshotResult(message), true
 	case applyResultMsg:
 		return state.handleApplyResult(message), true
+	case healthResolutionResultMsg:
+		return state.handleHealthResolutionResult(message), true
 	default:
 		return nil, false
 	}
 }
 
-func (state *model) resize(width, height int) {
+func (state *model) resize(width, height int) tea.Cmd {
 	previous := layoutFor(state.width, state.height)
 	state.width = max(width, 1)
 	state.height = max(height, 1)
 	current := layoutFor(state.width, state.height)
 	if previous >= layoutCompact && current < layoutCompact {
+		if help, valid := state.page.(contextualHelpPage); valid {
+			state.page = help.previous
+		}
 		state.invalidateConfirmation()
 	}
-	state.rewrapServiceDiff()
 	state.clampPageScroll()
-}
 
-func (state *model) rewrapServiceDiff() {
-	switch current := state.page.(type) {
-	case commitServicePage:
-		state.page = state.wrapServiceDiff(current)
-	case stagedDiffPage:
-		current.commit = state.wrapServiceDiff(current.commit)
-		state.page = current
-	case unsignedCommitConfirmationPage:
-		current.commit = state.wrapServiceDiff(current.commit)
-		state.page = current
-	}
-}
-
-func (state *model) wrapServiceDiff(current commitServicePage) commitServicePage {
-	width := state.serviceDiffWidth()
-	if current.diffWidth == width && current.diffLines != nil {
-		return current
-	}
-	current.diffWidth = width
-	current.diffLines = terminaltext.Wrap(current.staged.Diff, width)
-
-	return current
-}
-
-func (state *model) serviceDiffWidth() int {
-	return max(state.bodyWidth()-detailsPadding, 1)
+	return state.scheduleCommitDiffResize()
 }
 
 func (state *model) bodyWidth() int {
@@ -443,13 +384,32 @@ func (state *model) clampPageScroll() {
 	case sourceDiagnosticPage:
 		current.scroll = boundedScroll(current.scroll, len(state.sourceDiagnosticLines(current.diagnostic, width)))
 		state.page = current
-	case commitServicePage:
-		current = state.wrapServiceDiff(current)
-		current.scroll = boundedScroll(current.scroll, len(current.diffLines))
+	case commitPage:
+		if current.diffLines != nil {
+			current.scroll = boundedScroll(current.scroll, len(current.diffLines))
+		}
 		state.page = current
 	case stagedDiffPage:
-		current.commit = state.wrapServiceDiff(current.commit)
-		current.scroll = boundedScroll(current.scroll, len(state.stagedDiffLines(current.commit, width)))
+		if current.commit.diffLines != nil {
+			current.scroll = boundedScroll(current.scroll, stagedDiffLineCount(current.commit, width))
+		}
+		state.page = current
+	case deploymentPreviewPage:
+		_, comparison, _, available := state.deploymentPreviewSections(current, width)
+		current.scroll = min(max(current.scroll, 0), max(len(comparison)-available, 0))
+		state.page = current
+	case deploymentDiffPage:
+		lineCount := deploymentDiffLeadRows +
+			len(deploymentPreviewDiffLines(current.confirmation.preview, width))
+		current.scroll = min(
+			max(current.scroll, 0),
+			max(lineCount-state.deploymentDiffViewportHeight(), 0),
+		)
+		state.page = current
+	case deploymentDetailsPage:
+		current.scroll = boundedScroll(
+			current.scroll, len(state.deploymentDetailsLines(current.preview.preview.Changes, width)),
+		)
 		state.page = current
 	case detailsPage:
 		current.scroll = boundedScroll(current.scroll, len(state.detailsLines(current.review, width)))
@@ -461,24 +421,35 @@ func boundedScroll(scroll, lineCount int) int {
 	return min(max(scroll, 0), max(lineCount-1, 0))
 }
 
-func (state *model) handleServiceWorkspaceMessage(message tea.Msg) (tea.Cmd, bool) {
-	switch message := message.(type) {
-	case servicePreviewResultMsg:
-		return state.handleServicePreviewResult(message), true
-	case serviceStageResultMsg:
-		return state.handleServiceStageResult(message), true
-	case serviceCommitResultMsg:
-		return state.handleServiceCommitResult(message), true
-	case serviceSuspendResultMsg:
-		return state.handleServiceSuspendResult(message), true
+func (state *model) deploymentDiffViewportHeight() int {
+	width := state.width
+	if width == 0 {
+		width = defaultWidth
+	}
+	height := state.height
+	if height == 0 {
+		height = defaultHeight
+	}
+	switch layoutFor(width, height) { //nolint:exhaustive // Non-content layouts share a zero-height viewport.
+	case layoutFull:
+		return max(height-fullFrameRows-state.bodyStateRows(), 0)
+	case layoutCompact:
+		return max(height-compactFrameRows-state.bodyStateRows(), 0)
 	default:
-		return nil, false
+		return 0
 	}
 }
 
+//nolint:cyclop // The closed confirmation-page catalog restores each page to its safe predecessor.
 func (state *model) invalidateConfirmation() {
+	if state.invalidateLLMConfirmation() {
+		return
+	}
 	switch current := state.page.(type) {
 	case confirmationPage:
+		state.page = current.review
+		state.status = statusReviewLarger
+	case healthConfirmationPage:
 		state.page = current.review
 		state.status = statusReviewLarger
 	case registrationConfirmationPage:
@@ -490,13 +461,19 @@ func (state *model) invalidateConfirmation() {
 	case stageDeploymentConfirmationPage:
 		state.page = current.preview
 		state.status = statusReviewLarger
+	case deploymentDiffPage:
+		state.page = current.confirmation.preview
+		state.status = statusReviewLarger
+	case deploymentDraftConfirmationPage:
+		state.page = current.previous
+		state.status = statusReviewLarger
 	case restoreDeploymentConfirmationPage:
 		state.page = current.history
 		state.status = statusReviewLarger
 	case unsignedCommitConfirmationPage:
 		state.page = current.commit
 		state.status = statusReviewLarger
-	case commitServicePage:
+	case commitPage:
 		current.focus = confirmationBack
 		current.editing = false
 		state.page = current
@@ -509,6 +486,18 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 	key := message.String()
 	if command, handled := state.handleSessionKey(key); handled {
 		return command
+	}
+	if current, valid := state.page.(contextualHelpPage); valid {
+		return state.handleContextualHelpKey(current, key)
+	}
+	if key == "?" && !pageAcceptsText(state.page) {
+		state.page = contextualHelpPage{
+			previous: state.page,
+			location: state.locationLine(),
+			keys:     state.footerKeys(),
+		}
+
+		return nil
 	}
 	if command, handled := state.handleAuxiliaryPageKey(message); handled {
 		return command
@@ -525,17 +514,52 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 		return state.handleServiceChoiceKey(current, key)
 	case reviewPage:
 		return state.handleReviewKey(current, key)
+	case reviewOptionsPage:
+		return state.handleReviewOptionsKey(current, key)
+	case explainPage:
+		return state.handleExplainKey(current, key)
 	case detailsPage:
 		return state.handleDetailsKey(current, key)
 	case confirmationPage:
 		return state.handleConfirmationKey(current, key)
+	case healthConfirmationPage:
+		return state.handleHealthConfirmationKey(current, key)
 	default:
 		return nil
 	}
 }
 
+func (state *model) handleContextualHelpKey(current contextualHelpPage, key string) tea.Cmd {
+	switch key {
+	case "?", keyEscape:
+		state.page = current.previous
+		if review, valid := current.previous.(reviewPage); valid &&
+			review.plan.health == application.HealthConvergencePending {
+			return state.startSnapshot(review.request)
+		}
+	case keyQuit:
+		state.page = current.previous
+
+		return state.handleKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: keyQuit}))
+	}
+
+	return nil
+}
+
+func pageAcceptsText(current page) bool {
+	input, valid := current.(textInputPage)
+
+	return valid && input.acceptsTextInput()
+}
+
 func (state *model) handleAuxiliaryPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
+	if command, handled := state.handleLLMPageKey(message); handled {
+		return command, true
+	}
 	if command, handled := state.handleRegistrationPageKey(message); handled {
+		return command, true
+	}
+	if command, handled := state.handleCommitPageKey(message); handled {
 		return command, true
 	}
 	if command, handled := state.handleDeploymentPageKey(message); handled {
@@ -543,40 +567,6 @@ func (state *model) handleAuxiliaryPageKey(message tea.KeyPressMsg) (tea.Cmd, bo
 	}
 
 	return state.handleServiceWorkspacePageKey(message)
-}
-
-func (state *model) handleServiceWorkspacePageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
-	switch current := state.page.(type) {
-	case addServicePage:
-		return state.handleAddServiceKey(current, message), true
-	case servicePreviewPage:
-		return state.handleServicePreviewKey(current, message.String()), true
-	case stageServiceConfirmationPage:
-		return state.handleStageServiceConfirmationKey(current, message.String()), true
-	case commitServicePage:
-		return state.handleCommitServiceKey(current, message), true
-	case stagedDiffPage:
-		return state.handleStagedDiffKey(current, message.String()), true
-	case unsignedCommitConfirmationPage:
-		return state.handleUnsignedCommitConfirmationKey(current, message.String()), true
-	case preparationRequiredPage:
-		return state.handlePreparationRequiredKey(message.String()), true
-	default:
-		return nil, false
-	}
-}
-
-func (state *model) handleRegistrationPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
-	switch current := state.page.(type) {
-	case registrationPage:
-		state.handleRegistrationKey(current, message)
-
-		return nil, true
-	case registrationConfirmationPage:
-		return state.handleRegistrationConfirmationKey(current, message.String()), true
-	default:
-		return nil, false
-	}
 }
 
 func (state *model) handleSessionKey(key string) (tea.Cmd, bool) {
@@ -614,622 +604,6 @@ func (state *model) handleSessionKey(key string) (tea.Cmd, bool) {
 	return nil, true
 }
 
-func (state *model) handleHomeKey(current homePage, key string) tea.Cmd {
-	setupIndex := registrationSetupIndex(current.catalog)
-	items := homeItemCount(current.catalog)
-	switch key {
-	case "up", "k":
-		current.cursor = (current.cursor - 1 + items) % items
-	case keyDown, "j", keyTab:
-		current.cursor = (current.cursor + 1) % items
-	case keyEnter:
-		return state.activateHomeItem(current, setupIndex)
-	case "r":
-		return state.startCatalog()
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
-func (state *model) activateHomeItem(current homePage, setupIndex int) tea.Cmd {
-	switch current.cursor {
-	case addServiceIndex(current.catalog):
-		return state.activateAddService(current.catalog)
-	case openComposeIndex(current.catalog):
-		state.page = openPathPage{}
-		state.status = "Enter a committed Compose path"
-
-		return nil
-	case setupIndex:
-		state.page = newRegistrationPage(current.catalog.SuggestedRepository)
-		state.status = "Choose how to set up the desired-state repository"
-
-		return nil
-	}
-	service := current.catalog.Services[current.cursor]
-	if service.Blocker != BlockerNone {
-		if diagnostic, valid := canonicalSourceDiagnostic(service.Diagnostic); valid {
-			state.page = sourceDiagnosticPage{previous: current, diagnostic: diagnostic}
-			state.status = "Review the Compose source issue"
-
-			return nil
-		}
-		state.status = blockerMessage(service.Blocker)
-
-		return nil
-	}
-
-	return state.startOpenRegistered(service.ID)
-}
-
-func (state *model) handleSourceDiagnosticKey(current sourceDiagnosticPage, key string) tea.Cmd {
-	switch key {
-	case "up", "k":
-		current.scroll = max(current.scroll-1, 0)
-	case keyDown, "j":
-		current.scroll++
-	case keyEnter, keyEscape:
-		state.page = current.previous
-		state.status = "Fix the Compose source and refresh"
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-	state.clampPageScroll()
-
-	return nil
-}
-
-func (state *model) activateAddService(catalog CatalogSnapshot) tea.Cmd {
-	if catalog.State == CatalogReady {
-		state.page = addServicePage{}
-		state.status = "Enter a fixed image URI or a complete runtime command"
-
-		return nil
-	}
-	state.status = "Set up a desired-state repository before adding a service"
-	if catalog.SuggestedRepository != "" {
-		state.page = newRegistrationPage(catalog.SuggestedRepository)
-	}
-
-	return nil
-}
-
-func homeItemCount(catalog CatalogSnapshot) int {
-	count := len(catalog.Services) + homeActionCount
-	if registrationSetupIndex(catalog) >= 0 {
-		count++
-	}
-
-	return count
-}
-
-func registrationSetupIndex(catalog CatalogSnapshot) int {
-	if catalog.State == CatalogReady || catalog.SuggestedRepository == "" {
-		return -1
-	}
-
-	return len(catalog.Services) + homeActionCount
-}
-
-func addServiceIndex(catalog CatalogSnapshot) int {
-	return len(catalog.Services)
-}
-
-func openComposeIndex(catalog CatalogSnapshot) int {
-	return len(catalog.Services) + 1
-}
-
-func (state *model) handleOpenPathKey(current openPathPage, message tea.KeyPressMsg) tea.Cmd {
-	key := message.String()
-	switch key {
-	case keyEnter:
-		if current.value == "" {
-			state.status = "Enter a Compose path"
-
-			return nil
-		}
-
-		return state.startOpenPath(current.value)
-	case "backspace":
-		characters := []rune(current.value)
-		if len(characters) > 0 {
-			current.value = string(characters[:len(characters)-1])
-		}
-	case keyEscape:
-		return state.startCatalog()
-	default:
-		text := message.Key().Text
-		if printableSingleLine(text) {
-			candidate := current.value + text
-			if _, err := terminaltext.Canonicalize(candidate, displayLimits()); err == nil {
-				current.value = candidate
-			}
-		}
-	}
-	state.page = current
-
-	return nil
-}
-
-func (state *model) handleRegistrationKey(current registrationPage, message tea.KeyPressMsg) {
-	if current.step == registrationModeStep {
-		state.handleRegistrationModeKey(current, message.String())
-
-		return
-	}
-
-	switch message.String() {
-	case keyEnter:
-		if current.step == registrationRemoteStep {
-			if current.remote == "" {
-				state.status = "Enter a repository name or remote URL"
-
-				return
-			}
-			current.step = registrationCheckoutStep
-			if current.checkout == "" {
-				current.checkout = current.suggestedPath
-			}
-			state.page = current
-			state.status = "Choose where to store the local checkout"
-
-			return
-		}
-		if current.checkout == "" {
-			state.status = "Enter a local checkout path"
-
-			return
-		}
-		state.page = registrationConfirmationPage{registration: current, focus: confirmationBack}
-		state.status = "Confirm repository setup or go back"
-
-		return
-	case keyEscape:
-		if current.step == registrationCheckoutStep {
-			current.step = registrationRemoteStep
-			state.page = current
-			state.status = "Enter the repository source"
-
-			return
-		}
-		current.step = registrationModeStep
-		state.page = current
-		state.status = "Choose how to set up the desired-state repository"
-
-		return
-	}
-
-	if current.step == registrationRemoteStep {
-		current.remote = editSingleLine(current.remote, message)
-	} else {
-		current.checkout = editSingleLine(current.checkout, message)
-	}
-	state.page = current
-}
-
-func (state *model) handleRegistrationModeKey(current registrationPage, key string) {
-	switch key {
-	case "up", "k", keyDown, "j", keyTab:
-		current.cursor = (current.cursor + 1) % repositorySetupModeCount
-	case keyEnter:
-		current.mode = RepositorySetupCreateGitHub
-		if current.cursor == 1 {
-			current.mode = RepositorySetupExisting
-		}
-		current.step = registrationRemoteStep
-		state.page = current
-		state.status = "Enter the repository source"
-
-		return
-	case keyEscape:
-		state.registrationSeen = true
-		state.page = homePage{catalog: CatalogSnapshot{
-			State: CatalogMissing, SuggestedRepository: current.suggestedPath,
-		}}
-		state.status = "No registered repository"
-
-		return
-	}
-	state.page = current
-}
-
-func newRegistrationPage(suggestedPath string) registrationPage {
-	return registrationPage{step: registrationModeStep, suggestedPath: suggestedPath}
-}
-
-func registrationRequest(current registrationPage) RepositorySetupRequest {
-	return RepositorySetupRequest{Mode: current.mode, Remote: current.remote, Checkout: current.checkout}
-}
-
-func editSingleLine(value string, message tea.KeyPressMsg) string {
-	if message.String() == "backspace" {
-		characters := []rune(value)
-		if len(characters) > 0 {
-			return string(characters[:len(characters)-1])
-		}
-
-		return value
-	}
-	text := message.Key().Text
-	if !printableSingleLine(text) {
-		return value
-	}
-	candidate := value + text
-	if _, err := terminaltext.Canonicalize(candidate, displayLimits()); err != nil {
-		return value
-	}
-
-	return candidate
-}
-
-func (state *model) handleAddServiceKey(current addServicePage, message tea.KeyPressMsg) tea.Cmd {
-	switch message.String() {
-	case keyEnter:
-		if current.value == "" {
-			state.status = "Enter a fixed image URI or a complete runtime command"
-
-			return nil
-		}
-
-		return state.startServicePreview(current.value)
-	case keyEscape:
-		return state.startCatalog()
-	}
-	current.value = editSingleLine(current.value, message)
-	state.page = current
-
-	return nil
-}
-
-func (state *model) handleServicePreviewKey(current servicePreviewPage, key string) tea.Cmd {
-	switch key {
-	case keyEnter:
-		if layoutFor(state.width, state.height) < layoutCompact {
-			state.status = "Resize to review the file mutation"
-
-			return nil
-		}
-		state.page = stageServiceConfirmationPage{preview: current, focus: confirmationBack}
-		state.status = "Confirm file mutation or go back"
-	case keyEscape:
-		state.page = addServicePage{value: current.input}
-		state.status = "Edit service input"
-	case keyQuit:
-		return tea.Quit
-	}
-
-	return nil
-}
-
-func (state *model) handleStageServiceConfirmationKey(
-	current stageServiceConfirmationPage,
-	key string,
-) tea.Cmd {
-	if layoutFor(state.width, state.height) < layoutCompact {
-		state.page = current.preview
-		state.status = statusReviewLarger
-
-		return nil
-	}
-	switch key {
-	case keyTab, keyLeft, keyRight, keyShiftTab:
-		current.focus = toggledConfirmationFocus(current.focus)
-	case keyEnter:
-		if current.focus == confirmationBack {
-			state.page = current.preview
-			state.status = "Generated service is unchanged"
-
-			return nil
-		}
-
-		return state.startServiceStage(current.preview)
-	case keyEscape:
-		state.page = current.preview
-		state.status = "Generated service is unchanged"
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
-func toggledConfirmationFocus(focus confirmationFocus) confirmationFocus {
-	if focus == confirmationBack {
-		return confirmationApply
-	}
-
-	return confirmationBack
-}
-
-func (state *model) handleCommitServiceKey(current commitServicePage, message tea.KeyPressMsg) tea.Cmd {
-	if current.editing {
-		return state.handleCommitMessageKey(current, message)
-	}
-
-	return state.handleCommitReviewKey(current, message.String())
-}
-
-func (state *model) handleCommitReviewKey(current commitServicePage, key string) tea.Cmd {
-	switch key {
-	case keyTab, keyLeft, keyRight, keyShiftTab:
-		current.focus = toggledConfirmationFocus(current.focus)
-	case "up", "k":
-		current.scroll = max(current.scroll-1, 0)
-	case keyDown, "j":
-		current.scroll++
-	case "d":
-		state.page = stagedDiffPage{commit: current}
-		state.status = "Full staged diff"
-
-		return nil
-	case "e":
-		current.editing = true
-		state.status = "Edit the commit message"
-	case keyEnter:
-		if current.focus == confirmationBack {
-			return state.startCommitDiscard(current)
-		}
-
-		return state.startServiceCommit(current, false)
-	case keyEscape:
-		return state.startCommitDiscard(current)
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-	state.clampPageScroll()
-
-	return nil
-}
-
-func (state *model) startCommitDiscard(current commitServicePage) tea.Cmd {
-	if current.deployment != nil {
-		return state.startDeploymentDiscard(*current.deployment)
-	}
-
-	return state.startServiceSuspend(current.preview)
-}
-
-func (state *model) handleCommitMessageKey(current commitServicePage, message tea.KeyPressMsg) tea.Cmd {
-	switch message.String() {
-	case keyEnter, keyEscape:
-		current.editing = false
-		state.status = statusReviewStaged
-	default:
-		candidate := editSingleLine(current.message, message)
-		if len(candidate) <= maximumCommitMessageBytes {
-			current.message = candidate
-		}
-	}
-	state.page = current
-
-	return nil
-}
-
-func (state *model) handleStagedDiffKey(current stagedDiffPage, key string) tea.Cmd {
-	switch key {
-	case "up", "k":
-		current.scroll = max(current.scroll-1, 0)
-	case keyDown, "j":
-		current.scroll++
-	case "d", keyEscape:
-		state.page = current.commit
-		state.status = statusReviewStaged
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-	state.clampPageScroll()
-
-	return nil
-}
-
-func (state *model) handleUnsignedCommitConfirmationKey(
-	current unsignedCommitConfirmationPage,
-	key string,
-) tea.Cmd {
-	if layoutFor(state.width, state.height) < layoutCompact {
-		state.page = current.commit
-		state.status = statusReviewLarger
-
-		return nil
-	}
-	switch key {
-	case keyTab, keyLeft, keyRight, keyShiftTab:
-		current.focus = toggledConfirmationFocus(current.focus)
-	case keyEnter:
-		if current.focus == confirmationBack {
-			state.page = current.commit
-			state.status = statusSignedCommitMissing
-
-			return nil
-		}
-
-		return state.startServiceCommit(current.commit, true)
-	case keyEscape:
-		state.page = current.commit
-		state.status = statusSignedCommitMissing
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
-func (state *model) handlePreparationRequiredKey(key string) tea.Cmd {
-	switch key {
-	case keyEnter, keyEscape, keyQuit:
-		return tea.Quit
-	default:
-		return nil
-	}
-}
-
-func (state *model) handleRegistrationConfirmationKey(
-	current registrationConfirmationPage,
-	key string,
-) tea.Cmd {
-	if layoutFor(state.width, state.height) < layoutCompact {
-		state.page = current.registration
-		state.status = statusReviewLarger
-
-		return nil
-	}
-
-	switch key {
-	case keyTab, keyLeft, keyRight, keyShiftTab:
-		current.focus = toggledConfirmationFocus(current.focus)
-	case keyEnter:
-		if current.focus == confirmationBack {
-			state.page = current.registration
-			state.status = "Review repository setup"
-
-			return nil
-		}
-
-		return state.startRegistration(registrationRequest(current.registration))
-	case keyEscape:
-		state.page = current.registration
-		state.status = "Review repository setup"
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
-func printableSingleLine(value string) bool {
-	if value == "" || strings.ContainsAny(value, "\r\n") {
-		return false
-	}
-	for _, character := range value {
-		if !unicode.IsPrint(character) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func (state *model) handleServiceChoiceKey(current selectServicePage, key string) tea.Cmd {
-	switch key {
-	case "up", "k":
-		current.cursor = (current.cursor - 1 + len(current.choices)) % len(current.choices)
-	case keyDown, "j", keyTab:
-		current.cursor = (current.cursor + 1) % len(current.choices)
-	case keyEnter:
-		return state.startSnapshot(current.choices[current.cursor].request)
-	case keyEscape:
-		state.page = openPathPage{}
-		state.status = "Enter a committed Compose path"
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
-func (state *model) handleReviewKey(current reviewPage, key string) tea.Cmd {
-	switch key {
-	case keyEnter:
-		if layoutFor(state.width, state.height) < layoutCompact {
-			state.status = "Resize to continue to confirmation"
-
-			return nil
-		}
-		state.page = confirmationPage{review: current, focus: confirmationBack}
-		state.status = "Confirm or go back"
-	case "d":
-		state.page = detailsPage{review: current}
-		state.status = "Full image references"
-	case "r":
-		return state.startSnapshot(current.request)
-	case "e":
-		return state.startDeploymentFields(current)
-	case "h":
-		return state.startDeploymentHistory(current)
-	case keyEscape:
-		return state.startCatalog()
-	case keyQuit:
-		return tea.Quit
-	}
-
-	return nil
-}
-
-func (state *model) handleDetailsKey(current detailsPage, key string) tea.Cmd {
-	switch key {
-	case "up", "k":
-		current.scroll = max(current.scroll-1, 0)
-	case keyDown, "j":
-		current.scroll++
-	case "d", keyEscape:
-		state.page = current.review
-		state.status = current.review.plan.status
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-	state.clampPageScroll()
-
-	return nil
-}
-
-func (state *model) handleConfirmationKey(current confirmationPage, key string) tea.Cmd {
-	if layoutFor(state.width, state.height) < layoutCompact {
-		state.page = current.review
-		state.status = "Review again at a larger terminal"
-
-		return nil
-	}
-
-	switch key {
-	case keyTab, keyLeft, keyRight, keyShiftTab:
-		current.focus = toggledConfirmationFocus(current.focus)
-	case keyEnter:
-		if current.focus == confirmationBack {
-			state.page = current.review
-			state.status = current.review.plan.status
-
-			return nil
-		}
-
-		return state.startApply(current.review)
-	case keyEscape:
-		state.page = current.review
-		state.status = current.review.plan.status
-
-		return nil
-	case keyQuit:
-		return tea.Quit
-	}
-	state.page = current
-
-	return nil
-}
-
 func (state *model) begin(status string, command func(context.Context, uint64) tea.Cmd) tea.Cmd {
 	if state.busy {
 		return nil
@@ -1248,11 +622,15 @@ func (state *model) begin(status string, command func(context.Context, uint64) t
 }
 
 func (state *model) startCatalog() tea.Cmd {
+	state.llmQuestionToResume = nil
+
 	return state.begin("Loading services", func(ctx context.Context, sequence uint64) tea.Cmd {
 		catalog := state.catalog
 
 		return func() tea.Msg {
-			return catalogResultMsg{sequence: sequence, snapshot: catalog.Snapshot(ctx)}
+			snapshot := catalog.Snapshot(ctx)
+
+			return catalogResultMsg{sequence: sequence, snapshot: snapshot, err: ctx.Err()}
 		}
 	})
 }
@@ -1262,7 +640,9 @@ func (state *model) startOpenRegistered(id string) tea.Cmd {
 		catalog := state.catalog
 
 		return func() tea.Msg {
-			return openResultMsg{sequence: sequence, result: catalog.OpenRegistered(ctx, id)}
+			result := catalog.OpenRegistered(ctx, id)
+
+			return openResultMsg{sequence: sequence, result: result, err: ctx.Err()}
 		}
 	})
 }
@@ -1272,70 +652,9 @@ func (state *model) startOpenPath(path string) tea.Cmd {
 		catalog := state.catalog
 
 		return func() tea.Msg {
-			return openResultMsg{sequence: sequence, result: catalog.OpenPath(ctx, path)}
-		}
-	})
-}
+			result := catalog.OpenPath(ctx, path)
 
-func (state *model) startRegistration(request RepositorySetupRequest) tea.Cmd {
-	return state.begin("Setting up repository", func(ctx context.Context, sequence uint64) tea.Cmd {
-		catalog := state.catalog
-
-		return func() tea.Msg {
-			return registrationResultMsg{
-				sequence: sequence, request: request, result: catalog.Register(ctx, request),
-			}
-		}
-	})
-}
-
-func (state *model) startServicePreview(input string) tea.Cmd {
-	return state.begin("Preparing service preview", func(ctx context.Context, sequence uint64) tea.Cmd {
-		workspace := state.workspace
-
-		return func() tea.Msg {
-			draft, err := workspace.Preview(ctx, input)
-
-			return servicePreviewResultMsg{sequence: sequence, input: input, draft: draft, err: err}
-		}
-	})
-}
-
-func (state *model) startServiceStage(preview servicePreviewPage) tea.Cmd {
-	return state.begin("Writing and staging files", func(ctx context.Context, sequence uint64) tea.Cmd {
-		workspace := state.workspace
-
-		return func() tea.Msg {
-			staged, err := workspace.Stage(ctx)
-
-			return serviceStageResultMsg{sequence: sequence, preview: preview, staged: staged, err: err}
-		}
-	})
-}
-
-func (state *model) startServiceCommit(commit commitServicePage, unsigned bool) tea.Cmd {
-	if commit.deployment != nil {
-		return state.startDeploymentCommit(commit, unsigned)
-	}
-	state.page = commit
-
-	return state.begin("Creating commit", func(ctx context.Context, sequence uint64) tea.Cmd {
-		workspace := state.workspace
-
-		return func() tea.Msg {
-			result, err := workspace.Commit(ctx, commit.message, unsigned)
-
-			return serviceCommitResultMsg{sequence: sequence, commit: commit, result: result, err: err}
-		}
-	})
-}
-
-func (state *model) startServiceSuspend(preview servicePreviewPage) tea.Cmd {
-	return state.begin("Saving draft", func(ctx context.Context, sequence uint64) tea.Cmd {
-		workspace := state.workspace
-
-		return func() tea.Msg {
-			return serviceSuspendResultMsg{sequence: sequence, preview: preview, err: workspace.Suspend(ctx)}
+			return openResultMsg{sequence: sequence, result: result, err: ctx.Err()}
 		}
 	})
 }
@@ -1382,6 +701,14 @@ func (state *model) startCommittedSnapshot(request application.Request) tea.Cmd 
 }
 
 func (state *model) startApply(review reviewPage) tea.Cmd {
+	if state.configReloadNeeded {
+		state.status = "Reload LLM configuration before applying this change"
+
+		return nil
+	}
+	if !state.deploymentOperationReady() {
+		return nil
+	}
 	if state.applyBlocked {
 		state.status = "Exit, run the preparation step, then start maniud tui again"
 
@@ -1390,6 +717,7 @@ func (state *model) startApply(review reviewPage) tea.Cmd {
 	if state.busy {
 		return nil
 	}
+	state.llmQuestionToResume = nil
 	state.page = review
 
 	command := state.begin("Applying change", func(ctx context.Context, sequence uint64) tea.Cmd {
@@ -1408,9 +736,32 @@ func (state *model) startApply(review reviewPage) tea.Cmd {
 	return command
 }
 
+func (state *model) startHealthResolution(current healthConfirmationPage) tea.Cmd {
+	if state.busy || current.review.plan.resolution == "" || current.review.plan.transaction == "" {
+		return nil
+	}
+	state.page = current.review
+
+	return state.begin("Applying health decision", func(ctx context.Context, sequence uint64) tea.Cmd {
+		operations := state.operations
+		request := current.review.request
+		resolution := application.HealthResolution{
+			Transaction: current.review.plan.transaction,
+			Action:      current.review.plan.resolution,
+			Observation: current.review.plan.healthProof,
+		}
+
+		return func() tea.Msg {
+			_, err := operations.ResolveHealth(ctx, request, resolution)
+
+			return healthResolutionResultMsg{sequence: sequence, err: err}
+		}
+	})
+}
+
 func (state *model) handleCatalogResult(result catalogResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, nil)
-	if !accepted {
+	accepted, command := state.completeOperation(result.sequence, result.err)
+	if !accepted || result.err != nil {
 		return command
 	}
 
@@ -1428,132 +779,9 @@ func (state *model) handleCatalogResult(result catalogResultMsg) tea.Cmd {
 	return command
 }
 
-func (state *model) handleRegistrationResult(result registrationResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, nil)
-	if !accepted {
-		return command
-	}
-	if result.result.Blocker != BlockerNone {
-		state.status = blockerMessage(result.result.Blocker)
-
-		return command
-	}
-	snapshot := canonicalCatalog(result.result.Snapshot)
-	state.page = homePage{catalog: snapshot}
-	state.status = "Repository ready"
-	state.mutationOutcome = "Repository registered"
-	if result.request.Mode == RepositorySetupCreateGitHub {
-		state.mutationOutcome = "Private GitHub repository created"
-	}
-
-	return command
-}
-
-func (state *model) handleServicePreviewResult(result servicePreviewResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
-	if !accepted || result.err != nil {
-		return command
-	}
-	draft, err := canonicalServiceDraft(result.draft)
-	if err != nil {
-		state.err = errors.Join(errInvalidInput, err)
-		state.status = "Generated service could not be displayed safely"
-
-		return command
-	}
-	state.page = servicePreviewPage{input: result.input, draft: draft}
-	state.status = "Review parsed service"
-
-	return command
-}
-
-func (state *model) handleServiceStageResult(result serviceStageResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
-	if !accepted || result.err != nil {
-		return command
-	}
-	staged, err := canonicalStagedService(result.staged)
-	if err != nil {
-		state.err = errors.Join(errInvalidInput, err)
-		state.status = "Staged change could not be displayed safely"
-
-		return command
-	}
-	state.page = state.wrapServiceDiff(commitServicePage{
-		preview: result.preview,
-		staged:  staged,
-		message: staged.CommitMessage,
-		focus:   confirmationBack,
-	})
-	state.status = statusReviewStaged
-	state.mutationOutcome = "Files staged"
-
-	return command
-}
-
-func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
-	if !accepted || result.err != nil {
-		return command
-	}
-	if invalidServiceCommitResult(result.result) {
-		state.err = errInvalidInput
-		state.status = statusCommitUnverified
-
-		return command
-	}
-	if result.result.NeedsUnsignedApproval {
-		state.page = unsignedCommitConfirmationPage{commit: result.commit, focus: confirmationBack}
-		state.status = statusSignedCommitMissing
-
-		return command
-	}
-	if !result.result.Committed {
-		state.err = errInvalidInput
-		state.status = statusCommitUnverified
-
-		return command
-	}
-	state.mutationOutcome = "Compose commit created"
-	if result.result.PreparationRequired {
-		state.applyBlocked = true
-		state.page = preparationRequiredPage{draft: result.commit.preview.draft}
-		state.status = "Preparation is required before validation"
-
-		return command
-	}
-	if result.result.ValidationUnavailable {
-		state.page = homePage{catalog: CatalogSnapshot{State: CatalogUnavailable}}
-		state.status = "Commit created; validation is unavailable"
-
-		return command
-	}
-
-	return tea.Batch(command, state.startCommittedSnapshot(result.result.Request))
-}
-
-func invalidServiceCommitResult(result ServiceCommitResult) bool {
-	return result.Committed && result.NeedsUnsignedApproval ||
-		result.ValidationUnavailable && !result.Committed ||
-		result.PreparationRequired &&
-			(!result.Committed || result.ValidationUnavailable || result.NeedsUnsignedApproval)
-}
-
-func (state *model) handleServiceSuspendResult(result serviceSuspendResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
-	if !accepted || result.err != nil {
-		return command
-	}
-	state.page = result.preview
-	state.status = "Draft saved for this service"
-	state.mutationOutcome = ""
-
-	return command
-}
-
 func (state *model) handleOpenResult(result openResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, nil)
-	if !accepted {
+	accepted, command := state.completeOperation(result.sequence, result.err)
+	if !accepted || result.err != nil {
 		return command
 	}
 	if result.result.Blocker != BlockerNone {
@@ -1610,16 +838,38 @@ func (state *model) handleSnapshotResult(result snapshotResultMsg) tea.Cmd {
 
 		return command
 	}
-	state.page = reviewPage{
+	review := reviewPage{
 		request: state.activeRequest, plan: view,
 		correlation: eventCorrelationForSnapshot(result.sequence, result.snapshot),
 	}
+	state.page = review
 	state.status = view.status
+	if view.health == application.HealthConvergenceHealthy {
+		return tea.Batch(command, state.startApply(review))
+	}
+	if view.health == application.HealthConvergencePending {
+		return tea.Batch(command, state.waitForHealth(review))
+	}
 
 	return command
 }
-
 func (state *model) handleApplyResult(result applyResultMsg) tea.Cmd {
+	if errors.Is(result.err, application.ErrHealthPending) ||
+		errors.Is(result.err, application.ErrHealthDegraded) {
+		accepted, command := state.completeOperation(result.sequence, nil)
+		if !accepted {
+			return command
+		}
+		review, valid := state.page.(reviewPage)
+		if !valid {
+			state.err = errInvalidInput
+			state.status = "Health result could not be refreshed"
+
+			return command
+		}
+
+		return tea.Batch(command, state.startSnapshot(review.request))
+	}
 	accepted, command := state.completeOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
@@ -1642,6 +892,52 @@ func (state *model) handleApplyResult(result applyResultMsg) tea.Cmd {
 	return state.startSnapshot(review.request)
 }
 
+func (state *model) handleHealthResolutionResult(result healthResolutionResultMsg) tea.Cmd {
+	refresh := result.err == nil || errors.Is(result.err, application.ErrHealthPending) ||
+		errors.Is(result.err, application.ErrHealthDegraded) ||
+		errors.Is(result.err, application.ErrSnapshotStale)
+	err := result.err
+	if refresh {
+		err = nil
+	}
+	accepted, command := state.completeOperation(result.sequence, err)
+	if !accepted || !refresh {
+		return command
+	}
+	review, valid := state.page.(reviewPage)
+	if !valid {
+		state.err = errInvalidInput
+		state.status = "Health decision could not be refreshed"
+
+		return command
+	}
+
+	return tea.Batch(command, state.startSnapshot(review.request))
+}
+
+func (state *model) waitForHealth(review reviewPage) tea.Cmd {
+	if review.plan.health != application.HealthConvergencePending || review.plan.healthPoll <= 0 {
+		return nil
+	}
+	sequence := state.sequence
+
+	return tea.Tick(review.plan.healthPoll, func(time.Time) tea.Msg {
+		return healthPollMsg{sequence: sequence}
+	})
+}
+
+func (state *model) handleHealthPoll(message healthPollMsg) tea.Cmd {
+	if message.sequence != state.sequence || state.busy {
+		return nil
+	}
+	review, valid := state.page.(reviewPage)
+	if !valid || review.plan.health != application.HealthConvergencePending {
+		return nil
+	}
+
+	return state.startSnapshot(review.request)
+}
+
 func (state *model) completeOperation(sequence uint64, err error) (bool, tea.Cmd) {
 	if sequence != state.sequence {
 		return false, nil
@@ -1652,7 +948,7 @@ func (state *model) completeOperation(sequence uint64, err error) (bool, tea.Cmd
 		state.status = "Cancelled"
 	} else if err != nil {
 		state.err = err
-		state.status = "Operation failed"
+		state.status = statusOperationFailed
 	}
 
 	if state.quitAfterOperation {
@@ -1689,228 +985,4 @@ func (state *model) finishOperation() {
 	}
 	state.busy = false
 	state.applying = false
-}
-
-func canonicalCatalog(snapshot CatalogSnapshot) CatalogSnapshot {
-	suggested, err := canonicalDisplay(snapshot.SuggestedRepository)
-	if err != nil {
-		snapshot.State = CatalogUnavailable
-		snapshot.SuggestedRepository = ""
-	} else {
-		snapshot.SuggestedRepository = suggested
-	}
-	services := make([]Service, 0, len(snapshot.Services))
-	for _, service := range snapshot.Services {
-		location, locationErr := canonicalDisplay(service.Location)
-		project, projectErr := canonicalDisplay(service.Project)
-		name, nameErr := canonicalDisplay(service.Name)
-		runtimeName, runtimeErr := canonicalDisplay(service.Runtime)
-		if locationErr != nil || projectErr != nil || nameErr != nil || runtimeErr != nil {
-			services = append(services, Service{ID: service.ID, Location: "Invalid source", Blocker: BlockerInvalid})
-
-			continue
-		}
-		services = append(services, Service{
-			ID: service.ID, Location: location, Project: project, Name: name,
-			Runtime: runtimeName, Blocker: service.Blocker,
-		})
-		if diagnostic, valid := canonicalSourceDiagnostic(service.Diagnostic); valid && service.Blocker == BlockerInvalid {
-			services[len(services)-1].Diagnostic = diagnostic
-		}
-	}
-	snapshot.Services = services
-
-	return snapshot
-}
-
-func canonicalSourceDiagnostic(diagnostic SourceDiagnostic) (SourceDiagnostic, bool) {
-	file, valid := canonicalSourceDiagnosticFile(diagnostic.File)
-	if !valid || !validSourceDiagnosticPosition(diagnostic.Line, diagnostic.Column) ||
-		!validSourceDiagnosticReason(diagnostic.Reason) {
-		return SourceDiagnostic{}, false
-	}
-	diagnostic.File = file
-
-	return diagnostic, true
-}
-
-func canonicalSourceDiagnosticFile(file string) (string, bool) {
-	canonical, err := canonicalDisplay(file)
-	native := filepath.FromSlash(canonical)
-	if err != nil || canonical == "" || filepath.IsAbs(native) || !filepath.IsLocal(native) ||
-		filepath.ToSlash(filepath.Clean(native)) != canonical {
-		return "", false
-	}
-
-	return canonical, true
-}
-
-func validSourceDiagnosticPosition(line, column int) bool {
-	return line >= 0 && column >= 0 && (line != 0 || column == 0)
-}
-
-func validSourceDiagnosticReason(reason SourceDiagnosticReason) bool {
-	switch reason {
-	case DiagnosticYAMLSyntax, DiagnosticYAMLStructure, DiagnosticYAMLUnsupported, DiagnosticComposeValidation:
-		return true
-	default:
-		return false
-	}
-}
-
-func canonicalServiceDraft(draft ServiceDraft) (ServiceDraft, error) {
-	values := []*string{
-		&draft.Runtime, &draft.Image, &draft.Service, &draft.ComposePath, &draft.Preparation,
-	}
-	for _, value := range values {
-		canonical, err := canonicalDisplay(*value)
-		if err != nil {
-			return ServiceDraft{}, err
-		}
-		*value = canonical
-	}
-	if draft.Runtime == "" || draft.Image == "" || draft.Service == "" || draft.ComposePath == "" ||
-		draft.WarningCount < 0 {
-		return ServiceDraft{}, errInvalidInput
-	}
-
-	return draft, nil
-}
-
-func canonicalStagedService(staged StagedService) (StagedService, error) {
-	composePath, err := canonicalDisplay(staged.ComposePath)
-	if err != nil {
-		return StagedService{}, err
-	}
-	preparation, err := canonicalDisplay(staged.Preparation)
-	if err != nil {
-		return StagedService{}, err
-	}
-	message, err := canonicalDisplay(staged.CommitMessage)
-	if err != nil || len(message) > maximumCommitMessageBytes {
-		return StagedService{}, errors.Join(errInvalidInput, err)
-	}
-	diff, err := terminaltext.Canonicalize(staged.Diff, terminaltext.Limits{
-		Bytes:     maximumStagedDiffBytes,
-		Runes:     maximumStagedDiffBytes,
-		Lines:     maximumStagedDiffLines,
-		LineCells: maximumDisplayCells,
-	})
-	if err != nil || diff == "" || composePath == "" || message == "" {
-		return StagedService{}, errors.Join(errInvalidInput, err)
-	}
-
-	return StagedService{
-		Diff: diff, ComposePath: composePath, Preparation: preparation, CommitMessage: message,
-	}, nil
-}
-
-func canonicalChoices(targets []Target) ([]serviceChoice, error) {
-	choices := make([]serviceChoice, 0, len(targets))
-	for _, target := range targets {
-		project, err := canonicalDisplay(target.Project)
-		if err != nil {
-			return nil, err
-		}
-		service, err := canonicalDisplay(target.Service)
-		if err != nil {
-			return nil, err
-		}
-		runtimeName, err := canonicalDisplay(target.Runtime)
-		if err != nil {
-			return nil, err
-		}
-		choices = append(choices, serviceChoice{
-			project: project, service: service, runtime: runtimeName, request: target.Request,
-		})
-	}
-
-	return choices, nil
-}
-
-func projectPlan(snapshot application.OperationSnapshot) (planView, error) {
-	plan := snapshot.Plan
-	current := "Not deployed"
-	if snapshot.HasApplied {
-		current = snapshot.Applied.Reference
-	}
-	raw := []string{
-		plan.Project,
-		plan.Service,
-		plan.Runtime.String(),
-		platformName(plan),
-		current,
-		plan.Image.Reference,
-		string(plan.Kind),
-	}
-	values := make([]string, len(raw))
-	for index, value := range raw {
-		canonical, err := canonicalDisplay(value)
-		if err != nil {
-			return planView{}, err
-		}
-		values[index] = canonical
-	}
-
-	view := planView{
-		kind: values[6], project: values[0], service: values[1], runtime: values[2],
-		platform: values[3], current: values[4], proposed: values[5],
-		status: statusReady,
-	}
-	if plan.Kind == application.PlanUnchanged {
-		view.status = "No runtime change needed"
-	}
-	if len(plan.Warnings) > 0 {
-		view.warningText = fmt.Sprintf("%d warning(s) require review", len(plan.Warnings))
-	}
-
-	return view, nil
-}
-
-func platformName(plan application.Plan) string {
-	value := plan.Platform.OS + "/" + plan.Platform.Architecture
-	if plan.Platform.Variant != "" {
-		value += "/" + plan.Platform.Variant
-	}
-
-	return value
-}
-
-func canonicalDisplay(value string) (string, error) {
-	canonical, err := terminaltext.Canonicalize(value, displayLimits())
-	if err != nil {
-		return "", fmt.Errorf("canonicalize display text: %w", err)
-	}
-
-	return canonical, nil
-}
-
-func catalogMessage(snapshot CatalogSnapshot) string {
-	switch snapshot.State {
-	case CatalogReady:
-		if len(snapshot.Services) == 0 {
-			return "No registered services"
-		}
-
-		return "Choose a service"
-	case CatalogMissing:
-		return "No registered repository"
-	case CatalogUnavailable:
-		return "Registered services unavailable"
-	default:
-		return "Registered services unavailable"
-	}
-}
-
-func blockerMessage(blocker SourceBlocker) string {
-	switch blocker {
-	case BlockerNone, BlockerInvalid:
-		return "Compose source did not pass validation"
-	case BlockerNotFound:
-		return "Compose source is no longer registered"
-	case BlockerUnavailable:
-		return "Compose source is unavailable"
-	default:
-		return "Compose source did not pass validation"
-	}
 }

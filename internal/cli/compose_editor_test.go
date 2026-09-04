@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,20 +49,20 @@ func TestPrepareDeploymentEditChangesOnlyTypedFields(t *testing.T) {
 	originalDigest := source.Repository.Digest
 	originalFile := bytes.Clone(source.Repository.Files[deploymentComposeEntry].Content)
 	patches := []application.DeploymentPatch{
-		deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2.5)),
-		deploymentPatch(t, application.DeploymentMemory, application.DeploymentBytes(1024)),
-		deploymentPatch(t, application.DeploymentPIDs, application.DeploymentInteger(-1)),
-		deploymentPatch(t, application.DeploymentRestart, application.DeploymentRestartPolicy("on-failure:3")),
-		deploymentPatch(t, application.DeploymentSharedMemory, application.DeploymentBytes(2048)),
-		deploymentPatch(t, application.DeploymentStopGrace, application.DeploymentDuration(20*time.Second)),
-		deploymentPatch(t, application.DeploymentInit, application.DeploymentBoolean(false)),
-		deploymentPatch(t, application.DeploymentReadOnly, application.DeploymentBoolean(true)),
-		deploymentPatch(t, application.DeploymentNoNewPrivileges, application.DeploymentEnabled{}),
-		deploymentPatch(t, application.DeploymentHealthInterval, application.DeploymentDuration(5*time.Second)),
-		deploymentPatch(t, application.DeploymentHealthTimeout, application.DeploymentDuration(6*time.Second)),
-		deploymentPatch(t, application.DeploymentHealthRetries, application.DeploymentRetries(4)),
-		deploymentPatch(t, application.DeploymentHealthStartPeriod, application.DeploymentDuration(8*time.Second)),
-		deploymentPatch(t, application.DeploymentHealthStartInterval, application.DeploymentDuration(9*time.Second)),
+		deploymentPatch(t, application.DeploymentCPUs, testDeploymentCPUValue),
+		deploymentPatch(t, application.DeploymentMemory, "1024"),
+		deploymentPatch(t, application.DeploymentPIDs, "-1"),
+		deploymentPatch(t, application.DeploymentRestart, "on-failure:3"),
+		deploymentPatch(t, application.DeploymentSharedMemory, "2048"),
+		deploymentPatch(t, application.DeploymentStopGrace, "20s"),
+		deploymentPatch(t, application.DeploymentInit, "false"),
+		deploymentPatch(t, application.DeploymentReadOnly, "true"),
+		deploymentPatch(t, application.DeploymentNoNewPrivileges, "true"),
+		deploymentPatch(t, application.DeploymentHealthInterval, "5s"),
+		deploymentPatch(t, application.DeploymentHealthTimeout, "6s"),
+		deploymentPatch(t, application.DeploymentHealthRetries, "4"),
+		deploymentPatch(t, application.DeploymentHealthStartPeriod, "8s"),
+		deploymentPatch(t, application.DeploymentHealthStartInterval, "9s"),
 	}
 
 	candidate, err := prepareDeploymentEdit(t.Context(), source, "api", patches)
@@ -90,7 +91,8 @@ func TestPrepareDeploymentEditChangesOnlyTypedFields(t *testing.T) {
 		t.Fatalf("Load(candidate) error = %v", err)
 	}
 	spec, err := project.ServiceSpec("api")
-	if err != nil || spec.CPUs != "2.5" || spec.MemoryBytes != 1024 || spec.PidsLimit == nil || *spec.PidsLimit != -1 ||
+	if err != nil || spec.CPUs != testDeploymentCPUValue || spec.MemoryBytes != 1024 ||
+		spec.PidsLimit == nil || *spec.PidsLimit != -1 ||
 		spec.Restart != "on-failure:3" || spec.SharedMemoryBytes != 2048 || spec.StopTimeout == nil ||
 		*spec.StopTimeout != 20 || spec.Init == nil || *spec.Init || spec.ReadOnly == nil || !*spec.ReadOnly ||
 		!spec.NoNewPrivileges || spec.Healthcheck == nil || spec.Healthcheck.Interval != "5s" ||
@@ -105,20 +107,20 @@ func TestPrepareDeploymentEditHandlesNoOpDuplicateAndUnset(t *testing.T) {
 
 	source := captureDeploymentSource(t, map[string][]byte{deploymentComposeEntry: deploymentComposeFixture()})
 	noOp, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{
-		deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(1)),
+		deploymentPatch(t, application.DeploymentCPUs, "1"),
 	})
 	if err != nil || len(noOp.fields) != 0 || !reflect.DeepEqual(noOp.source, source) {
 		t.Fatalf("prepareDeploymentEdit(no-op) = %#v, %v", noOp, err)
 	}
 
-	duplicate := deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2))
+	duplicate := deploymentPatch(t, application.DeploymentCPUs, "2")
 	if _, err = prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{duplicate, duplicate}); !errors.Is(err, errDeploymentEditInvalid) {
 		t.Fatalf("prepareDeploymentEdit(duplicate) error = %v", err)
 	}
 
 	unset, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{
-		deploymentPatch(t, application.DeploymentCPUs, application.DeploymentUnset{}),
-		deploymentPatch(t, application.DeploymentHealthStartInterval, application.DeploymentUnset{}),
+		unsetDeploymentPatch(t, application.DeploymentCPUs),
+		unsetDeploymentPatch(t, application.DeploymentHealthStartInterval),
 	})
 	if err != nil || !slices.Equal(unset.fields, []application.DeploymentField{
 		application.DeploymentCPUs, application.DeploymentHealthStartInterval,
@@ -131,7 +133,7 @@ func TestPrepareDeploymentEditHandlesNoOpDuplicateAndUnset(t *testing.T) {
 func TestPrepareDeploymentEditRejectsUnsafeTargetsAndHealthStates(t *testing.T) {
 	t.Parallel()
 
-	cpuPatch := deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2))
+	cpuPatch := deploymentPatch(t, application.DeploymentCPUs, "2")
 	for name, content := range map[string]string{
 		"interpolation": strings.Replace(string(deploymentComposeFixture()), "cpus: 1", "cpus: ${CPUS}", 1),
 		"explicit tag":  strings.Replace(string(deploymentComposeFixture()), "cpus: 1", "cpus: !!float 1", 1),
@@ -147,7 +149,7 @@ func TestPrepareDeploymentEditRejectsUnsafeTargetsAndHealthStates(t *testing.T) 
 		})
 	}
 
-	healthPatch := deploymentPatch(t, application.DeploymentHealthTimeout, application.DeploymentDuration(time.Second))
+	healthPatch := deploymentPatch(t, application.DeploymentHealthTimeout, "1s")
 	for name, content := range map[string]string{
 		"absent":               strings.Replace(string(deploymentComposeFixture()), deploymentHealthFixture(), "", 1),
 		"disabled healthcheck": strings.Replace(string(deploymentComposeFixture()), "healthcheck:\n", "healthcheck:\n      disable: true\n", 1),
@@ -176,7 +178,7 @@ func TestPrepareDeploymentEditRequiresServiceInEntryDocument(t *testing.T) {
 `),
 	}
 	source := captureDeploymentSource(t, files)
-	patch := deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2))
+	patch := deploymentPatch(t, application.DeploymentCPUs, "2")
 	if _, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{patch}); !errors.Is(err, errDeploymentEditInvalid) {
 		t.Fatalf("prepareDeploymentEdit(include-only service) error = %v", err)
 	}
@@ -205,7 +207,7 @@ services:
 	}
 	source := captureDeploymentSource(t, files)
 	candidate, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{
-		deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2)),
+		deploymentPatch(t, application.DeploymentCPUs, "2"),
 	})
 	if err != nil {
 		t.Fatalf("prepareDeploymentEdit() error = %v", err)
@@ -243,7 +245,7 @@ func TestPrepareDeploymentEditPreservesCancellationDuringCandidateBuild(t *testi
 	t.Parallel()
 
 	source := captureDeploymentSource(t, map[string][]byte{deploymentComposeEntry: deploymentComposeFixture()})
-	patch := deploymentPatch(t, application.DeploymentCPUs, application.DeploymentCPU(2))
+	patch := deploymentPatch(t, application.DeploymentCPUs, "2")
 	for check := int64(2); check < 256; check++ {
 		ctx := &cancelAfterChecksContext{after: check}
 		_, err := prepareDeploymentEdit(ctx, source, "api", []application.DeploymentPatch{patch})
@@ -263,7 +265,7 @@ func FuzzPrepareDeploymentEdit(f *testing.F) {
 		if len(content) > 1<<20 {
 			return
 		}
-		cpu := application.DeploymentCPU(float32(units%64+1) / 2)
+		cpu := strconv.FormatFloat(float64(float32(units%64+1)/2), 'f', -1, 32)
 		patch := deploymentPatch(t, application.DeploymentCPUs, cpu)
 		source := compose.Source{Content: []byte(content), WorkingDir: t.TempDir(), Environment: map[string]string{}}
 		candidate, err := prepareDeploymentEdit(t.Context(), source, "api", []application.DeploymentPatch{patch})
@@ -276,11 +278,21 @@ func FuzzPrepareDeploymentEdit(f *testing.F) {
 	})
 }
 
-func deploymentPatch(t *testing.T, field application.DeploymentField, value application.DeploymentValue) application.DeploymentPatch {
+func deploymentPatch(t *testing.T, field application.DeploymentField, value string) application.DeploymentPatch {
 	t.Helper()
-	patch, err := application.NewDeploymentPatch(field, value)
+	patch, err := application.ParseDeploymentPatch(field.ID(), value, false)
 	if err != nil {
-		t.Fatalf("NewDeploymentPatch(%s) error = %v", field.ID(), err)
+		t.Fatalf("ParseDeploymentPatch(%s, %q) error = %v", field.ID(), value, err)
+	}
+
+	return patch
+}
+
+func unsetDeploymentPatch(t *testing.T, field application.DeploymentField) application.DeploymentPatch {
+	t.Helper()
+	patch, err := application.ParseDeploymentPatch(field.ID(), "", true)
+	if err != nil {
+		t.Fatalf("ParseDeploymentPatch(%s, unset) error = %v", field.ID(), err)
 	}
 
 	return patch

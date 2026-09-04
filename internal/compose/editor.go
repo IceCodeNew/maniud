@@ -17,10 +17,10 @@ import (
 const composeYAMLIndent = 2
 
 const (
-	deploymentFieldCount   = 14
-	deploymentHealthcheck  = "healthcheck"
-	deploymentMappingWidth = 2
-	yamlStringTag          = "!!str"
+	deploymentHealthcheck     = "healthcheck"
+	deploymentMappingWidth    = 2
+	deploymentNoNewPrivileges = "no_new_privileges"
+	yamlStringTag             = "!!str"
 )
 
 // PatchServiceFields rewrites only the named portable fields in an entry-local
@@ -37,7 +37,7 @@ func (source Source) PatchServiceFields(
 	if err := ctx.Err(); err != nil {
 		return Source{}, fmt.Errorf("patch Compose service: %w", err)
 	}
-	if service == "" || expected.ServiceName != service || len(fields) == 0 || len(fields) > deploymentFieldCount {
+	if service == "" || expected.ServiceName != service || len(fields) == 0 {
 		return Source{}, ErrInvalidSource
 	}
 
@@ -176,6 +176,9 @@ func mutateDeploymentNode(
 	if !mappingValid || found && !safeDeploymentTarget(current) {
 		return nil, ErrInvalidSource
 	}
+	if field == deploymentNoNewPrivileges && found && !isNoNewPrivilegesValue(current) {
+		return nil, ErrInvalidSource
+	}
 	if !present {
 		if found {
 			removeDeploymentMappingValue(owner, key)
@@ -207,11 +210,22 @@ func safeDeploymentTarget(node *yaml.Node) bool {
 	return true
 }
 
+func isNoNewPrivilegesValue(node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) != 1 {
+		return false
+	}
+	value := node.Content[0]
+
+	return value != nil && value.Kind == yaml.ScalarNode &&
+		(value.Value == "no-new-privileges" || value.Value == "no-new-privileges:true" ||
+			value.Value == "no-new-privileges=true")
+}
+
 func deploymentYAMLPath(field string) (string, string, bool) {
 	switch field {
 	case "cpus", "mem_limit", "pids_limit", "restart", "shm_size", "stop_grace_period", "init", "read_only":
 		return field, "", true
-	case "no_new_privileges":
+	case deploymentNoNewPrivileges:
 		return "security_opt", "", true
 	case "healthcheck.interval":
 		return deploymentHealthcheck, "interval", true
@@ -254,7 +268,7 @@ func deploymentYAMLValue(spec containerconfig.Spec, field string) (*yaml.Node, b
 		return deploymentOptionalBoolean(spec.Init)
 	case "read_only":
 		return deploymentOptionalBoolean(spec.ReadOnly)
-	case "no_new_privileges":
+	case deploymentNoNewPrivileges:
 		if !spec.NoNewPrivileges {
 			return new(yaml.Node), false, false
 		}

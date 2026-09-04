@@ -8,7 +8,7 @@ import (
 	"github.com/IceCodeNew/maniud/internal/compose"
 )
 
-func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, error) {
+func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, string, error) {
 	return proveGitOpsCheckoutWithFinalCheck(ctx, path, branch, cleanGitTree)
 }
 
@@ -17,29 +17,29 @@ func proveGitOpsCheckoutWithFinalCheck(
 	path string,
 	branch string,
 	finalState func(context.Context, string) (gitTreeState, error),
-) (string, string, error) {
-	root, state, err := inspectGitOpsCheckout(ctx, path, branch)
+) (string, string, string, error) {
+	root, state, remote, err := inspectGitOpsCheckout(ctx, path, branch)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	upstream, err := resolveGitObject(ctx, root, gitOpsRemoteName+"/"+branch+"^{commit}")
 	if err != nil {
-		return "", "", errGitOpsRepositoryInvalid
+		return "", "", "", errGitOpsRepositoryInvalid
 	}
 	if err = requireFastForward(ctx, root, upstream, state.head); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	after, err := finalState(ctx, root)
 	if err != nil || after != state {
-		return "", "", errGitOpsRepositoryInvalid
+		return "", "", "", errGitOpsRepositoryInvalid
 	}
 
-	return root, state.head, nil
+	return root, state.head, remote, nil
 }
 
-func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
+func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, string, error) {
 	return inspectGitOpsCheckoutWithState(ctx, path, branch, cleanGitTree)
 }
 
@@ -48,18 +48,18 @@ func inspectGitOpsCheckoutWithState(
 	path string,
 	branch string,
 	stateFor func(context.Context, string) (gitTreeState, error),
-) (string, gitTreeState, error) {
+) (string, gitTreeState, string, error) {
 	root, state, err := inspectLocalGitOpsCheckoutWithState(ctx, path, branch, stateFor)
 	if err != nil {
-		return "", gitTreeState{}, err
+		return "", gitTreeState{}, "", err
 	}
 
 	remote, err := gitRemoteURL(ctx, root, gitOpsRemoteName)
 	if err != nil || remote == "" {
-		return "", gitTreeState{}, errGitOpsRepositoryInvalid
+		return "", gitTreeState{}, "", errGitOpsRepositoryInvalid
 	}
 
-	return root, state, nil
+	return root, state, remote, nil
 }
 
 func inspectLocalGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
@@ -147,7 +147,7 @@ func gitOpsRepositoryScope(
 	registration gitOpsRegistration,
 	root string,
 ) (compose.RepositoryScope, error) {
-	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	remote, err := registeredGitOpsRemoteURL(ctx, root, registration)
 	if err != nil {
 		return compose.RepositoryScope{}, errGitOpsRepositoryInvalid
 	}
@@ -157,6 +157,22 @@ func gitOpsRepositoryScope(
 	}
 
 	return scope, nil
+}
+
+func registeredGitOpsRemoteURL(
+	ctx context.Context,
+	root string,
+	registration gitOpsRegistration,
+) (string, error) {
+	if registration.RemoteURL == "" {
+		return "", errGitOpsRepositoryInvalid
+	}
+	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	if err != nil || remote != registration.RemoteURL {
+		return "", errGitOpsRepositoryInvalid
+	}
+
+	return registration.RemoteURL, nil
 }
 
 func requireFastForward(ctx context.Context, root, ancestor, descendant string) error {

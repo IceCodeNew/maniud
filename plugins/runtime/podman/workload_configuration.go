@@ -86,10 +86,28 @@ func podmanContainerFromInspection(reference string, inspection podmanconfig.Ins
 
 	return Container{
 		ID: inspection.ID, Name: inspection.Name, ImageReference: inspection.ImageReference,
+		StartedAt:   inspection.StartedAt,
 		ImageConfig: imageConfig, PlatformManifest: platformManifest,
 		WorkloadSpec: spec, RuntimeMounts: podmanRuntimeMounts(inspection.RuntimeMounts),
-		State: inspection.State, Ownership: ownership,
+		State: inspection.State, Health: podmanWorkloadHealth(inspection.Health), Ownership: ownership,
 	}, true
+}
+
+func podmanWorkloadHealth(health podmanconfig.Health) application.WorkloadHealth {
+	status := application.WorkloadHealthUnknown
+	//nolint:exhaustive // HealthUnknown already owns the initialized fallback status.
+	switch health.Status {
+	case podmanconfig.HealthAbsent:
+		status = application.WorkloadHealthAbsent
+	case podmanconfig.HealthStarting:
+		status = application.WorkloadHealthStarting
+	case podmanconfig.HealthHealthy:
+		status = application.WorkloadHealthHealthy
+	case podmanconfig.HealthUnhealthy:
+		status = application.WorkloadHealthUnhealthy
+	}
+
+	return application.WorkloadHealth{Status: status, FailingStreak: health.FailingStreak}
 }
 
 func podmanRuntimeMounts(values []podmanconfig.RuntimeMount) []domain.RuntimeMount {

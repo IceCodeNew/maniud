@@ -10,6 +10,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	podmanconfig "github.com/IceCodeNew/maniud/containerconfig/podman"
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -31,7 +34,29 @@ const (
 	podmanTestBadNUL      = "bad\x00"
 	podmanTestPort80TCP   = "80/tcp"
 	podmanTestSamePath    = "/same"
+	podmanTestStartedAt   = "2026-09-02T10:00:00.123456789Z"
 )
+
+func TestPodmanWorkloadHealthMapsEveryBoundedStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status podmanconfig.HealthStatus
+		want   application.WorkloadHealthStatus
+	}{
+		{status: podmanconfig.HealthUnknown, want: application.WorkloadHealthUnknown},
+		{status: podmanconfig.HealthAbsent, want: application.WorkloadHealthAbsent},
+		{status: podmanconfig.HealthStarting, want: application.WorkloadHealthStarting},
+		{status: podmanconfig.HealthHealthy, want: application.WorkloadHealthHealthy},
+		{status: podmanconfig.HealthUnhealthy, want: application.WorkloadHealthUnhealthy},
+	}
+	for _, test := range tests {
+		got := podmanWorkloadHealth(podmanconfig.Health{Status: test.status, FailingStreak: 3})
+		if got.Status != test.want || got.FailingStreak != 3 {
+			t.Fatalf("podmanWorkloadHealth(%d) = %#v", test.status, got)
+		}
+	}
+}
 
 func podmanTestWorkload(t *testing.T) domain.DesiredWorkload {
 	t.Helper()
@@ -218,6 +243,7 @@ func (state *podmanWorkloadRuntimeState) inspectDocument() string {
 	case ContainerRunning:
 		stateValue.Status = podmanStateRunning
 		stateValue.Running = true
+		stateValue.StartedAt = podmanTestStartedAt
 	case ContainerPaused:
 		stateValue.Status = podmanStatePaused
 		stateValue.Paused = true
@@ -823,14 +849,17 @@ func TestPodmanObservedWorkloadAndInspectMappingBranches(t *testing.T) {
 	workload := podmanTestWorkload(t)
 	container := Container{
 		ID: podmanTestContainerID, Name: workload.ContainerName, ImageReference: workload.Image.Reference,
+		StartedAt:   time.Date(2026, 9, 2, 10, 0, 0, 123456789, time.UTC),
 		ImageConfig: workload.Image.ImageConfig, PlatformManifest: workload.Image.PlatformManifest,
 		WorkloadSpec: workload.WorkloadSpec, State: ContainerRunning,
+		Health: application.WorkloadHealth{Status: application.WorkloadHealthAbsent},
 	}
 	observation, err := podmanWorkloadObservation(
 		ContainerProbe{State: ContainerProbeObserved, Container: container}, workload, libpodAPIVersion,
 	)
-	if err != nil || observation.State != application.WorkloadObservationPresent || !observation.Running ||
-		!observation.ConfigurationMatches {
+	if err != nil || observation.State != application.WorkloadObservationPresent ||
+		observation.Lifecycle != application.WorkloadLifecycleRunning ||
+		observation.StartedAt != container.StartedAt || !observation.ConfigurationMatches {
 		t.Fatalf("podmanWorkloadObservation(observed) = %#v, %v", observation, err)
 	}
 	invalidStorage := workload

@@ -26,7 +26,7 @@ func TestFastForwardGitOpsCheckoutSelectsRemoteDescendant(t *testing.T) {
 	}
 
 	selection, err := fastForwardGitOpsCheckout(
-		context.Background(), checkout, gitOpsTestBranch, registered,
+		t.Context(), testGitOpsRegistration(t, checkout, registered),
 	)
 	if err != nil {
 		t.Fatalf("fastForwardGitOpsCheckout() error = %v", err)
@@ -58,7 +58,7 @@ func TestFastForwardGitOpsCheckoutReturnsAwaitingPushForLocalDescendant(t *testi
 	}
 
 	selection, err := fastForwardGitOpsCheckout(
-		t.Context(), checkout, gitOpsTestBranch, registered,
+		t.Context(), testGitOpsRegistration(t, checkout, registered),
 	)
 	if err != nil || !selection.awaitingPush || selection.commit != want {
 		t.Fatalf("fastForwardGitOpsCheckout() = %#v, %v; want %q", selection, err, want)
@@ -86,7 +86,9 @@ func TestFastForwardGitOpsCheckoutRejectsRemoteRewrite(t *testing.T) {
 		t.Fatalf("git force push error = %v", err)
 	}
 
-	_, err := fastForwardGitOpsCheckout(context.Background(), checkout, gitOpsTestBranch, registered)
+	_, err := fastForwardGitOpsCheckout(
+		t.Context(), testGitOpsRegistration(t, checkout, registered),
+	)
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fastForwardGitOpsCheckout(rewrite) = %v", err)
 	}
@@ -128,7 +130,7 @@ func TestFastForwardGitOpsCheckoutRejectsFetchedDivergence(t *testing.T) {
 		t.Fatalf("git update-ref error = %v", err)
 	}
 
-	_, err = fastForwardGitOpsCheckout(t.Context(), checkout, gitOpsTestBranch, registered)
+	_, err = fastForwardGitOpsCheckout(t.Context(), testGitOpsRegistration(t, checkout, registered))
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fastForwardGitOpsCheckout(diverged) error = %v", err)
 	}
@@ -148,7 +150,10 @@ func TestFastForwardGitOpsCheckoutContainsAdvanceFailure(t *testing.T) {
 	t.Cleanup(func() {
 		_ = os.Chmod(checkout, 0o700) //nolint:gosec // Cleanup restores private owner access.
 	})
-	_, err := fastForwardGitOpsCheckout(t.Context(), checkout, gitOpsTestBranch, registered)
+	_, err := fastForwardGitOpsCheckout(t.Context(), testGitOpsRegistration(t, checkout, registered))
+	if err == nil {
+		t.Skip("filesystem allowed the checkout update without directory write permission")
+	}
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fastForwardGitOpsCheckout(advance failure) error = %v", err)
 	}
@@ -157,7 +162,7 @@ func TestFastForwardGitOpsCheckoutContainsAdvanceFailure(t *testing.T) {
 func TestFastForwardGitOpsCheckoutRejectsInvalidRegistration(t *testing.T) {
 	t.Parallel()
 
-	_, err := fastForwardGitOpsCheckout(context.Background(), "/repo", gitOpsTestBranch, "invalid")
+	_, err := fastForwardGitOpsCheckout(t.Context(), gitOpsRegistration{})
 	if !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fastForwardGitOpsCheckout(invalid registration) = %v", err)
 	}
@@ -167,12 +172,17 @@ func TestGitOpsFastForwardRejectsInvalidLifecycleState(t *testing.T) {
 	t.Parallel()
 
 	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
-	if _, _, err := registeredGitOpsCheckout(
-		t.Context(), filepath.Join(t.TempDir(), testMissingName), gitOpsTestBranch, registered,
-	); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	registration := testGitOpsRegistration(t, checkout, registered)
+	registration.Repository = filepath.Join(t.TempDir(), testMissingName)
+	if _, _, _, err := registeredGitOpsCheckout(t.Context(), registration); !errors.Is(
+		err, errGitOpsRepositoryInvalid,
+	) {
 		t.Fatalf("registeredGitOpsCheckout(missing) = %v", err)
 	}
-	if _, err := fetchGitOpsCommit(t.Context(), checkout, testMissingName); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	remote := testGitOpsRegistration(t, checkout, registered).RemoteURL
+	if _, err := fetchGitOpsCommit(
+		t.Context(), checkout, testMissingName, remote,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fetchGitOpsCommit(missing branch) = %v", err)
 	}
 	if _, err := runGit(
@@ -180,7 +190,9 @@ func TestGitOpsFastForwardRejectsInvalidLifecycleState(t *testing.T) {
 	); err != nil {
 		t.Fatalf("git remote set-url error = %v", err)
 	}
-	if _, err := fetchGitOpsCommit(t.Context(), checkout, gitOpsTestBranch); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	if _, err := fetchGitOpsCommit(
+		t.Context(), checkout, gitOpsTestBranch, remote,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fetchGitOpsCommit(invalid remote) = %v", err)
 	}
 	if err := advanceGitOpsCheckout(
@@ -197,13 +209,99 @@ func TestGitOpsFastForwardRejectsInvalidLifecycleState(t *testing.T) {
 	}
 
 	checkout, _, _ = initFastForwardGitOpsTestRepositories(t)
+	remote = testGitOpsRegistration(t, checkout, registered).RemoteURL
 	if _, err := fetchGitOpsCommitWithResolver(
-		t.Context(), checkout, gitOpsTestBranch,
+		t.Context(), checkout, gitOpsTestBranch, remote,
 		func(context.Context, string, string) (string, error) {
 			return "", errClosedOutput
 		},
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("fetchGitOpsCommitWithResolver(resolve failure) = %v", err)
+	}
+}
+
+func TestFastForwardGitOpsCheckoutRejectsRegisteredRemoteDrift(t *testing.T) {
+	t.Parallel()
+
+	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
+	registration := testGitOpsRegistration(t, checkout, registered)
+	otherRemote := filepath.Join(t.TempDir(), "other.git")
+	if _, err := runGit(
+		t.Context(), filepath.Dir(otherRemote), "clone", "--quiet", "--bare", "--", checkout, otherRemote,
+	); err != nil {
+		t.Fatalf("create other remote: %v", err)
+	}
+	if _, err := runGit(
+		t.Context(), checkout, "remote", "set-url", gitOpsRemoteName, otherRemote,
+	); err != nil {
+		t.Fatalf("change registered remote: %v", err)
+	}
+	if _, err := fastForwardGitOpsCheckout(t.Context(), registration); !errors.Is(
+		err, errGitOpsRepositoryInvalid,
+	) {
+		t.Fatalf("fastForwardGitOpsCheckout(remote drift) = %v", err)
+	}
+}
+
+func TestBindGitOpsRemotePersistsIdentityBeforeUse(t *testing.T) {
+	t.Parallel()
+
+	repository := initGitOpsTestRepository(t)
+	head, err := resolveGitObject(t.Context(), repository, "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("resolve test HEAD: %v", err)
+	}
+	registration := testGitOpsRegistration(t, repository, head)
+	wantRemote := registration.RemoteURL
+	registration.RemoteURL = ""
+	registrationPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	if err = writeGitOpsRegistration(registrationPath, registration); err != nil {
+		t.Fatalf("write unbound registration: %v", err)
+	}
+	bound, err := bindGitOpsRemote(t.Context(), registrationPath, registration)
+	if err != nil || bound.RemoteURL != wantRemote {
+		t.Fatalf("bindGitOpsRemote() = %#v, %v", bound, err)
+	}
+	persisted, err := readGitOpsRegistration(registrationPath)
+	if err != nil || persisted != bound {
+		t.Fatalf("persisted registration = %#v, %v", persisted, err)
+	}
+	otherRemote := filepath.Join(t.TempDir(), "other.git")
+	if _, err = runGit(
+		t.Context(), filepath.Dir(otherRemote), "clone", "--quiet", "--bare", "--", repository, otherRemote,
+	); err != nil {
+		t.Fatalf("create replacement remote: %v", err)
+	}
+	if _, err = runGit(
+		t.Context(), repository, "remote", "set-url", gitOpsRemoteName, otherRemote,
+	); err != nil {
+		t.Fatalf("replace remote: %v", err)
+	}
+	if _, err = bindGitOpsRemote(t.Context(), registrationPath, persisted); !errors.Is(
+		err, errGitOpsRepositoryInvalid,
+	) {
+		t.Fatalf("bindGitOpsRemote(remote drift) = %v", err)
+	}
+}
+
+func TestBindGitOpsRemoteContainsPersistenceFailure(t *testing.T) {
+	t.Parallel()
+
+	repository := initGitOpsTestRepository(t)
+	head, err := resolveGitObject(t.Context(), repository, "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("resolve test HEAD: %v", err)
+	}
+	registration := testGitOpsRegistration(t, repository, head)
+	registration.RemoteURL = ""
+	parentFile := filepath.Join(t.TempDir(), "parent")
+	if err = os.WriteFile(parentFile, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write parent file: %v", err)
+	}
+	if _, err = bindGitOpsRemote(
+		t.Context(), filepath.Join(parentFile, gitOpsRegistrationName), registration,
+	); err == nil {
+		t.Fatal("bindGitOpsRemote(persistence failure) succeeded")
 	}
 }
 
@@ -243,6 +341,24 @@ func initFastForwardGitOpsTestRepositories(t *testing.T) (string, string, string
 	}
 
 	return checkout, producer, registered
+}
+
+func testGitOpsRegistration(t *testing.T, repository, baseline string) gitOpsRegistration {
+	t.Helper()
+
+	root, err := filepath.EvalSymlinks(repository)
+	if err != nil {
+		t.Fatalf("resolve test repository: %v", err)
+	}
+	remote, err := gitRemoteURL(t.Context(), root, gitOpsRemoteName)
+	if err != nil {
+		t.Fatalf("resolve test remote: %v", err)
+	}
+
+	return gitOpsRegistration{
+		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
+		Remote: gitOpsRemoteName, RemoteURL: remote, BaselineCommit: baseline,
+	}
 }
 
 func writeGitOpsTestCommit(t *testing.T, root, name, content, message string) {

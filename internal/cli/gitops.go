@@ -58,14 +58,14 @@ func executeGitOpsInit(
 		return readErr
 	}
 
-	root, commit, err = proveGitOpsCheckout(ctx, arguments.repository, arguments.branch)
+	root, commit, remote, err := proveGitOpsCheckout(ctx, arguments.repository, arguments.branch)
 	if err != nil {
 		return err
 	}
 
 	return writeGitOpsRegistration(registrationPath, gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: root, Branch: arguments.branch,
-		Remote: gitOpsRemoteName, BaselineCommit: commit,
+		Remote: gitOpsRemoteName, RemoteURL: remote, BaselineCommit: commit,
 	})
 }
 
@@ -150,8 +150,12 @@ func reuseInitializedGitOpsCheckout(
 	if err != nil || requireFastForward(ctx, root, registration.BaselineCommit, state.head) != nil {
 		return errGitOpsRepositoryInvalid
 	}
+	if registration.RemoteURL == "" {
+		return nil
+	}
+	_, err = registeredGitOpsRemoteURL(ctx, root, registration)
 
-	return nil
+	return err
 }
 
 func classifyGitOpsCommandFailure(err error) *domain.FailureError {

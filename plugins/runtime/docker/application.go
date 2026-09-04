@@ -230,7 +230,8 @@ func workloadObservation(
 			State:                application.WorkloadObservationMissing,
 			ConfigurationDigest:  domain.Digest{},
 			ConfigurationMatches: false,
-			Running:              false,
+			Lifecycle:            application.WorkloadLifecycleUnknown,
+			Health:               application.WorkloadHealth{},
 			Ownership:            ownership,
 		}, nil
 	case ContainerProbeObserved:
@@ -255,11 +256,13 @@ func workloadObservation(
 		return application.WorkloadObservation{
 			ID:                   probe.Container.ID,
 			State:                application.WorkloadObservationPresent,
+			StartedAt:            probe.Container.StartedAt,
 			ConfigurationDigest:  containerConfigurationDigest(probe.Container),
 			StorageDigest:        storageDigest,
 			RuntimeMounts:        slices.Clone(probe.Container.RuntimeMounts),
 			ConfigurationMatches: probe.Container.matchesConfiguration(expectation),
-			Running:              probe.Container.Running,
+			Lifecycle:            applicationWorkloadLifecycle(probe.Container.State),
+			Health:               probe.Container.Health,
 			Ownership:            probe.Container.Ownership,
 		}, nil
 	case ContainerProbeUnknown:

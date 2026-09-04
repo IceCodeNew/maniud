@@ -117,15 +117,6 @@ func channelClosed(channel <-chan struct{}) bool {
 	}
 }
 
-func pollRegisteredRepository(
-	ctx context.Context,
-	interval time.Duration,
-	output io.Writer,
-	reconcile func() error,
-) error {
-	return pollRegisteredRepositoryUntilStop(ctx, interval, output, reconcile, nil, nil)
-}
-
 func pollRegisteredRepositoryUntilStop(
 	ctx context.Context,
 	interval time.Duration,
@@ -170,10 +161,6 @@ func publishCLIEvent(events application.EventSink, event application.Event) {
 	events.TryPublish(event)
 }
 
-func waitDaemonInterval(ctx context.Context, interval time.Duration) error {
-	return waitDaemonIntervalOrStop(ctx, interval, nil)
-}
-
 func waitDaemonIntervalOrStop(ctx context.Context, interval time.Duration, stop <-chan struct{}) error {
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
@@ -202,7 +189,12 @@ func reconcileRegisteredRepository(
 		return err
 	}
 
-	registration, err := readGitOpsRegistration(gitOpsRegistrationPath(statePath))
+	registrationPath := gitOpsRegistrationPath(statePath)
+	registration, err := readGitOpsRegistration(registrationPath)
+	if err != nil {
+		return errGitOpsRepositoryInvalid
+	}
+	registration, err = bindGitOpsRemote(ctx, registrationPath, registration)
 	if err != nil {
 		return errGitOpsRepositoryInvalid
 	}
@@ -222,27 +214,17 @@ func reconcileRegisteredRepository(
 	)
 }
 
-//nolint:funlen // The daemon keeps recovery-before-fetch ordering visible in one orchestration function.
 func reconcileRegisteredGitOpsCheckout(
 	ctx context.Context,
 	output io.Writer,
 	registration gitOpsRegistration,
 	dependencies applyDependencies,
-	fastForward func(context.Context, string, string, string) (gitOpsCheckoutSelection, error),
+	fastForward func(context.Context, gitOpsRegistration) (gitOpsCheckoutSelection, error),
 	newScope func(string, string, string) (compose.RepositoryScope, error),
 ) error {
-	root, currentCommit, err := registeredGitOpsCheckout(
-		ctx,
-		registration.Repository,
-		registration.Branch,
-		registration.BaselineCommit,
-	)
+	root, currentCommit, remote, err := registeredGitOpsCheckout(ctx, registration)
 	if err != nil {
 		return err
-	}
-	remote, err := gitRemoteURL(ctx, root, registration.Remote)
-	if err != nil {
-		return errGitOpsRepositoryInvalid
 	}
 	scope, err := newScope(root, remote, registration.Branch)
 	if err != nil {
@@ -260,12 +242,7 @@ func reconcileRegisteredGitOpsCheckout(
 		)
 	}
 
-	selection, err := fastForward(
-		ctx,
-		registration.Repository,
-		registration.Branch,
-		registration.BaselineCommit,
-	)
+	selection, err := fastForward(ctx, registration)
 	if err != nil {
 		counts.markFailed()
 

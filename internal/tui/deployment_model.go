@@ -8,6 +8,8 @@ import (
 	"github.com/IceCodeNew/maniud/internal/application"
 )
 
+const deploymentWorktreeUnknownStatus = "Worktree state is uncertain; run git status and recover it outside maniud"
+
 type deploymentFieldsResultMsg struct {
 	sequence uint64
 	review   reviewPage
@@ -32,15 +34,17 @@ type deploymentStageResultMsg struct {
 
 type deploymentCommitResultMsg struct {
 	sequence uint64
-	commit   commitServicePage
-	result   DeploymentCommitResult
+	commit   commitPage
+	result   CommitResult
 	err      error
 }
 
 type deploymentDiscardResultMsg struct {
-	sequence uint64
-	preview  deploymentPreviewPage
-	err      error
+	sequence    uint64
+	destination page
+	quit        bool
+	staged      bool
+	err         error
 }
 
 type deploymentHistoryResultMsg struct {
@@ -53,10 +57,21 @@ type deploymentHistoryResultMsg struct {
 type deploymentFieldsPage struct {
 	review reviewPage
 	fields []DeploymentFieldState
+	draft  deploymentValueDraft
 	cursor int
 }
 
 func (deploymentFieldsPage) isPage() {}
+
+type deploymentValueDraft struct {
+	fieldID string
+	initial string
+	value   string
+}
+
+func (draft deploymentValueDraft) dirty() bool {
+	return draft.fieldID != "" && draft.value != draft.initial
+}
 
 type deploymentValuePage struct {
 	fields deploymentFieldsPage
@@ -66,13 +81,25 @@ type deploymentValuePage struct {
 
 func (deploymentValuePage) isPage() {}
 
+func (deploymentValuePage) acceptsTextInput() bool { return true }
+
 type deploymentPreviewPage struct {
-	review   reviewPage
-	previous page
-	preview  DeploymentEditPreview
+	review    reviewPage
+	previous  page
+	preview   DeploymentEditPreview
+	scroll    int
+	diffWidth int
+	diffLines []string
 }
 
 func (deploymentPreviewPage) isPage() {}
+
+type deploymentDetailsPage struct {
+	preview deploymentPreviewPage
+	scroll  int
+}
+
+func (deploymentDetailsPage) isPage() {}
 
 type stageDeploymentConfirmationPage struct {
 	preview deploymentPreviewPage
@@ -80,6 +107,23 @@ type stageDeploymentConfirmationPage struct {
 }
 
 func (stageDeploymentConfirmationPage) isPage() {}
+
+type deploymentDiffPage struct {
+	confirmation stageDeploymentConfirmationPage
+	scroll       int
+}
+
+func (deploymentDiffPage) isPage() {}
+
+type deploymentDraftConfirmationPage struct {
+	previous    page
+	destination page
+	focus       confirmationFocus
+	quit        bool
+	staged      bool
+}
+
+func (deploymentDraftConfirmationPage) isPage() {}
 
 type deploymentHistoryPage struct {
 	review  reviewPage
@@ -116,6 +160,7 @@ func (state *model) handleDeploymentWorkspaceMessage(message tea.Msg) (tea.Cmd, 
 	}
 }
 
+//nolint:cyclop // The page type switch is the deployment workflow's closed dispatch table.
 func (state *model) handleDeploymentPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch current := state.page.(type) {
 	case deploymentFieldsPage:
@@ -124,8 +169,14 @@ func (state *model) handleDeploymentPageKey(message tea.KeyPressMsg) (tea.Cmd, b
 		return state.handleDeploymentValueKey(current, message), true
 	case deploymentPreviewPage:
 		return state.handleDeploymentPreviewKey(current, message.String()), true
+	case deploymentDetailsPage:
+		return state.handleDeploymentDetailsKey(current, message.String()), true
 	case stageDeploymentConfirmationPage:
 		return state.handleDeploymentStageConfirmationKey(current, message.String()), true
+	case deploymentDiffPage:
+		return state.handleDeploymentDiffKey(current, message.String()), true
+	case deploymentDraftConfirmationPage:
+		return state.handleDeploymentDraftConfirmationKey(current, message.String()), true
 	case deploymentHistoryPage:
 		return state.handleDeploymentHistoryKey(current, message.String()), true
 	case restoreDeploymentConfirmationPage:
@@ -135,7 +186,7 @@ func (state *model) handleDeploymentPageKey(message tea.KeyPressMsg) (tea.Cmd, b
 	}
 }
 
-//nolint:cyclop // One closed key dispatcher owns this selection page's complete behavior.
+//nolint:cyclop,funlen // One closed key dispatcher owns this selection page's complete behavior.
 func (state *model) handleDeploymentFieldsKey(current deploymentFieldsPage, key string) tea.Cmd {
 	switch key {
 	case "up", "k":
@@ -153,12 +204,27 @@ func (state *model) handleDeploymentFieldsKey(current deploymentFieldsPage, key 
 		if field.ID == application.DeploymentNoNewPrivileges.ID() {
 			value = "true"
 		}
+		if current.draft.dirty() && current.draft.fieldID != field.ID {
+			state.status = "Return to the unsaved field or discard it before editing another field"
+
+			return nil
+		}
+		if current.draft.fieldID == field.ID {
+			value = current.draft.value
+		} else {
+			current.draft = deploymentValueDraft{fieldID: field.ID, initial: value, value: value}
+		}
 		state.page = deploymentValuePage{fields: current, field: field, value: value}
-		state.status = "Enter the deployment value"
+		state.status = deploymentDraftStatus(current.draft, "Enter the deployment value")
 
 		return nil
 	case "u":
 		field := current.fields[current.cursor]
+		if current.draft.dirty() {
+			state.status = "Discard the unsaved value before removing a field"
+
+			return nil
+		}
 		if !field.Available || !field.Present || !field.AllowsUnset {
 			state.status = "This field cannot be removed"
 
@@ -167,11 +233,19 @@ func (state *model) handleDeploymentFieldsKey(current deploymentFieldsPage, key 
 
 		return state.startDeploymentPreview(current.review, current, field.ID, "", true)
 	case keyEscape:
+		if current.draft.dirty() {
+			return state.leaveDeploymentDraft(current, current.review, false)
+		}
+		state.clearRecoverableDeploymentFailure()
 		state.page = current.review
 		state.status = current.review.plan.status
 
 		return nil
 	case keyQuit:
+		if current.draft.dirty() {
+			return state.leaveDeploymentDraft(current, nil, true)
+		}
+
 		return tea.Quit
 	}
 	state.page = current
@@ -192,20 +266,32 @@ func (state *model) handleDeploymentValueKey(
 		}
 
 		return state.startDeploymentPreview(
-			current.fields.review, current.fields, current.field.ID, current.value, false,
+			current.fields.review, current, current.field.ID, current.value, false,
 		)
 	case keyEscape:
 		state.page = current.fields
-		state.status = "Choose a deployment field"
+		state.status = deploymentDraftStatus(current.fields.draft, "Choose a deployment field")
 
 		return nil
-	case keyQuit:
-		return tea.Quit
 	}
-	current.value = editSingleLine(current.value, message)
+	value := editSingleLine(current.value, message)
+	if value != current.value {
+		state.clearRecoverableDeploymentFailure()
+	}
+	current.value = value
+	current.fields.draft.value = current.value
 	state.page = current
+	state.status = deploymentDraftStatus(current.fields.draft, "Enter the deployment value")
 
 	return nil
+}
+
+func deploymentDraftStatus(draft deploymentValueDraft, clean string) string {
+	if draft.dirty() {
+		return "Unsaved deployment value"
+	}
+
+	return clean
 }
 
 func (state *model) handleDeploymentPreviewKey(
@@ -213,20 +299,50 @@ func (state *model) handleDeploymentPreviewKey(
 	key string,
 ) tea.Cmd {
 	switch key {
+	case "up", "k":
+		current.scroll = max(current.scroll-1, 0)
+		state.page = current
+	case keyDown, "j":
+		current.scroll++
+		state.page = current
+		state.clampPageScroll()
+	case "d":
+		state.page = deploymentDetailsPage{preview: current}
+		state.status = "Complete deployment values"
 	case keyEnter:
 		if layoutFor(state.width, state.height) < layoutCompact {
 			state.status = "Resize to review the file mutation"
 
 			return nil
 		}
+		current = state.wrapDeploymentPreviewDiff(current)
 		state.page = stageDeploymentConfirmationPage{preview: current, focus: confirmationBack}
-		state.status = "Confirm file mutation or go back"
+		state.status = statusConfirmFileMutation
 	case keyEscape:
-		state.page = current.previous
-		state.status = statusDeploymentUnchanged
+		return state.startDeploymentDiscard(current.previous, false, false)
 	case keyQuit:
-		return tea.Quit
+		return state.leaveDeploymentDraft(current, nil, true)
 	}
+
+	return nil
+}
+
+func (state *model) handleDeploymentDetailsKey(current deploymentDetailsPage, key string) tea.Cmd {
+	switch key {
+	case "up", "k":
+		current.scroll = max(current.scroll-1, 0)
+	case keyDown, "j":
+		current.scroll++
+	case "d", keyEscape:
+		state.page = current.preview
+		state.status = statusDeploymentUnchanged
+
+		return nil
+	case keyQuit:
+		return state.leaveDeploymentDraft(current, nil, true)
+	}
+	state.page = current
+	state.clampPageScroll()
 
 	return nil
 }
@@ -244,6 +360,11 @@ func (state *model) handleDeploymentStageConfirmationKey(
 	switch key {
 	case keyTab, keyLeft, keyRight, keyShiftTab:
 		current.focus = toggledConfirmationFocus(current.focus)
+	case "d":
+		state.page = deploymentDiffPage{confirmation: current}
+		state.status = "Exact commit diff"
+
+		return nil
 	case keyEnter:
 		if current.focus == confirmationBack {
 			state.page = current.preview
@@ -259,7 +380,69 @@ func (state *model) handleDeploymentStageConfirmationKey(
 
 		return nil
 	case keyQuit:
-		return tea.Quit
+		return state.leaveDeploymentDraft(current, nil, true)
+	}
+	state.page = current
+
+	return nil
+}
+
+func (state *model) handleDeploymentDiffKey(current deploymentDiffPage, key string) tea.Cmd {
+	switch key {
+	case "up", "k":
+		current.scroll = max(current.scroll-1, 0)
+	case keyDown, "j":
+		current.scroll++
+	case "d", keyEscape:
+		state.page = current.confirmation
+		state.status = statusConfirmFileMutation
+
+		return nil
+	case keyQuit:
+		return state.leaveDeploymentDraft(current, nil, true)
+	}
+	state.page = current
+	state.clampPageScroll()
+
+	return nil
+}
+
+func (state *model) leaveDeploymentDraft(previous, destination page, quit bool) tea.Cmd {
+	state.page = deploymentDraftConfirmationPage{
+		previous: previous, destination: destination, focus: confirmationBack, quit: quit,
+	}
+	state.status = "Discard unsaved deployment edit?"
+
+	return nil
+}
+
+func (state *model) handleDeploymentDraftConfirmationKey(
+	current deploymentDraftConfirmationPage,
+	key string,
+) tea.Cmd {
+	if layoutFor(state.width, state.height) < layoutCompact {
+		state.page = current.previous
+		state.status = statusReviewLarger
+
+		return nil
+	}
+	switch key {
+	case keyTab, keyLeft, keyRight, keyShiftTab:
+		current.focus = toggledConfirmationFocus(current.focus)
+	case keyEnter:
+		if current.focus == confirmationBack {
+			state.page = current.previous
+			state.status = "Unsaved deployment edit"
+
+			return nil
+		}
+
+		return state.startDeploymentDiscard(current.destination, current.quit, current.staged)
+	case keyEscape:
+		state.page = current.previous
+		state.status = "Unsaved deployment edit"
+
+		return nil
 	}
 	state.page = current
 
@@ -288,6 +471,7 @@ func (state *model) handleDeploymentHistoryKey(
 
 		return nil
 	case keyEscape:
+		state.clearRecoverableDeploymentFailure()
 		state.page = current.review
 		state.status = current.review.plan.status
 
@@ -341,6 +525,9 @@ func (state *model) startDeploymentFields(review reviewPage) tea.Cmd {
 
 		return nil
 	}
+	if !state.deploymentOperationReady() {
+		return nil
+	}
 
 	return state.begin("Loading deployment fields", func(ctx context.Context, sequence uint64) tea.Cmd {
 		deployments := state.deployments
@@ -360,6 +547,10 @@ func (state *model) startDeploymentPreview(
 	value string,
 	unset bool,
 ) tea.Cmd {
+	if !state.deploymentOperationReady() {
+		return nil
+	}
+
 	return state.begin("Validating deployment edit", func(ctx context.Context, sequence uint64) tea.Cmd {
 		deployments := state.deployments
 
@@ -374,6 +565,10 @@ func (state *model) startDeploymentPreview(
 }
 
 func (state *model) startDeploymentStage(preview deploymentPreviewPage) tea.Cmd {
+	if !state.deploymentOperationReady() {
+		return nil
+	}
+
 	return state.begin("Writing and staging deployment edit", func(ctx context.Context, sequence uint64) tea.Cmd {
 		deployments := state.deployments
 
@@ -385,7 +580,10 @@ func (state *model) startDeploymentStage(preview deploymentPreviewPage) tea.Cmd 
 	})
 }
 
-func (state *model) startDeploymentCommit(commit commitServicePage, unsigned bool) tea.Cmd {
+func (state *model) startDeploymentCommit(commit commitPage, unsigned bool) tea.Cmd {
+	if !state.deploymentOperationReady() {
+		return nil
+	}
 	state.page = commit
 
 	return state.begin("Creating deployment commit", func(ctx context.Context, sequence uint64) tea.Cmd {
@@ -401,13 +599,22 @@ func (state *model) startDeploymentCommit(commit commitServicePage, unsigned boo
 	})
 }
 
-func (state *model) startDeploymentDiscard(preview deploymentPreviewPage) tea.Cmd {
-	return state.begin("Discarding staged deployment edit", func(ctx context.Context, sequence uint64) tea.Cmd {
+func (state *model) startDeploymentDiscard(
+	destination page,
+	quit bool,
+	staged bool,
+) tea.Cmd {
+	if !state.deploymentOperationReady() {
+		return nil
+	}
+
+	return state.begin("Discarding deployment edit", func(ctx context.Context, sequence uint64) tea.Cmd {
 		deployments := state.deployments
 
 		return func() tea.Msg {
 			return deploymentDiscardResultMsg{
-				sequence: sequence, preview: preview, err: deployments.Discard(ctx),
+				sequence: sequence, destination: destination,
+				quit: quit, staged: staged, err: deployments.Discard(ctx),
 			}
 		}
 	})
@@ -417,6 +624,9 @@ func (state *model) startDeploymentHistory(review reviewPage) tea.Cmd {
 	if state.deployments == nil {
 		state.status = "Deployment history is unavailable"
 
+		return nil
+	}
+	if !state.deploymentOperationReady() {
 		return nil
 	}
 
@@ -435,6 +645,10 @@ func (state *model) startDeploymentRestore(
 	history deploymentHistoryPage,
 	revision string,
 ) tea.Cmd {
+	if !state.deploymentOperationReady() {
+		return nil
+	}
+
 	return state.begin("Validating history revision", func(ctx context.Context, sequence uint64) tea.Cmd {
 		deployments := state.deployments
 
@@ -449,7 +663,7 @@ func (state *model) startDeploymentRestore(
 }
 
 func (state *model) handleDeploymentFieldsResult(result deploymentFieldsResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
@@ -467,7 +681,7 @@ func (state *model) handleDeploymentFieldsResult(result deploymentFieldsResultMs
 }
 
 func (state *model) handleDeploymentPreviewResult(result deploymentPreviewResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
@@ -475,6 +689,12 @@ func (state *model) handleDeploymentPreviewResult(result deploymentPreviewResult
 	if err != nil {
 		state.err = err
 		state.status = "Deployment preview could not be displayed safely"
+
+		return command
+	}
+	if preview.NoChanges {
+		state.page = result.previous
+		state.status = "Already matches current source"
 
 		return command
 	}
@@ -487,23 +707,23 @@ func (state *model) handleDeploymentPreviewResult(result deploymentPreviewResult
 }
 
 func (state *model) handleDeploymentStageResult(result deploymentStageResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
 	staged, err := canonicalStagedDeployment(result.staged)
-	if err != nil {
-		state.err = err
+	if err != nil || staged.Diff != result.preview.preview.Diff {
+		state.err = errors.Join(errInvalidInput, err)
 		state.status = "Staged deployment edit could not be displayed safely"
 
 		return command
 	}
-	deployment := result.preview
-	state.page = state.wrapServiceDiff(commitServicePage{
+	state.page = state.wrapCommitDiff(commitPage{
+		kind: commitKindDeployment,
 		staged: StagedService{
 			Diff: staged.Diff, ComposePath: staged.ComposePath, CommitMessage: staged.CommitMessage,
 		},
-		message: staged.CommitMessage, focus: confirmationBack, deployment: &deployment,
+		message: staged.CommitMessage, focus: confirmationBack, deployment: result.preview,
 	})
 	state.status = statusReviewStaged
 	state.mutationOutcome = "Deployment edit staged"
@@ -511,62 +731,63 @@ func (state *model) handleDeploymentStageResult(result deploymentStageResultMsg)
 	return command
 }
 
-//nolint:cyclop // Commit proof outcomes stay in one fail-closed state transition.
 func (state *model) handleDeploymentCommitResult(result deploymentCommitResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
-	if result.commit.deployment == nil {
+	if result.commit.kind != commitKindDeployment {
 		state.err = errInvalidInput
 		state.status = statusCommitUnverified
 
 		return command
 	}
-	if result.result.Committed && result.result.NeedsUnsignedApproval ||
-		result.result.ValidationUnavailable && !result.result.Committed {
-		state.err = errInvalidInput
-		state.status = statusCommitUnverified
-
-		return command
-	}
-	if result.result.NeedsUnsignedApproval {
+	switch result.result.Outcome {
+	case CommitNeedsUnsignedApproval:
 		state.page = unsignedCommitConfirmationPage{commit: result.commit, focus: confirmationBack}
 		state.status = statusSignedCommitMissing
 
 		return command
-	}
-	if !result.result.Committed {
+	case CommitValidationUnavailable:
+		state.mutationOutcome = "Deployment commit created"
+		state.page = homePage{catalog: CatalogSnapshot{State: CatalogUnavailable}}
+		state.status = "Commit created; validation is unavailable"
+
+		return command
+	case CommitSucceeded:
+		state.mutationOutcome = "Deployment commit created"
+
+		return tea.Batch(command, state.startCommittedSnapshot(result.result.Request))
+	case CommitPreparationRequired:
+		fallthrough
+	default:
 		state.err = errInvalidInput
 		state.status = statusCommitUnverified
 
 		return command
 	}
-	state.mutationOutcome = "Deployment commit created"
-	if result.result.ValidationUnavailable {
-		state.page = homePage{catalog: CatalogSnapshot{State: CatalogUnavailable}}
-		state.status = "Commit created; validation is unavailable"
-
-		return command
-	}
-
-	return tea.Batch(command, state.startCommittedSnapshot(result.result.Request))
 }
 
 func (state *model) handleDeploymentDiscardResult(result deploymentDiscardResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
-	state.page = result.preview
-	state.status = "Staged deployment edit discarded"
+	if result.quit {
+		return tea.Batch(command, tea.Quit)
+	}
+	state.page = result.destination
+	state.status = statusDeploymentUnchanged
+	if result.staged {
+		state.status = "Staged deployment edit discarded"
+	}
 	state.mutationOutcome = ""
 
 	return command
 }
 
 func (state *model) handleDeploymentHistoryResult(result deploymentHistoryResultMsg) tea.Cmd {
-	accepted, command := state.completeOperation(result.sequence, result.err)
+	accepted, command := state.completeDeploymentOperation(result.sequence, result.err)
 	if !accepted || result.err != nil {
 		return command
 	}
@@ -581,4 +802,77 @@ func (state *model) handleDeploymentHistoryResult(result deploymentHistoryResult
 	state.status = "Choose a revision to restore"
 
 	return command
+}
+
+func (state *model) deploymentOperationReady() bool {
+	if state.deploymentFailure == DeploymentWorktreeUnknown {
+		state.status = deploymentFailureStatus(DeploymentWorktreeUnknown)
+
+		return false
+	}
+	state.clearRecoverableDeploymentFailure()
+
+	return true
+}
+
+func (state *model) clearRecoverableDeploymentFailure() {
+	if state.deploymentFailure != DeploymentWorktreeUnknown {
+		state.deploymentFailure = ""
+	}
+}
+
+func (state *model) completeDeploymentOperation(sequence uint64, err error) (bool, tea.Cmd) {
+	action, valid := errors.AsType[*DeploymentActionError](err)
+	if errors.Is(err, context.Canceled) && (!valid || action.Code != DeploymentWorktreeUnknown) {
+		return state.completeOperation(sequence, err)
+	}
+	if !valid {
+		accepted, command := state.completeOperation(sequence, err)
+		if accepted && err == nil {
+			state.deploymentFailure = ""
+		}
+
+		return accepted, command
+	}
+	accepted, command := state.completeOperation(sequence, nil)
+	if !accepted {
+		return false, command
+	}
+	state.deploymentFailure = canonicalDeploymentFailure(action.Code)
+	state.status = deploymentFailureStatus(state.deploymentFailure)
+
+	return true, command
+}
+
+func canonicalDeploymentFailure(failure DeploymentFailure) DeploymentFailure {
+	switch failure {
+	case DeploymentPreconditionFailed, DeploymentUnsupportedSource, DeploymentValidationFailed,
+		DeploymentPublishFailed, DeploymentWorktreeUnknown, DeploymentCommitFailed,
+		DeploymentHistoryUnavailable, DeploymentHistoryEntryInvalid:
+		return failure
+	default:
+		return DeploymentPreconditionFailed
+	}
+}
+
+//nolint:exhaustive // The private fallback contains malformed adapter output.
+func deploymentFailureStatus(failure DeploymentFailure) string {
+	switch failure {
+	case DeploymentUnsupportedSource:
+		return "This Compose source cannot be edited safely"
+	case DeploymentValidationFailed:
+		return "Deployment value failed local validation; edit it before retrying"
+	case DeploymentPublishFailed:
+		return "Staging failed; the original Compose file was restored. Reload before retrying"
+	case DeploymentWorktreeUnknown:
+		return deploymentWorktreeUnknownStatus
+	case DeploymentCommitFailed:
+		return "Commit failed; the staged deployment edit is unchanged and can be retried"
+	case DeploymentHistoryUnavailable:
+		return "Deployment history could not be read; the worktree is unchanged"
+	case DeploymentHistoryEntryInvalid:
+		return "That history entry can no longer be restored; reload history"
+	default:
+		return "Deployment source changed; reload it before editing"
+	}
 }

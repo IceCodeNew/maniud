@@ -1,9 +1,13 @@
+//nolint:goconst,lll // JSON fixture literals stay local so each malformed wire case remains self-contained.
 package docker
 
 import (
+	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	containertypes "github.com/moby/moby/api/types/container"
 
@@ -47,6 +51,85 @@ func TestDecodeContainerInspectRejectsUnknownNestedFields(t *testing.T) {
 	}
 }
 
+func TestSanitizeContainerStateHealthKeepsOnlyBoundedFields(t *testing.T) {
+	t.Parallel()
+
+	for _, document := range []map[string]json.RawMessage{
+		{},
+		{"State": json.RawMessage(`null`)},
+		{"State": json.RawMessage(`{"Health":null}`)},
+	} {
+		if !sanitizeContainerStateHealth(document) {
+			t.Fatalf("sanitizeContainerStateHealth(%s) = false", document["State"])
+		}
+	}
+
+	document := map[string]json.RawMessage{
+		"State": json.RawMessage(`{"Status":"running","Health":{"Status":"healthy","FailingStreak":2,"Log":[{"Output":"secret"}]}}`),
+	}
+	if !sanitizeContainerStateHealth(document) || strings.Contains(string(document["State"]), "Log") ||
+		strings.Contains(string(document["State"]), "secret") {
+		t.Fatalf("sanitizeContainerStateHealth(health log) = %s", document["State"])
+	}
+	document = map[string]json.RawMessage{
+		"State": json.RawMessage(`{"Status":"running","Health":{"Status":"healthy","FailingStreak":0}}`),
+	}
+	if !sanitizeContainerStateHealth(document) {
+		t.Fatalf("sanitizeContainerStateHealth(no log) = %s", document["State"])
+	}
+
+	for _, encoded := range []string{
+		`[]`,
+		`{"Health":[]}`,
+		`{"Health":{"Unknown":true}}`,
+		`{"Health":{"Log":{}}}`,
+	} {
+		if sanitizeContainerStateHealth(map[string]json.RawMessage{"State": json.RawMessage(encoded)}) {
+			t.Fatalf("sanitizeContainerStateHealth(%s) = true", encoded)
+		}
+	}
+}
+
+func TestDockerWorkloadHealthRejectsContradictoryNativeState(t *testing.T) {
+	t.Parallel()
+
+	active := &domain.Healthcheck{Test: []string{"CMD", "true"}}
+	disabled := &domain.Healthcheck{Disabled: true}
+	tests := []struct {
+		name       string
+		observed   *containertypes.Health
+		configured *domain.Healthcheck
+		want       workloadHealthFixture
+		valid      bool
+	}{
+		{name: "absent", want: workloadHealthFixture{Status: "absent"}, valid: true},
+		{name: "disabled absent", configured: disabled, want: workloadHealthFixture{Status: "absent"}, valid: true},
+		{name: "active unobservable", configured: active, want: workloadHealthFixture{Status: "unknown"}, valid: true},
+		{name: "starting", configured: active, observed: &containertypes.Health{Status: containertypes.Starting, FailingStreak: 1}, want: workloadHealthFixture{Status: "starting", FailingStreak: 1}, valid: true},
+		{name: "healthy", configured: active, observed: &containertypes.Health{Status: containertypes.Healthy}, want: workloadHealthFixture{Status: "healthy"}, valid: true},
+		{name: "unhealthy", configured: active, observed: &containertypes.Health{Status: containertypes.Unhealthy, FailingStreak: 3}, want: workloadHealthFixture{Status: "unhealthy", FailingStreak: 3}, valid: true},
+		{name: "inactive observed", observed: &containertypes.Health{Status: containertypes.Healthy}},
+		{name: "inactive log", observed: &containertypes.Health{Log: []*containertypes.HealthcheckResult{{Output: "secret"}}}},
+		{name: "negative streak", configured: active, observed: &containertypes.Health{Status: containertypes.Unhealthy, FailingStreak: -1}},
+		{name: "overflow streak", configured: active, observed: &containertypes.Health{Status: containertypes.Unhealthy, FailingStreak: int(math.MaxUint32) + 1}},
+		{name: "empty status with streak", configured: active, observed: &containertypes.Health{FailingStreak: 1}},
+		{name: "no healthcheck", configured: active, observed: &containertypes.Health{Status: containertypes.NoHealthcheck}},
+		{name: "unknown status", configured: active, observed: &containertypes.Health{Status: "new"}},
+	}
+	for _, test := range tests {
+		health, valid := dockerWorkloadHealth(test.observed, test.configured)
+		got := workloadHealthFixture{Status: string(health.Status), FailingStreak: health.FailingStreak}
+		if valid != test.valid || valid && got != test.want {
+			t.Fatalf("dockerWorkloadHealth(%s) = %#v, %t", test.name, health, valid)
+		}
+	}
+}
+
+type workloadHealthFixture struct {
+	Status        string
+	FailingStreak uint32
+}
+
 func TestDecodeContainerInspectAcceptsAPI140NestedCompatibilityFields(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +164,7 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 		{name: "name grammar", mutate: func(value *containertypes.InspectResponse) { value.Name = "/example_api" }},
 		{name: "image reference", mutate: func(value *containertypes.InspectResponse) { value.Config.Image = "bad image" }},
 		{name: "image digest", mutate: func(value *containertypes.InspectResponse) { value.Image = "sha256:bad" }},
+		{name: "started at", mutate: func(value *containertypes.InspectResponse) { value.State.StartedAt = "today" }},
 		{
 			name: "manifest media type",
 			mutate: func(value *containertypes.InspectResponse) {
@@ -119,6 +203,18 @@ func TestDecodeContainerRejectsIncompleteIdentity(t *testing.T) {
 				t.Fatalf("decodeContainer(%s) = %#v, %t", test.name, observed, valid)
 			}
 		})
+	}
+}
+
+func TestDecodeContainerNormalizesStartedAt(t *testing.T) {
+	t.Parallel()
+
+	state := runningContainerState()
+	state.StartedAt = "2026-09-02T11:00:00.123456789+01:00"
+	payload := inspectPayload(t, validContainerDocument(t, managedContainerLabels(), state))
+	container, valid := decodeContainer(testAPIVersion(t, maximumAPIVersion), testContainerName, payload)
+	if !valid || container.StartedAt.Format(time.RFC3339Nano) != testContainerStartedAt {
+		t.Fatalf("decodeContainer(StartedAt) = %#v, %t", container.StartedAt, valid)
 	}
 }
 

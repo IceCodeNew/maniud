@@ -28,6 +28,7 @@ type upgradeRuntimeFixture struct {
 	lastCreateOptions WorkloadCreateOptions
 	lastCreated       domain.DesiredWorkload
 	predecessor       ExistingWorkload
+	predecessorHealth WorkloadHealth
 	transitionProbes  int
 	transitionApplies map[WorkloadTransitionKind]int
 	transitionProbeAt map[int]error
@@ -146,10 +147,15 @@ func (runtime *upgradeRuntimeFixture) ProbeWorkloadTransition(
 	if runtime.predecessor == (ExistingWorkload{}) {
 		return WorkloadTransitionProbe{State: WorkloadEffectProbeMissing}, nil
 	}
+	health := runtime.predecessorHealth
+	if !validWorkloadHealth(health) {
+		health = WorkloadHealth{Status: WorkloadHealthAbsent}
+	}
 
 	return WorkloadTransitionProbe{
 		State:    WorkloadEffectProbeObserved,
 		Workload: runtime.predecessor,
+		Health:   health,
 	}, nil
 }
 

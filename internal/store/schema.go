@@ -26,7 +26,7 @@ const (
 		"transaction_id BLOB PRIMARY KEY CHECK (typeof(transaction_id) = 'blob' AND length(transaction_id) = 16), " +
 		"service_id BLOB NOT NULL CHECK (typeof(service_id) = 'blob' AND length(service_id) = 32), " +
 		"kind TEXT NOT NULL CHECK (kind IN ('bootstrap', 'adopt', 'upgrade')), " +
-		"state TEXT NOT NULL CHECK (state IN ('active', 'degraded', 'failed', 'succeeded')), " +
+		"state TEXT NOT NULL CHECK (state IN ('active', 'degraded', 'health_degraded', 'failed', 'succeeded')), " +
 		"runtime TEXT NOT NULL CHECK (runtime IN ('docker', 'podman', 'containerd')), " +
 		"source_digest BLOB NOT NULL CHECK " +
 		"(typeof(source_digest) = 'blob' AND length(source_digest) = 32 AND source_digest != zeroblob(32)), " +
@@ -62,11 +62,11 @@ const (
 		"WITHOUT ROWID"
 	journalUnresolvedIndexName = "journal_one_unresolved_transaction_per_service"
 	journalUnresolvedIndexSQL  = "CREATE UNIQUE INDEX journal_one_unresolved_transaction_per_service " +
-		"ON journal_transactions(service_id) WHERE state IN ('active', 'degraded')"
+		"ON journal_transactions(service_id) WHERE state IN ('active', 'degraded', 'health_degraded')"
 	journalRepositoryInventoryIndexName = "journal_unresolved_repository_inventory"
 	journalRepositoryInventoryIndexSQL  = "CREATE INDEX journal_unresolved_repository_inventory " +
 		"ON journal_transactions(repository_scope_digest, repository_location_digest, transaction_id) " +
-		"WHERE state IN ('active', 'degraded')"
+		"WHERE state IN ('active', 'degraded', 'health_degraded')"
 	journalActionTableName = "journal_actions"
 	journalActionTableSQL  = "CREATE TABLE journal_actions (" +
 		"transaction_id BLOB NOT NULL CHECK (typeof(transaction_id) = 'blob' AND length(transaction_id) = 16), " +
@@ -103,6 +103,7 @@ const (
 		"image_config_digest BLOB NOT NULL CHECK " +
 		"(typeof(image_config_digest) = 'blob' AND length(image_config_digest) = 32 " +
 		"AND image_config_digest != zeroblob(32)), " +
+		"healthcheck INTEGER NOT NULL CHECK (typeof(healthcheck) = 'integer' AND healthcheck IN (0, 1)), " +
 		"FOREIGN KEY (service_id) REFERENCES writer_leases(service_id), " +
 		"FOREIGN KEY (transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id)) WITHOUT ROWID"
@@ -291,7 +292,7 @@ SELECT
     typeof(transaction_id) != 'blob' OR length(transaction_id) != 16 OR
     typeof(service_id) != 'blob' OR length(service_id) != 32 OR
     typeof(kind) != 'text' OR kind NOT IN ('bootstrap', 'adopt', 'upgrade') OR
-    typeof(state) != 'text' OR state NOT IN ('active', 'degraded', 'failed', 'succeeded') OR
+    typeof(state) != 'text' OR state NOT IN ('active', 'degraded', 'health_degraded', 'failed', 'succeeded') OR
     typeof(runtime) != 'text' OR runtime NOT IN ('docker', 'podman', 'containerd') OR
     typeof(source_digest) != 'blob' OR length(source_digest) != 32 OR source_digest = zeroblob(32) OR
     typeof(effective_digest) != 'blob' OR length(effective_digest) != 32 OR effective_digest = zeroblob(32) OR
@@ -326,7 +327,8 @@ SELECT
     typeof(platform_manifest_digest) != 'blob' OR length(platform_manifest_digest) != 32 OR
       platform_manifest_digest = zeroblob(32) OR
     typeof(image_config_digest) != 'blob' OR length(image_config_digest) != 32 OR
-      image_config_digest = zeroblob(32)) +
+      image_config_digest = zeroblob(32) OR
+    typeof(healthcheck) != 'integer' OR healthcheck NOT IN (0, 1)) +
   (SELECT count(*) FROM workload_backups WHERE
     typeof(transaction_id) != 'blob' OR length(transaction_id) != 16 OR
     typeof(service_id) != 'blob' OR length(service_id) != 32 OR
@@ -351,7 +353,7 @@ SELECT
       sum(journal.state = 'succeeded') > 0 AND count(applied.service_id) = 0)) +
   (SELECT count(*) FROM journal_transactions AS journal
     LEFT JOIN applied_services AS applied USING (service_id)
-    WHERE journal.state IN ('active', 'degraded') AND
+    WHERE journal.state IN ('active', 'degraded', 'health_degraded') AND
       ((journal.kind IN ('bootstrap', 'adopt') AND applied.service_id IS NOT NULL) OR
       (journal.kind = 'upgrade' AND (applied.service_id IS NULL OR
         applied.transaction_id != journal.base_transaction_id OR
@@ -377,7 +379,7 @@ SELECT
     WHERE state != 'completed' GROUP BY transaction_id HAVING count(*) > 1)) +
   (SELECT count(*) FROM journal_actions AS action
     JOIN journal_transactions AS journal USING (transaction_id)
-    WHERE action.state != 'completed' AND journal.state NOT IN ('active', 'degraded')) +
+    WHERE action.state != 'completed' AND journal.state NOT IN ('active', 'degraded', 'health_degraded')) +
   (SELECT count(*) FROM pragma_foreign_key_check)`
 
 func validateJournalRows(ctx context.Context, database rowQueryer) error {

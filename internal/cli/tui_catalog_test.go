@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,7 +59,7 @@ func TestTUICatalogRegistersExistingRepository(t *testing.T) {
 		Mode: tui.RepositorySetupExisting, Remote: remoteURL, Checkout: checkout,
 	}
 	result := catalog.Register(t.Context(), request)
-	if result.Blocker != tui.BlockerNone || result.Snapshot.State != tui.CatalogReady {
+	if result.Failure != tui.RepositorySetupReady || result.Snapshot.State != tui.CatalogReady {
 		t.Fatalf("Register() = %#v", result)
 	}
 	if _, err := os.Stat(filepath.Join(checkout, ".git")); err != nil {
@@ -71,18 +72,92 @@ func TestTUICatalogRegistersExistingRepository(t *testing.T) {
 	invalid := catalog.Register(t.Context(), tui.RepositorySetupRequest{
 		Mode: tui.RepositorySetupExisting, Remote: remoteURL, Checkout: testRelativePath,
 	})
-	if invalid.Blocker != tui.BlockerInvalid {
+	if invalid.Failure != tui.RepositorySetupInvalidInput {
 		t.Fatalf("Register(relative) = %#v", invalid)
 	}
 	catalog.setupRepository = func(context.Context, string, tui.RepositorySetupRequest) error {
 		return errGeneratedComposeTest
 	}
-	if failed := catalog.Register(t.Context(), request); failed.Blocker != tui.BlockerUnavailable {
+	if failed := catalog.Register(t.Context(), request); failed.Failure != tui.RepositorySetupUnavailable {
 		t.Fatalf("Register(repository failure) = %#v", failed)
 	}
 	unavailable := (&tuiCatalog{}).Register(t.Context(), request)
-	if unavailable.Blocker != tui.BlockerUnavailable {
+	if unavailable.Failure != tui.RepositorySetupUnavailable {
 		t.Fatalf("Register(unavailable state) = %#v", unavailable)
+	}
+}
+
+func TestTUICatalogReportsCreatedRemoteRecovery(t *testing.T) {
+	t.Parallel()
+
+	checkout := filepath.Join(t.TempDir(), "desired-state")
+	catalog := &tuiCatalog{registrationPath: filepath.Join(t.TempDir(), gitOpsRegistrationName)}
+	catalog.setupRepository = func(context.Context, string, tui.RepositorySetupRequest) error {
+		return errors.Join(errTUIRepositoryCloneFailed, errTUIRepositoryCreated)
+	}
+	created := catalog.Register(t.Context(), tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository, Checkout: checkout,
+	})
+	if created.Failure != tui.RepositorySetupCloneFailed ||
+		created.RecoveryRepository != tuiTestGitHubRepository {
+		t.Fatalf("Register(created remote) = %#v", created)
+	}
+}
+
+func TestTUICatalogReportsCreatedEnterpriseRemoteRecovery(t *testing.T) {
+	t.Parallel()
+
+	checkout := filepath.Join(t.TempDir(), "desired-state")
+	catalog := &tuiCatalog{
+		registrationPath: filepath.Join(t.TempDir(), gitOpsRegistrationName),
+		githubHost:       "github.example.com",
+	}
+	catalog.setupRepository = func(context.Context, string, tui.RepositorySetupRequest) error {
+		return errors.Join(errTUIRepositoryRegistration, errTUIRepositoryCreated)
+	}
+	created := catalog.Register(t.Context(), tui.RepositorySetupRequest{
+		Mode: tui.RepositorySetupCreateGitHub, Remote: tuiTestGitHubRepository, Checkout: checkout,
+	})
+	if created.Failure != tui.RepositorySetupRegistrationFailed ||
+		created.RecoveryRepository != tuiTestGitHubRepository {
+		t.Fatalf("Register(created enterprise remote) = %#v", created)
+	}
+}
+
+func TestRepositorySetupFailureClassification(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		err  error
+		want tui.RepositorySetupFailure
+	}{
+		{errTUIRepositoryCreateFailed, tui.RepositorySetupGitHubFailed},
+		{errTUIRepositoryCloneFailed, tui.RepositorySetupCloneFailed},
+		{errTUIRepositoryRegistration, tui.RepositorySetupRegistrationFailed},
+		{errGitOpsRepositoryInvalid, tui.RepositorySetupInvalidInput},
+		{errGitOpsRegistrationExists, tui.RepositorySetupInvalidInput},
+		{compose.ErrInvalidSource, tui.RepositorySetupInvalidInput},
+		{errGeneratedComposeTest, tui.RepositorySetupUnavailable},
+	} {
+		if got := repositorySetupFailure(test.err); got != test.want {
+			t.Fatalf("repositorySetupFailure(%v) = %q, want %q", test.err, got, test.want)
+		}
+	}
+}
+
+func TestTUIGitHubRecoveryRemoteRejectsMalformedHost(t *testing.T) {
+	t.Parallel()
+
+	for _, host := range []string{
+		"https://github.example.com",
+		"user@github.example.com",
+		"github.example.com/path",
+		"github.example.com?query",
+		"github.example.com#fragment",
+	} {
+		if remote := tuiGitHubRecoveryRemote(tuiTestGitHubRepository, host); remote != "" {
+			t.Fatalf("tuiGitHubRecoveryRemote(%q) = %q", host, remote)
+		}
 	}
 }
 
@@ -447,11 +522,8 @@ func writeTUIRegistration(t *testing.T, path, root string) {
 	t.Helper()
 
 	err := writeGitOpsRegistration(path, gitOpsRegistration{
-		Version:        gitOpsRegistrationVersion,
-		Repository:     root,
-		Branch:         gitOpsTestBranch,
-		Remote:         gitOpsRemoteName,
-		BaselineCommit: gitOpsTestCommit,
+		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
+		Remote: gitOpsRemoteName, RemoteURL: root, BaselineCommit: gitOpsTestCommit,
 	})
 	if err != nil {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)

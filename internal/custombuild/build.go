@@ -15,6 +15,8 @@ const (
 	projectModule       = "github.com/IceCodeNew/maniud"
 	buildModule         = projectModule + "/custombuild"
 	developmentLinkName = projectModule + "/internal/cli.developmentVersion"
+	anyLLMModule        = "github.com/mozilla-ai/any-llm-go"
+	anyLLMFork          = "github.com/IceCodeNew/any-llm-go"
 	notificationModule  = "github.com/nikoksr/notify"
 	notificationFork    = "github.com/IceCodeNew/notify"
 	maximumCommandError = 8 << 10
@@ -56,6 +58,7 @@ type buildPlan struct {
 	goVersion           string
 	goDirective         string
 	toolchain           string
+	anyLLMVersion       string
 	notificationVersion string
 }
 
@@ -154,6 +157,7 @@ func newBuildPlan(ctx context.Context, config Config, operations buildOperations
 		goVersion:           goVersion,
 		goDirective:         resolved.settings.goDirective,
 		toolchain:           resolved.settings.toolchain,
+		anyLLMVersion:       resolved.settings.anyLLMVersion,
 		notificationVersion: resolved.settings.notificationVersion,
 	}, nil
 }

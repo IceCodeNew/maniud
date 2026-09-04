@@ -165,10 +165,10 @@ func TestGitOpsSourceBlockerEventsPublishOnlyTransitions(t *testing.T) {
 	worker := gitOpsSkippedSource{Path: "services/worker.yml", Code: gitOpsSkippedInvalidComposeSource}
 	web := gitOpsSkippedSource{Path: "services/web.yaml", Code: gitOpsSkippedInvalidComposeSource}
 
-	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
-	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
-	events.observe(gitOpsCyclePartial, observedGitOpsSources(worker, web))
-	events.observe(gitOpsCycleConverged, gitOpsCycleCounts{sourceBlockersObserved: true})
+	events.observe(nil, observedGitOpsSources(api, worker))
+	events.observe(nil, observedGitOpsSources(api, worker))
+	events.observe(nil, observedGitOpsSources(worker, web))
+	events.observe(nil, gitOpsCycleCounts{sourceBlockersObserved: true})
 
 	want := []application.Event{
 		gitOpsSourceBlockerEvent(application.EventGitOpsSourceBlocked, api),
@@ -183,7 +183,7 @@ func TestGitOpsSourceBlockerEventsPublishOnlyTransitions(t *testing.T) {
 	}
 
 	restarted := &gitOpsSourceBlockerEvents{sink: events.sink}
-	restarted.observe(gitOpsCyclePartial, observedGitOpsSources(api))
+	restarted.observe(nil, observedGitOpsSources(api))
 	if len(observed) != len(want)+1 || observed[len(want)] != want[0] {
 		t.Fatalf("source blocker restart transition = %#v", observed)
 	}
@@ -199,20 +199,20 @@ func TestGitOpsSourceBlockerEventsSuppressRecoveryUnavailableDuplicates(t *testi
 		return true
 	})}
 	recovery := gitOpsRecoverySourceBlocker()
-	events.observe(errGitOpsRecoverySourceBlocked.Error(), gitOpsCycleCounts{
+	events.observe(errors.Join(errApplyTest, errGitOpsRecoverySourceBlocked), gitOpsCycleCounts{
 		recoveryBlockerObserved: true,
 	})
 	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
 		t.Fatal("recovery duplicate was not suppressed")
 	}
-	events.observe(errGitOpsRecoverySourceBlocked.Error(), gitOpsCycleCounts{
+	events.observe(errGitOpsRecoverySourceBlocked, gitOpsCycleCounts{
 		recoveryBlockerObserved: true,
 	})
-	events.observe(gitOpsCycleFailed, gitOpsCycleCounts{})
+	events.observe(errApplyTest, gitOpsCycleCounts{})
 	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
 		t.Fatal("unobserved recovery state was cleared")
 	}
-	events.observe(gitOpsCycleConverged, gitOpsCycleCounts{recoveryBlockerObserved: true})
+	events.observe(nil, gitOpsCycleCounts{recoveryBlockerObserved: true})
 	if !events.TryPublish(application.Event{Kind: application.EventDaemonUnavailable}) {
 		t.Fatal("post-recovery daemon event was dropped")
 	}
@@ -234,7 +234,7 @@ func TestGitOpsSourceBlockerEventsContainNilDestinations(t *testing.T) {
 	if missing.TryPublish(application.Event{}) {
 		t.Fatal("nil blocker events accepted an event")
 	}
-	missing.observe(gitOpsCycleConverged, gitOpsCycleCounts{})
+	missing.observe(nil, gitOpsCycleCounts{})
 
 	events := &gitOpsSourceBlockerEvents{}
 	if events.TryPublish(application.Event{}) {

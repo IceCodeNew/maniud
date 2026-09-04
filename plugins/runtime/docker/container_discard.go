@@ -87,6 +87,7 @@ func (client *Client) ProbeDiscardedWorkload(
 			RuntimeMounts:        slices.Clone(selected.RuntimeMounts),
 			ConfigurationMatches: selected.matchesConfiguration(expectation),
 			Lifecycle:            applicationWorkloadLifecycle(selected.State),
+			Health:               selected.Health,
 			Ownership:            selected.Ownership,
 		},
 	}, nil

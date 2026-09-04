@@ -208,7 +208,8 @@ func matchingManagedObservation(workload domain.DesiredWorkload) WorkloadObserva
 		StorageDigest:        storageDigest,
 		RuntimeMounts:        runtimeMounts,
 		ConfigurationMatches: true,
-		Running:              true,
+		Lifecycle:            WorkloadLifecycleRunning,
+		Health:               WorkloadHealth{Status: WorkloadHealthAbsent},
 		Ownership:            desiredOwnership(workload),
 	}
 }
@@ -375,6 +376,11 @@ func presentObservation(
 	running bool,
 	status domain.OwnershipStatus,
 ) WorkloadObservation {
+	lifecycle := WorkloadLifecycleExited
+	if running {
+		lifecycle = WorkloadLifecycleRunning
+	}
+
 	return WorkloadObservation{
 		ID:                   testWorkloadEffectID,
 		State:                WorkloadObservationPresent,
@@ -382,7 +388,8 @@ func presentObservation(
 		StorageDigest:        domain.Hash([]byte("runtime storage")),
 		RuntimeMounts:        nil,
 		ConfigurationMatches: configurationMatches,
-		Running:              running,
+		Lifecycle:            lifecycle,
+		Health:               WorkloadHealth{Status: WorkloadHealthAbsent},
 		Ownership:            testOwnership(status),
 	}
 }

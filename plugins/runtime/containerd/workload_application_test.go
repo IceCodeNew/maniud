@@ -75,7 +75,8 @@ func TestApplicationInspectAndObserveUseCheckedBackendEvidence(t *testing.T) {
 	}
 	observation, err := client.ObserveWorkload(context.Background(), desired)
 	if err != nil || observation.State != application.WorkloadObservationPresent ||
-		observation.ID != native.ID || !observation.ConfigurationMatches || observation.Running {
+		observation.ID != native.ID || !observation.ConfigurationMatches ||
+		observation.Lifecycle != native.Lifecycle {
 		t.Fatalf("ObserveWorkload() = %#v, %v", observation, err)
 	}
 

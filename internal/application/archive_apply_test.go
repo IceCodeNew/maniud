@@ -1,3 +1,4 @@
+//nolint:goconst // Scenario labels remain beside the archive cases they identify.
 package application
 
 import (

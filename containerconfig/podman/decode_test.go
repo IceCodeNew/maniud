@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/IceCodeNew/maniud/containerconfig"
 )
 
 func inspectBytes(t *testing.T, document inspectDocument) []byte {
@@ -92,6 +94,7 @@ func TestDecodeRejectsInvalidCoreAndLifecycle(t *testing.T) {
 		func(value *inspectDocument) { value.Config = nil },
 		func(value *inspectDocument) { value.HostConfig = nil },
 		func(value *inspectDocument) { value.State.Status = "bad" },
+		func(value *inspectDocument) { value.State.StartedAt = "today" },
 		func(value *inspectDocument) { value.State.Restarting = true },
 		func(value *inspectDocument) { value.State.Dead = true },
 	}
@@ -131,6 +134,47 @@ func TestDecodeRejectsInvalidCoreAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestObservedStartedAtAcceptsMissingTimestamp(t *testing.T) {
+	t.Parallel()
+
+	startedAt, valid := observedStartedAt("")
+	if !valid || !startedAt.IsZero() {
+		t.Fatalf("observedStartedAt(empty) = %s, %t", startedAt, valid)
+	}
+}
+
+func TestObservedHealthMapsBoundedNativeState(t *testing.T) {
+	t.Parallel()
+
+	active := &containerconfig.Healthcheck{Test: []string{"CMD", "true"}}
+	disabled := &containerconfig.Healthcheck{Disabled: true}
+	tests := []struct {
+		name       string
+		value      *inspectHealth
+		configured *containerconfig.Healthcheck
+		want       Health
+		valid      bool
+	}{
+		{name: "absent", want: Health{Status: HealthAbsent}, valid: true},
+		{name: "disabled absent", configured: disabled, want: Health{Status: HealthAbsent}, valid: true},
+		{name: "active unknown", configured: active, want: Health{Status: HealthUnknown}, valid: true},
+		{name: "starting", value: &inspectHealth{Status: "starting", FailingStreak: 1}, configured: active, want: Health{Status: HealthStarting, FailingStreak: 1}, valid: true},
+		{name: "healthy", value: &inspectHealth{Status: "healthy"}, configured: active, want: Health{Status: HealthHealthy}, valid: true},
+		{name: "unhealthy", value: &inspectHealth{Status: "unhealthy", FailingStreak: 3}, configured: active, want: Health{Status: HealthUnhealthy, FailingStreak: 3}, valid: true},
+		{name: "inactive observed", value: &inspectHealth{Status: "healthy"}},
+		{name: "negative streak", value: &inspectHealth{Status: "unhealthy", FailingStreak: -1}, configured: active},
+		{name: "overflow streak", value: &inspectHealth{Status: "unhealthy", FailingStreak: int64(math.MaxUint32) + 1}, configured: active},
+		{name: "empty status with streak", value: &inspectHealth{FailingStreak: 1}, configured: active},
+		{name: "unknown status", value: &inspectHealth{Status: "new"}, configured: active},
+	}
+	for _, test := range tests {
+		got, valid := observedHealth(test.value, test.configured)
+		if valid != test.valid || valid && got != test.want {
+			t.Fatalf("observedHealth(%s) = %#v, %t", test.name, got, valid)
+		}
+	}
+}
+
 func TestObservedSpecRejectsEachMappingBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -155,6 +199,7 @@ func TestObservedSpecRejectsEachMappingBoundary(t *testing.T) {
 		func(value *inspectDocument) { value.Config.ExposedPorts = map[string]any{"bad": nil} },
 		func(value *inspectDocument) { value.Mounts[0].Mode = "bad" },
 		func(value *inspectDocument) { value.Config.Healthcheck = &healthConfig{Test: []string{"bad\x00"}} },
+		func(value *inspectDocument) { value.State.Health = &inspectHealth{Status: "new"} },
 		func(value *inspectDocument) { value.HostConfig.SecurityOpt = []string{"seccomp=unconfined"} },
 		func(value *inspectDocument) { value.Config.StopTimeout = ^uint(0) },
 	}

@@ -44,6 +44,7 @@ type localModule struct {
 type moduleSettings struct {
 	goDirective         string
 	toolchain           string
+	anyLLMVersion       string
 	notificationVersion string
 }
 
@@ -166,12 +167,17 @@ func moduleSettingsFromFile(file *modfile.File) (moduleSettings, error) {
 	if file.Toolchain != nil {
 		settings.toolchain = file.Toolchain.Name
 	}
-	version, err := notificationVersionFromFile(file.Replace)
+	version, err := versionedReplacementFromFile(file.Replace, anyLLMModule, anyLLMFork)
+	if err != nil {
+		return moduleSettings{}, err
+	}
+	settings.anyLLMVersion = version
+	version, err = versionedReplacementFromFile(file.Replace, notificationModule, notificationFork)
 	if err != nil {
 		return moduleSettings{}, err
 	}
 	settings.notificationVersion = version
-	if settings.goDirective == "" || settings.notificationVersion == "" {
+	if settings.goDirective == "" || settings.anyLLMVersion == "" || settings.notificationVersion == "" {
 		return moduleSettings{}, fmt.Errorf(
 			"validate custom build source module versions: %w",
 			errInvalidSource,
@@ -181,14 +187,14 @@ func moduleSettingsFromFile(file *modfile.File) (moduleSettings, error) {
 	return settings, nil
 }
 
-func notificationVersionFromFile(replacements []*modfile.Replace) (string, error) {
+func versionedReplacementFromFile(replacements []*modfile.Replace, module, fork string) (string, error) {
 	version := ""
 	for _, replacement := range replacements {
-		if replacement.Old.Path != notificationModule || replacement.Old.Version != "" {
+		if replacement.Old.Path != module || replacement.Old.Version != "" {
 			continue
 		}
-		if version != "" || replacement.New.Path != notificationFork || replacement.New.Version == "" {
-			return "", fmt.Errorf("validate custom build notification module: %w", errInvalidSource)
+		if version != "" || replacement.New.Path != fork || replacement.New.Version == "" {
+			return "", fmt.Errorf("validate custom build replacement for %s: %w", module, errInvalidSource)
 		}
 		version = replacement.New.Version
 	}
@@ -399,6 +405,7 @@ func writeBuildModuleWithWriter(
 		path := filepath.Join(plan.config.root, local.directory)
 		module.WriteString("replace " + local.path + " => " + strconv.Quote(filepath.ToSlash(path)) + "\n")
 	}
+	module.WriteString("replace " + anyLLMModule + " => " + anyLLMFork + " " + plan.anyLLMVersion + "\n")
 	module.WriteString(
 		"replace " + notificationModule + " => " + notificationFork + " " +
 			plan.notificationVersion + "\n",

@@ -191,7 +191,7 @@ func validEventPlan(kind application.PlanKind) bool {
 	switch kind {
 	case "", application.PlanBootstrap, application.PlanAdopt, application.PlanUnchanged,
 		application.PlanUpgrade, application.PlanResume, application.PlanProbeUnknownEffect,
-		application.PlanRestore:
+		application.PlanRestore, application.PlanHealthDegraded:
 		return true
 	default:
 		return false
@@ -326,6 +326,8 @@ func (state *model) observeApplicationEvent(observation eventMsg) {
 	case detailsPage:
 		correlation = current.review.correlation
 	case confirmationPage:
+		correlation = current.review.correlation
+	case healthConfirmationPage:
 		correlation = current.review.correlation
 	}
 	state.timeline.observe(observation.event, observation.sequence, correlation)

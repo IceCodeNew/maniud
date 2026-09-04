@@ -16,7 +16,7 @@ const (
 		"effective_digest, execution_digest, repository_version, repository_scope_digest, " +
 		"repository_location_digest, base_transaction_id, predecessor_workload_id"
 	unresolvedRepositoryTransactionsSQL = "SELECT " + transactionSelectColumns + " FROM journal_transactions " +
-		"WHERE state IN ('active', 'degraded') AND repository_scope_digest = ? " +
+		"WHERE state IN ('active', 'degraded', 'health_degraded') AND repository_scope_digest = ? " +
 		"ORDER BY repository_location_digest, transaction_id LIMIT ?"
 )
 
@@ -72,7 +72,7 @@ func unresolvedTransaction(
 	row := database.QueryRowContext(
 		ctx,
 		"SELECT "+transactionSelectColumns+" FROM journal_transactions "+
-			"WHERE service_id = ? AND state IN ('active', 'degraded')",
+			"WHERE service_id = ? AND state IN ('active', 'degraded', 'health_degraded')",
 		serviceID[:],
 	)
 

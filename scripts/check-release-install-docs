@@ -18,6 +18,7 @@ python3 - \
 	"## 使用 GitHub CLI 安装已验证的 Release" \
 	"$install_script" <<'PY'
 from pathlib import Path
+import shlex
 import sys
 
 
@@ -36,10 +37,53 @@ def shell_block(document: str, heading: str) -> str:
     return "\n".join(lines[start:end]) + "\n"
 
 
+def shell_commands(script: str) -> list[str]:
+    commands = []
+    continued = ""
+    for line in script.splitlines():
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            continued += stripped[:-1] + " "
+            continue
+        commands.append(continued + line)
+        continued = ""
+    if continued:
+        raise SystemExit("release install command ends with an incomplete continuation")
+    return commands
+
+
 english = shell_block(sys.argv[1], sys.argv[2])
 chinese = shell_block(sys.argv[3], sys.argv[4])
 if english != chinese:
     raise SystemExit("release install command differs between English and Chinese guides")
+verification_commands = []
+for command in shell_commands(english):
+    if not command.lstrip().startswith("gh attestation verify"):
+        continue
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    try:
+        words = list(lexer)
+    except ValueError as error:
+        raise SystemExit(f"cannot parse gh attestation verify: {error}") from error
+    if words[:3] != ["gh", "attestation", "verify"] or any(
+        word and set(word) <= set(";&|") for word in words
+    ):
+        raise SystemExit("release install verification must be one simple gh command")
+    verification_commands.append(words)
+if len(verification_commands) != 1:
+    raise SystemExit("release install command must call gh attestation verify once")
+verification = verification_commands[0]
+source_digests = [
+    verification[index + 1]
+    for index, word in enumerate(verification[:-1])
+    if word == "--source-digest"
+]
+if source_digests != ["$release_sha"]:
+    raise SystemExit(
+        'gh attestation verify must include --source-digest "$release_sha" once'
+    )
 Path(sys.argv[5]).write_text(english, encoding="utf-8")
 PY
 
@@ -51,9 +95,11 @@ HOME="$home" \
 	TMPDIR="$runtime_tmp" \
 	bash "$install_script"
 
+tag="$(gh release view --repo IceCodeNew/maniud --json tagName --jq .tagName)"
 installed_version="$("$home/.local/bin/maniud" --version)"
-if [[ ! "$installed_version" =~ ^maniud\ (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-	printf 'documented release install returned an invalid version: %s\n' "$installed_version" >&2
+if [[ "$installed_version" != "maniud ${tag#v}" ]]; then
+	printf 'documented release install returned %s, expected maniud %s\n' \
+		"$installed_version" "${tag#v}" >&2
 	exit 1
 fi
 printf 'documented release install passed: %s\n' "$installed_version"

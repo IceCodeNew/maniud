@@ -52,6 +52,7 @@ func (reader *operationReaderFixture) Close() error {
 	return reader.closeErr
 }
 
+//nolint:funlen // One fixture proves every accepted unresolved transaction state and overflow.
 func TestApplyFacadeReturnsBoundedRepositoryInventory(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +77,12 @@ func TestApplyFacadeReturnsBoundedRepositoryInventory(t *testing.T) {
 			SourceDigest:      domain.Hash([]byte("source two")),
 			RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
 			RepositoryLocationDigest: domain.Hash([]byte("services/two.yaml")), HasRepository: true,
+		},
+		{
+			ID: store.TransactionID{3}, State: store.TransactionHealthDegraded,
+			SourceDigest:      domain.Hash([]byte("source three")),
+			RepositoryVersion: scope.Version, RepositoryScopeDigest: scope.Digest,
+			RepositoryLocationDigest: domain.Hash([]byte("services/three.yaml")), HasRepository: true,
 		},
 	}
 	operation.transactions.repository = func(
@@ -107,6 +114,10 @@ func TestApplyFacadeReturnsBoundedRepositoryInventory(t *testing.T) {
 		{
 			ID: records[1].ID, State: records[1].State,
 			Source: records[1].SourceDigest, Location: records[1].RepositoryLocationDigest,
+		},
+		{
+			ID: records[2].ID, State: records[2].State,
+			Source: records[2].SourceDigest, Location: records[2].RepositoryLocationDigest,
 		},
 	}
 	if !slices.Equal(got, want) || !slices.Equal(readerEvents, []string{operationCloseReader}) {
@@ -209,7 +220,7 @@ func TestApplyFacadeContainsRepositoryInventoryFailures(t *testing.T) {
 	}
 	reader.closeErr = nil
 
-	invalidRecords := make([]store.Transaction, 1, 7)
+	invalidRecords := make([]store.Transaction, 0, 6)
 	record := validRecord
 	record.SourceDigest = domain.Digest{}
 	invalidRecords = append(invalidRecords, record)
