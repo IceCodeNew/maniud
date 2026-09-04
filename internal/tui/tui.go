@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/llm"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -103,13 +104,34 @@ type RepositorySetupRequest struct {
 	Mode     RepositorySetupMode
 	Remote   string
 	Checkout string
+	// Created retries local setup for a GitHub repository created earlier in this TUI session.
+	Created bool
 }
 
 // RegistrationResult is one privacy-safe repository setup result.
 type RegistrationResult struct {
-	Snapshot CatalogSnapshot
-	Blocker  SourceBlocker
+	Snapshot           CatalogSnapshot
+	Failure            RepositorySetupFailure
+	RecoveryRepository string
 }
+
+// RepositorySetupFailure identifies a recoverable repository onboarding failure.
+type RepositorySetupFailure string
+
+const (
+	// RepositorySetupReady identifies a completed repository setup.
+	RepositorySetupReady RepositorySetupFailure = ""
+	// RepositorySetupInvalidInput rejects an invalid repository or checkout request.
+	RepositorySetupInvalidInput RepositorySetupFailure = "repository_setup_invalid_input"
+	// RepositorySetupGitHubFailed means gh did not create the requested repository.
+	RepositorySetupGitHubFailed RepositorySetupFailure = "github_repository_create_failed"
+	// RepositorySetupCloneFailed means the repository could not be cloned locally.
+	RepositorySetupCloneFailed RepositorySetupFailure = "repository_clone_failed"
+	// RepositorySetupRegistrationFailed means a checkout could not be registered safely.
+	RepositorySetupRegistrationFailed RepositorySetupFailure = "repository_registration_failed"
+	// RepositorySetupUnavailable means the setup role could not run.
+	RepositorySetupUnavailable RepositorySetupFailure = "repository_setup_unavailable"
+)
 
 // ServiceDraft is one generated, effect-free service candidate.
 type ServiceDraft struct {
@@ -130,32 +152,47 @@ type StagedService struct {
 	CommitMessage string
 }
 
-// ServiceCommitResult is one proven commit outcome or an explicit unsigned fallback request.
-// ValidationUnavailable means the commit succeeded but no immutable apply request could be prepared.
-// PreparationRequired means the committed service cannot be validated or applied in this TUI session.
-type ServiceCommitResult struct {
-	Request               application.Request
-	NeedsUnsignedApproval bool
-	Committed             bool
-	ValidationUnavailable bool
-	PreparationRequired   bool
+// CommitOutcome identifies one closed, proven Git commit result.
+type CommitOutcome uint8
+
+const (
+	// CommitSucceeded means the commit and immutable apply request were proven.
+	CommitSucceeded CommitOutcome = iota + 1
+	// CommitNeedsUnsignedApproval means signing failed without changing the owned staged state.
+	CommitNeedsUnsignedApproval
+	// CommitValidationUnavailable means the commit succeeded but no immutable apply request could be prepared.
+	CommitValidationUnavailable
+	// CommitPreparationRequired means the committed service needs host preparation before validation.
+	CommitPreparationRequired
+)
+
+// CommitResult is one proven commit outcome or an explicit unsigned fallback request.
+type CommitResult struct {
+	Request application.Request
+	Outcome CommitOutcome
 }
 
 // DeploymentFieldState is one editable deployment field and its current value.
 // An unavailable field cannot be edited for the selected service.
-type DeploymentFieldState struct {
-	ID          string
-	Value       string
-	Present     bool
-	AllowsUnset bool
-	Available   bool
+type DeploymentFieldState = application.DeploymentFieldState
+
+// DeploymentFieldChange is one validated current/proposed field comparison.
+type DeploymentFieldChange struct {
+	FieldID         string
+	CurrentValue    string
+	CurrentPresent  bool
+	ProposedValue   string
+	ProposedPresent bool
 }
 
-// DeploymentEditPreview is one validated in-memory Compose candidate.
+// DeploymentEditPreview is one validated in-memory Compose candidate and the
+// exact Git blob diff that a later file confirmation can stage.
 type DeploymentEditPreview struct {
 	ComposePath string
-	FieldIDs    []string
+	Changes     []DeploymentFieldChange
 	Restore     string
+	Diff        string
+	NoChanges   bool
 }
 
 // StagedDeploymentEdit is the exact modified-file Git index projection.
@@ -165,12 +202,39 @@ type StagedDeploymentEdit struct {
 	CommitMessage string
 }
 
-// DeploymentCommitResult is one proven deployment edit commit outcome.
-type DeploymentCommitResult struct {
-	Request               application.Request
-	NeedsUnsignedApproval bool
-	Committed             bool
-	ValidationUnavailable bool
+// DeploymentFailure identifies one recoverable Compose or Git workspace outcome.
+type DeploymentFailure string
+
+const (
+	// DeploymentPreconditionFailed means the confirmed source or Git state changed.
+	DeploymentPreconditionFailed DeploymentFailure = "compose_edit_precondition_failed"
+	// DeploymentUnsupportedSource rejects a source that cannot preserve the editor contract.
+	DeploymentUnsupportedSource DeploymentFailure = "compose_edit_unsupported_source"
+	// DeploymentValidationFailed rejects an invalid field value or candidate.
+	DeploymentValidationFailed DeploymentFailure = "compose_edit_validation_failed"
+	// DeploymentPublishFailed means staging failed after the original file was restored.
+	DeploymentPublishFailed DeploymentFailure = "compose_edit_publish_failed"
+	// DeploymentWorktreeUnknown requires manual Git worktree recovery.
+	DeploymentWorktreeUnknown DeploymentFailure = "compose_edit_worktree_unknown"
+	// DeploymentCommitFailed means Git did not commit the still-owned staged edit.
+	DeploymentCommitFailed DeploymentFailure = "git_commit_failed"
+	// DeploymentHistoryUnavailable means bounded history could not be read.
+	DeploymentHistoryUnavailable DeploymentFailure = "parameter_history_unavailable"
+	// DeploymentHistoryEntryInvalid means a selected revision cannot be restored.
+	DeploymentHistoryEntryInvalid DeploymentFailure = "parameter_history_entry_invalid"
+)
+
+// DeploymentActionError carries no raw Git, filesystem, or Compose error text.
+type DeploymentActionError struct {
+	Code DeploymentFailure
+}
+
+func (err *DeploymentActionError) Error() string {
+	if err == nil || err.Code == "" {
+		return "deployment action failed"
+	}
+
+	return string(err.Code)
 }
 
 // DeploymentHistoryEntry is one first-parent commit that changed the selected Compose file.
@@ -179,6 +243,45 @@ type DeploymentHistoryEntry struct {
 	Subject          string
 	SignaturePresent bool
 }
+
+// LLMConfiguration is the privacy-safe effective provider configuration.
+type LLMConfiguration struct {
+	Provider      string
+	Model         string
+	Endpoint      string
+	Timeout       string
+	Origin        string
+	KeySource     string
+	KeyConfigured bool
+	Complete      bool
+	Identity      string
+	Warnings      []string
+}
+
+// LLMSettings is one TUI configuration draft. An empty APIKey preserves the
+// current protected value; ClearAPIKey explicitly removes it from XDG config.
+type LLMSettings struct {
+	Provider    string
+	Model       string
+	Endpoint    string
+	Timeout     string
+	APIKey      string
+	ClearAPIKey bool
+}
+
+// LLMResult is one bounded completion result. Token is opaque to the TUI and
+// can accept one choice from the current pending result.
+type LLMResult = llm.Result
+
+// Stable configuration outcomes owned by the Assistant role. Provider action
+// outcomes use llm.ErrorCode directly.
+const (
+	LLMConfigPathInvalid       llm.ErrorCode = "llm_config_path_invalid"
+	LLMConfigReloadFailed      llm.ErrorCode = "config_reload_failed"
+	LLMConfigSaveStale         llm.ErrorCode = "config_save_stale"
+	LLMConfigSaveUnknown       llm.ErrorCode = "config_save_outcome_unknown"
+	LLMConfigSavedReloadFailed llm.ErrorCode = "config_saved_reload_failed"
+)
 
 // Target is one validated service that can enter the operation façade.
 type Target struct {
@@ -207,7 +310,7 @@ type Catalog interface {
 type ServiceWorkspace interface {
 	Preview(ctx context.Context, input string) (ServiceDraft, error)
 	Stage(ctx context.Context) (StagedService, error)
-	Commit(ctx context.Context, message string, unsigned bool) (ServiceCommitResult, error)
+	Commit(ctx context.Context, message string, unsigned bool) (CommitResult, error)
 	Suspend(ctx context.Context) error
 }
 
@@ -227,15 +330,44 @@ type DeploymentWorkspace interface {
 		revision string,
 	) (DeploymentEditPreview, error)
 	Stage(ctx context.Context) (StagedDeploymentEdit, error)
-	Commit(ctx context.Context, message string, unsigned bool) (DeploymentCommitResult, error)
+	Commit(ctx context.Context, message string, unsigned bool) (CommitResult, error)
 	Discard(ctx context.Context) error
 	History(ctx context.Context, request application.Request) ([]DeploymentHistoryEntry, error)
+}
+
+// DeploymentPatchWorkspace previews one multi-field application patch set.
+type DeploymentPatchWorkspace interface {
+	PreviewPatches(
+		ctx context.Context,
+		request application.Request,
+		patches []application.DeploymentPatch,
+	) (DeploymentEditPreview, error)
+}
+
+// Assistant owns resolved configuration, provider networking, bounded chat,
+// and stale-context validation outside the TUI model.
+type Assistant interface {
+	Configuration(ctx context.Context) (LLMConfiguration, error)
+	Save(ctx context.Context, settings LLMSettings) (LLMConfiguration, error)
+	Recommend(
+		ctx context.Context,
+		request application.Request,
+		configurationIdentity string,
+		question string,
+	) (LLMResult, error)
+	Accept(ctx context.Context, token string, choice int) error
+	Close()
 }
 
 // Operations is the mutation façade consumed by the TUI.
 type Operations interface {
 	DryRun(ctx context.Context, request application.Request) (application.Plan, error)
 	Apply(ctx context.Context, request application.Request) (application.Plan, error)
+	ResolveHealth(
+		ctx context.Context,
+		request application.Request,
+		resolution application.HealthResolution,
+	) (application.Plan, error)
 	Snapshot(ctx context.Context, request application.Request) (application.OperationSnapshot, error)
 	Evidence(snapshot application.OperationSnapshot) (application.EvidenceBundle, error)
 }
@@ -311,33 +443,64 @@ type Result struct {
 	Export string
 }
 
-// Run opens one Bubble Tea session over an injected application façade.
-func Run(
+// RunWithAssistant opens one session with the optional LLM capability enabled.
+func RunWithAssistant(
 	ctx context.Context,
 	input io.Reader,
 	output io.Writer,
 	catalog Catalog,
 	workspace ServiceWorkspace,
 	deployments DeploymentWorkspace,
+	assistant Assistant,
 	operations Operations,
 	events *EventStream,
 	options Options,
 ) (Result, error) {
-	if catalog == nil || workspace == nil || deployments == nil || operations == nil || events == nil {
+	valid := catalog != nil && workspace != nil && deployments != nil && operations != nil && events != nil
+	if assistant != nil {
+		_, supportsPatches := deployments.(DeploymentPatchWorkspace)
+		valid = valid && supportsPatches
+	}
+	if !valid {
+		if assistant != nil {
+			assistant.Close()
+		}
+
 		return Result{}, errInvalidInput
 	}
 
+	return run(ctx, input, output, catalog, workspace, deployments, assistant, operations, events, options)
+}
+
+func run(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	catalog Catalog,
+	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
+	assistant Assistant,
+	operations Operations,
+	events *EventStream,
+	options Options,
+) (Result, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	state := newModelWithDeployments(runCtx, catalog, workspace, deployments, operations, events, options)
+	state := newModelWithCapabilities(
+		runCtx, catalog, workspace, deployments, assistant, operations, events, options,
+	)
 	_, err := tea.NewProgram(
 		state,
 		tea.WithInput(input),
 		tea.WithOutput(output),
 		tea.WithWindowSize(defaultWidth, defaultHeight),
 	).Run()
+	state.page = nil
 	cancel()
+	if assistant != nil {
+		assistant.Close()
+	}
 	suspendCtx, cancelSuspend := context.WithTimeout(context.WithoutCancel(ctx), workspaceSuspendTimeout)
 	suspendErr := workspace.Suspend(suspendCtx)
 	cancelSuspend()

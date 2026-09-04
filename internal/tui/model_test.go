@@ -1,3 +1,4 @@
+//nolint:cyclop,funlen // These interaction tests intentionally verify complete message and viewport state matrices.
 package tui
 
 import (
@@ -7,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/IceCodeNew/maniud/internal/application"
@@ -32,9 +34,11 @@ func TestModelNavigatesHomeReviewConfirmationAndApply(t *testing.T) {
 		t.Fatalf("calls = %q / %q", catalog.recordedCalls(), operations.recordedCalls())
 	}
 
-	state.handleKey(key("a"))
-	if len(operations.recordedCalls()) != 2 {
-		t.Fatal("review shortcut bypassed confirmation")
+	for _, shortcut := range []string{"a", "e", "h"} {
+		state.handleKey(key(shortcut))
+	}
+	if _, valid = state.page.(reviewPage); !valid || len(operations.recordedCalls()) != 2 {
+		t.Fatal("removed review shortcut changed state")
 	}
 	state.handleKey(key("enter"))
 	confirmation, valid := state.page.(confirmationPage)
@@ -51,9 +55,120 @@ func TestModelNavigatesHomeReviewConfirmationAndApply(t *testing.T) {
 	deliver(t, state, state.handleKey(key("enter")))
 	if _, valid = state.page.(reviewPage); !valid || state.mutationOutcome != testApplyCompleted ||
 		!slices.Equal(operations.recordedCalls(), []string{
-			snapshotCall, evidenceCall, "apply", snapshotCall, evidenceCall,
+			snapshotCall, evidenceCall, applyCall, snapshotCall, evidenceCall,
 		}) {
 		t.Fatalf("post-apply state = %#v, calls = %q", state, operations.recordedCalls())
+	}
+}
+
+//nolint:cyclop,funlen,gocognit,gocyclo // Keeps the complete chooser workflow together.
+func TestReviewExploreOptionsAndDeterministicExplanation(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan: planView{
+			project: testProject, service: testService, runtime: testRuntime,
+			kind: string(application.PlanUpgrade), current: testCurrentImage, proposed: testProposedImage,
+			status: statusReady,
+		},
+	}
+	state.page = review
+	state.status = statusReady
+
+	for _, navigationKey := range []string{"up", "k", keyDown, "j", keyTab, keyShiftTab} {
+		state.page = review
+		state.handleReviewKey(review, navigationKey)
+		if focused := reviewPageValue(t, state); focused.focus != reviewExplore {
+			t.Fatalf("review focus after %q = %d, want Explore options", navigationKey, focused.focus)
+		}
+	}
+	state.page = review
+	state.handleKey(key(keyTab))
+	focused := reviewPageValue(t, state)
+	if focused.focus != reviewExplore {
+		t.Fatalf("review focus = %d, want Explore options", focused.focus)
+	}
+	state.handleKey(key(keyEnter))
+	options, valid := state.page.(reviewOptionsPage)
+	if !valid || options.cursor != 0 || !strings.Contains(state.View().Content, "Explain this change") {
+		t.Fatalf("review options = %#v", state.page)
+	}
+	state.handleReviewOptionsKey(options, "k")
+	wrapped, wrappedValid := state.page.(reviewOptionsPage)
+	if !wrappedValid || wrapped.cursor != reviewHistoryOption {
+		t.Fatalf("k-wrapped review option = %#v, want history", state.page)
+	}
+	for _, navigationKey := range []string{"j", keyTab} {
+		state.handleReviewOptionsKey(options, navigationKey)
+		next, nextValid := state.page.(reviewOptionsPage)
+		if !nextValid || next.cursor != reviewLLMOption {
+			t.Fatalf("review option after %q = %#v, want LLM", navigationKey, state.page)
+		}
+	}
+	state.handleReviewOptionsKey(reviewOptionsPage{review: review, cursor: reviewOptionCount}, keyEnter)
+	unmatched, unmatchedValid := state.page.(reviewOptionsPage)
+	if !unmatchedValid || unmatched.cursor != reviewOptionCount {
+		t.Fatalf("unmatched review option = %#v", state.page)
+	}
+	state.page = options
+	state.handleKey(key("up"))
+	options, valid = state.page.(reviewOptionsPage)
+	if !valid || options.cursor != reviewHistoryOption {
+		t.Fatalf("wrapped review option = %#v, want history", state.page)
+	}
+	state.handleKey(key(keyDown))
+	if command := state.handleKey(key(keyQuit)); command == nil {
+		t.Fatal("review options quit command is nil")
+	}
+	state.handleKey(key(keyEscape))
+	if returned := reviewPageValue(t, state); returned.focus != reviewExplore || state.status != statusReady {
+		t.Fatalf("returned review = %#v, status = %q", returned, state.status)
+	}
+	state.handleKey(key(keyTab))
+	if returned := reviewPageValue(t, state); returned.focus != reviewContinue {
+		t.Fatalf("review focus after second toggle = %d, want Continue", returned.focus)
+	}
+	state.handleKey(key("o"))
+	state.handleKey(key(keyDown))
+	state.handleKey(key(keyEnter))
+	if _, valid = state.page.(reviewOptionsPage); !valid || state.status != "LLM assistance is unavailable" {
+		t.Fatalf("unavailable LLM option = %T, status = %q", state.page, state.status)
+	}
+	state.handleKey(key(keyEscape))
+
+	state.handleKey(key("o"))
+	state.handleKey(key(testUnknownValue))
+	state.handleKey(key(keyEnter))
+	if _, valid = state.page.(explainPage); !valid ||
+		!strings.Contains(state.View().Content, "derived this explanation") ||
+		len(operations.recordedCalls()) != 0 {
+		t.Fatalf("deterministic explanation = %T, calls = %q", state.page, operations.recordedCalls())
+	}
+	state.handleKey(key("a"))
+	if _, valid = state.page.(explainPage); !valid || len(operations.recordedCalls()) != 0 {
+		t.Fatalf("explanation accepted a removed shortcut: %T, calls = %q", state.page, operations.recordedCalls())
+	}
+	if command := state.handleKey(key(keyQuit)); command == nil {
+		t.Fatal("explanation quit command is nil")
+	}
+	explanation, explanationValid := state.page.(explainPage)
+	if !explanationValid {
+		t.Fatalf("explanation page = %T", state.page)
+	}
+	deliver(t, state, state.handleExplainKey(explanation, keyEscape))
+	if _, valid = state.page.(reviewPage); !valid ||
+		!slices.Equal(operations.recordedCalls(), []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("fresh review after Escape = %T, calls = %q", state.page, operations.recordedCalls())
+	}
+	state.page = explainPage{review: review}
+	deliver(t, state, state.handleKey(key(keyEnter)))
+	if _, valid = state.page.(reviewPage); !valid ||
+		!slices.Equal(operations.recordedCalls(), []string{
+			snapshotCall, evidenceCall, snapshotCall, evidenceCall,
+		}) {
+		t.Fatalf("fresh review = %T, calls = %q", state.page, operations.recordedCalls())
 	}
 }
 
@@ -101,7 +216,7 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 
 	state, _, operations := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
-	workspace.commit = ServiceCommitResult{NeedsUnsignedApproval: true}
+	workspace.commit = CommitResult{Outcome: CommitNeedsUnsignedApproval}
 	deliver(t, state, state.startCatalog())
 	state.handleKey(key("down"))
 	state.handleKey(key("enter"))
@@ -130,18 +245,18 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	state.handleKey(key("enter"))
 	state.handleKey(key("tab"))
 	deliver(t, state, state.handleKey(key("enter")))
-	commit, valid := state.page.(commitServicePage)
+	commit, valid := state.page.(commitPage)
 	if !valid || commit.focus != confirmationBack || commit.message != "Add api service" ||
-		commit.diffWidth != state.serviceDiffWidth() || len(commit.diffLines) == 0 {
+		commit.diffWidth != state.commitDiffWidth() || len(commit.diffLines) == 0 {
 		t.Fatalf("commit review = %#v", state.page)
 	}
 	fullWidth := commit.diffWidth
-	state.resize(compactMinimum, compactMinHeight)
-	commit = commitServicePageValue(t, state)
-	if commit.diffWidth != state.serviceDiffWidth() || commit.diffWidth == fullWidth || len(commit.diffLines) == 0 {
+	deliver(t, state, state.resize(compactMinimum, compactMinHeight))
+	commit = commitPageValue(t, state)
+	if commit.diffWidth != state.commitDiffWidth() || commit.diffWidth == fullWidth || len(commit.diffLines) == 0 {
 		t.Fatalf("resized commit diff = %#v", commit)
 	}
-	state.resize(defaultWidth, defaultHeight)
+	deliver(t, state, state.resize(defaultWidth, defaultHeight))
 
 	state.handleKey(key("e"))
 	state.handleKey(key("!"))
@@ -149,7 +264,7 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	state.handleKey(key("d"))
 	state.handleKey(key("down"))
 	state.handleKey(key("d"))
-	commit = commitServicePageValue(t, state)
+	commit = commitPageValue(t, state)
 	if commit.message != "Add api service!" || commit.editing {
 		t.Fatalf("edited commit = %#v", commit)
 	}
@@ -159,20 +274,20 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	if !valid || unsigned.focus != confirmationBack {
 		t.Fatalf("unsigned confirmation = %#v", state.page)
 	}
-	state.resize(compactMinimum, compactMinHeight)
+	deliver(t, state, state.resize(compactMinimum, compactMinHeight))
 	unsigned, valid = state.page.(unsignedCommitConfirmationPage)
-	if !valid || unsigned.commit.diffWidth != state.serviceDiffWidth() {
+	if !valid || unsigned.commit.diffWidth != state.commitDiffWidth() {
 		t.Fatalf("resized unsigned confirmation = %#v", state.page)
 	}
-	state.resize(defaultWidth, defaultHeight)
+	deliver(t, state, state.resize(defaultWidth, defaultHeight))
 	state.handleKey(key("enter"))
-	if _, valid = state.page.(commitServicePage); !valid {
+	if _, valid = state.page.(commitPage); !valid {
 		t.Fatalf("unsigned default back page = %T", state.page)
 	}
 
 	deliver(t, state, state.handleKey(key("enter")))
-	workspace.commit = ServiceCommitResult{
-		Request: application.Request{Service: testAPI}, Committed: true,
+	workspace.commit = CommitResult{
+		Request: application.Request{Service: testAPI}, Outcome: CommitSucceeded,
 	}
 	state.handleKey(key("tab"))
 	deliver(t, state, state.handleKey(key("enter")))
@@ -181,7 +296,7 @@ func TestModelAddsServiceWithExplicitUnsignedFallback(t *testing.T) {
 	}
 	if !slices.Equal(workspace.recordedCalls(), []string{
 		"preview:" + input,
-		"stage",
+		stageCall,
 		"commit:false:Add api service!",
 		"commit:false:Add api service!",
 		"commit:true:Add api service!",
@@ -194,18 +309,154 @@ func TestModelCachesServiceDiffAtDefaultDimensions(t *testing.T) {
 	t.Parallel()
 
 	state := &model{}
-	commit := state.wrapServiceDiff(commitServicePage{staged: StagedService{Diff: "+image: pinned\n"}})
-	cached := state.wrapServiceDiff(commit)
-	if commit.diffWidth != state.serviceDiffWidth() || cached.diffWidth != commit.diffWidth ||
+	if width := state.bodyWidth(); width != defaultWidth-fullBodyOffset {
+		t.Fatalf("default body width = %d", width)
+	}
+	commit := state.wrapCommitDiff(commitPage{
+		kind: commitKindService, staged: StagedService{Diff: "+image: pinned\n"},
+	})
+	cached := state.wrapCommitDiff(commit)
+	if commit.diffWidth != state.commitDiffWidth() || cached.diffWidth != commit.diffWidth ||
 		!slices.Equal(cached.diffLines, commit.diffLines) {
 		t.Fatalf("cached service diff = %#v, want %#v", cached, commit)
+	}
+}
+
+func TestModelDefersAndDeduplicatesCommitDiffResize(t *testing.T) {
+	t.Parallel()
+
+	state := &model{}
+	commit := state.wrapCommitDiff(commitPage{
+		kind: commitKindService, staged: StagedService{Diff: strings.Repeat("wide diff value\n", 128)},
+	})
+	state.page = commit
+	command := state.resize(compactMinimum, compactMinHeight)
+	before := commitPageValue(t, state)
+	if command == nil || before.diffWidth != commit.diffWidth || !slices.Equal(before.diffLines, commit.diffLines) {
+		t.Fatalf("deferred resize = %#v, command nil = %t", before, command == nil)
+	}
+	if currentCommand := state.resize(defaultWidth, defaultHeight); currentCommand != nil {
+		t.Fatal("resize back to cached tier scheduled another diff wrap")
+	}
+	deliver(t, state, command)
+	if current := commitPageValue(t, state); current.diffWidth != commit.diffWidth ||
+		!slices.Equal(current.diffLines, commit.diffLines) {
+		t.Fatalf("stale compact resize changed current cache = %#v", current)
+	}
+	command = state.resize(compactMinimum, compactMinHeight)
+	deliver(t, state, command)
+	compact := commitPageValue(t, state)
+	if compact.diffWidth != compactMinimum-detailsPadding || compact.diffWidth == commit.diffWidth {
+		t.Fatalf("settled compact diff = %#v", compact)
+	}
+	if command = state.resize(compactMinimum+10, compactMinHeight); command != nil {
+		t.Fatal("same-tier resize scheduled another diff wrap")
+	}
+	command = state.resize(defaultWidth, defaultHeight)
+	if command == nil {
+		t.Fatal("full-tier resize command is nil")
+	}
+	state.page = homePage{}
+	deliver(t, state, command)
+	if _, valid := state.page.(homePage); !valid {
+		t.Fatalf("resize message changed non-commit page: %T", state.page)
+	}
+}
+
+func TestModelDefersAndCachesDeploymentDiffResize(t *testing.T) {
+	t.Parallel()
+
+	state := &model{}
+	preview := state.wrapDeploymentPreviewDiff(deploymentPreviewPage{
+		preview: DeploymentEditPreview{Diff: strings.Repeat("wide deployment diff value\n", 128)},
+	})
+	cached := state.wrapDeploymentPreviewDiff(preview)
+	if preview.diffWidth != state.commitDiffWidth() || cached.diffWidth != preview.diffWidth ||
+		!slices.Equal(cached.diffLines, preview.diffLines) {
+		t.Fatalf("cached deployment diff = %#v, want %#v", cached, preview)
+	}
+	state.page = stageDeploymentConfirmationPage{preview: preview}
+	command := state.resize(compactMinimum, compactMinHeight)
+	before := mustLLMPage[stageDeploymentConfirmationPage](state.page).preview
+	if command == nil || before.diffWidth != preview.diffWidth ||
+		!slices.Equal(before.diffLines, preview.diffLines) {
+		t.Fatalf("deferred deployment resize = %#v, command nil = %t", before, command == nil)
+	}
+	deliver(t, state, command)
+	compact := mustLLMPage[stageDeploymentConfirmationPage](state.page).preview
+	if compact.diffWidth != compactMinimum-detailsPadding || compact.diffWidth == preview.diffWidth {
+		t.Fatalf("settled deployment confirmation diff = %#v", compact)
+	}
+	state.page = deploymentDiffPage{confirmation: stageDeploymentConfirmationPage{preview: compact}}
+	command = state.resize(defaultWidth, defaultHeight)
+	if command == nil {
+		t.Fatal("full deployment diff resize command is nil")
+	}
+	deliver(t, state, command)
+	full := mustLLMPage[deploymentDiffPage](state.page).confirmation.preview
+	if full.diffWidth != state.commitDiffWidth() || full.diffWidth == compact.diffWidth || len(full.diffLines) == 0 {
+		t.Fatalf("settled full deployment diff = %#v", full)
+	}
+	if command = state.resize(defaultWidth+10, defaultHeight); command != nil {
+		t.Fatal("same-tier deployment resize scheduled another diff wrap")
+	}
+}
+
+func TestModelKeepsDeploymentDiffOnTheLastFullViewport(t *testing.T) {
+	t.Parallel()
+
+	state := &model{}
+	preview := state.wrapDeploymentPreviewDiff(deploymentPreviewPage{
+		preview: DeploymentEditPreview{Diff: strings.Repeat("deployment diff line\n", 128)},
+	})
+	state.page = deploymentDiffPage{
+		confirmation: stageDeploymentConfirmationPage{preview: preview},
+		scroll:       len(preview.diffLines) + deploymentDiffLeadRows,
+	}
+	state.clampPageScroll()
+	current := mustLLMPage[deploymentDiffPage](state.page)
+	total := len(preview.diffLines) + deploymentDiffLeadRows
+	visible := state.deploymentDiffViewportHeight()
+	if current.scroll != total-visible {
+		t.Fatalf("full deployment diff scroll = %d, want %d", current.scroll, total-visible)
+	}
+	if lines := state.deploymentDiffBody(current, state.bodyWidth(), visible); len(lines) != visible {
+		t.Fatalf("full deployment diff viewport has %d lines, want %d", len(lines), visible)
+	}
+
+	command := state.resize(compactMinimum, compactMinHeight)
+	if command == nil {
+		t.Fatal("compact deployment diff resize command is nil")
+	}
+	deliver(t, state, command)
+	current = mustLLMPage[deploymentDiffPage](state.page)
+	total = len(current.confirmation.preview.diffLines) + deploymentDiffLeadRows
+	visible = state.deploymentDiffViewportHeight()
+	current.scroll = total
+	state.page = current
+	state.clampPageScroll()
+	current = mustLLMPage[deploymentDiffPage](state.page)
+	if current.scroll != total-visible {
+		t.Fatalf("compact deployment diff scroll = %d, want %d", current.scroll, total-visible)
+	}
+	if lines := state.deploymentDiffBody(current, state.bodyWidth(), visible); len(lines) != visible {
+		t.Fatalf("compact deployment diff viewport has %d lines, want %d", len(lines), visible)
+	}
+	for _, dimensions := range [][2]int{
+		{hardMinimumWidth, hardMinimumHeight},
+		{hardMinimumWidth - 1, hardMinimumHeight - 1},
+	} {
+		state.width, state.height = dimensions[0], dimensions[1]
+		if height := state.deploymentDiffViewportHeight(); height != 0 {
+			t.Fatalf("deployment diff viewport at %dx%d = %d", dimensions[0], dimensions[1], height)
+		}
 	}
 }
 
 func TestModelPersistsScrollablePageBounds(t *testing.T) {
 	t.Parallel()
 
-	commit := commitServicePage{staged: StagedService{
+	commit := commitPage{kind: commitKindService, staged: StagedService{
 		Diff: strings.Repeat("+image: registry.example/namespace/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", 8),
 	}}
 	review := reviewPage{plan: planView{
@@ -222,7 +473,7 @@ func TestModelPersistsScrollablePageBounds(t *testing.T) {
 			},
 			scroll: 1000,
 		}},
-		{name: "commit", page: commitServicePage{staged: commit.staged, scroll: 1000}},
+		{name: "commit", page: commitPage{kind: commitKindService, staged: commit.staged, scroll: 1000}},
 		{name: "staged diff", page: stagedDiffPage{commit: commit, scroll: 1000}},
 		{name: "details", page: detailsPage{review: review, scroll: 1000}},
 	}
@@ -233,7 +484,7 @@ func TestModelPersistsScrollablePageBounds(t *testing.T) {
 
 			state, _, _ := newTestModel(t)
 			state.page = test.page
-			state.resize(compactMinimum, compactMinHeight)
+			deliver(t, state, state.resize(compactMinimum, compactMinHeight))
 			bounded := scrollPosition(t, state.page)
 			if bounded >= 1000 {
 				t.Fatalf("scroll was not bounded: %d", bounded)
@@ -243,7 +494,7 @@ func TestModelPersistsScrollablePageBounds(t *testing.T) {
 				t.Fatalf("scroll advanced past final line: %d, want %d", got, bounded)
 			}
 
-			state.resize(defaultWidth*2, defaultHeight)
+			deliver(t, state, state.resize(defaultWidth*2, defaultHeight))
 			if got := scrollPosition(t, state.page); got > bounded {
 				t.Fatalf("resized scroll = %d, want at most %d", got, bounded)
 			}
@@ -260,7 +511,7 @@ func scrollPosition(t *testing.T, current page) int {
 	switch current := current.(type) {
 	case sourceDiagnosticPage:
 		return current.scroll
-	case commitServicePage:
+	case commitPage:
 		return current.scroll
 	case stagedDiffPage:
 		return current.scroll
@@ -285,22 +536,22 @@ func TestModelRejectsCommittedPlanDrift(t *testing.T) {
 	}
 }
 
-func TestModelContainsPartialAndContradictoryCommitResults(t *testing.T) {
+func TestModelContainsPartialAndInvalidCommitResults(t *testing.T) {
 	t.Parallel()
 
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
-	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{
+		kind: commitKindService, preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage,
+	}
 
 	state.sequence++
 	state.busy = true
 	state.Update(serviceCommitResultMsg{
 		sequence: state.sequence,
 		commit:   commit,
-		result: ServiceCommitResult{
-			Committed: true, ValidationUnavailable: true,
-		},
+		result:   CommitResult{Outcome: CommitValidationUnavailable},
 	})
 	home, valid := state.page.(homePage)
 	if !valid || home.catalog.State != CatalogUnavailable ||
@@ -309,9 +560,9 @@ func TestModelContainsPartialAndContradictoryCommitResults(t *testing.T) {
 		t.Fatalf("partial commit result = %#v", state)
 	}
 
-	for _, result := range []ServiceCommitResult{
-		{Committed: true, NeedsUnsignedApproval: true},
-		{ValidationUnavailable: true},
+	for _, result := range []CommitResult{
+		{},
+		{Outcome: CommitOutcome(255)},
 	} {
 		state.sequence++
 		state.busy = true
@@ -407,6 +658,92 @@ func TestModelCanSkipAndReopenRepositorySetup(t *testing.T) {
 	}
 }
 
+func TestModelRecoversGitHubRepositoryAfterCloneFailure(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	state.sequence++
+	state.busy = true
+	state.page = registrationConfirmationPage{}
+	state.Update(registrationResultMsg{
+		sequence: state.sequence,
+		request: RepositorySetupRequest{
+			Mode: RepositorySetupCreateGitHub, Remote: testGitHubRepository, Checkout: testRepositoryPath,
+		},
+		result: RegistrationResult{
+			Failure: RepositorySetupCloneFailed, RecoveryRepository: testExistingRemote,
+		},
+	})
+	registration := registrationPageValue(t, state)
+	if registration.step != registrationCheckoutStep || registration.mode != RepositorySetupCreateGitHub ||
+		!registration.created ||
+		registration.remote != testExistingRemote || registration.checkout != testRepositoryPath ||
+		state.status != "GitHub repository created, but checkout failed. Review the path, then retry" {
+		t.Fatalf("clone recovery state = %#v, status = %q", registration, state.status)
+	}
+}
+
+//nolint:cyclop // Each stable repository failure code maps to its own recovery message.
+func TestModelMapsRepositorySetupFailuresWithoutComposeCopy(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		failure RepositorySetupFailure
+		want    string
+	}{
+		{RepositorySetupInvalidInput, "Repository setup values are invalid; review the repository and checkout path"},
+		{RepositorySetupGitHubFailed, "GitHub repository was not created; check gh authentication, then retry"},
+		{RepositorySetupCloneFailed, "Repository clone failed; review the remote and checkout path"},
+		{RepositorySetupRegistrationFailed, "Repository checkout could not be registered; inspect it before retrying"},
+		{RepositorySetupUnavailable, repositorySetupUnavailableStatus},
+		{RepositorySetupFailure("unknown"), repositorySetupUnavailableStatus},
+	} {
+		state, _, _ := newTestModel(t)
+		state.sequence++
+		state.busy = true
+		state.Update(registrationResultMsg{
+			sequence: state.sequence, result: RegistrationResult{Failure: test.failure},
+		})
+		if state.status != test.want || strings.Contains(state.status, "Compose") {
+			t.Fatalf("repository failure %q status = %q", test.failure, state.status)
+		}
+	}
+
+	state, _, _ := newTestModel(t)
+	state.sequence++
+	state.busy = true
+	state.Update(registrationResultMsg{
+		sequence: state.sequence,
+		request: RepositorySetupRequest{
+			Mode: RepositorySetupCreateGitHub, Remote: testGitHubRepository, Checkout: testRepositoryPath,
+		},
+		result: RegistrationResult{
+			Failure: RepositorySetupRegistrationFailed, RecoveryRepository: testExistingRemote,
+		},
+	})
+	if state.status != "Repository checkout exists, but registration failed. Inspect it, then retry" {
+		t.Fatalf("registration recovery status = %q", state.status)
+	}
+
+	state.sequence++
+	state.busy = true
+	state.Update(registrationResultMsg{
+		sequence: state.sequence,
+		result: RegistrationResult{
+			Failure:            RepositorySetupCloneFailed,
+			RecoveryRepository: strings.Repeat("x", displayLimits().Bytes+1),
+		},
+	})
+	if state.status != repositorySetupUnavailableStatus {
+		t.Fatalf("unsafe recovery status = %q", state.status)
+	}
+
+	if repositorySetupRecoveryStatus(RepositorySetupInvalidInput) !=
+		"GitHub repository exists, but local setup did not finish. Review the path, then retry" {
+		t.Fatal("unexpected generic repository recovery status")
+	}
+}
+
 //nolint:cyclop,funlen // One state-machine scenario checks each setup slide and back-navigation boundary.
 func TestModelNavigatesRepositorySetupSlidesAndPreparationExit(t *testing.T) {
 	t.Parallel()
@@ -456,6 +793,16 @@ func TestModelNavigatesRepositorySetupSlidesAndPreparationExit(t *testing.T) {
 	if _, valid := state.page.(registrationPage); !valid {
 		t.Fatalf("unknown mode key changed page to %T", state.page)
 	}
+	state.page = registrationPage{
+		step: registrationCheckoutStep, mode: RepositorySetupCreateGitHub,
+		remote: testGitHubRepository, checkout: testRepositoryPath, created: true,
+	}
+	state.handleKey(key(keyEscape))
+	registration = registrationPageValue(t, state)
+	if registration.step != registrationCheckoutStep ||
+		state.status != "GitHub repository already exists; change only the local checkout path" {
+		t.Fatalf("created repository back = %#v, status = %q", registration, state.status)
+	}
 
 	state.page = registrationPage{
 		step: registrationCheckoutStep, mode: RepositorySetupExisting,
@@ -501,15 +848,15 @@ func TestModelBlocksApplyAfterPreparationCommit(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
-	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{
+		kind: commitKindService, preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage,
+	}
 	state.sequence++
 	state.busy = true
 	state.Update(serviceCommitResultMsg{
 		sequence: state.sequence,
 		commit:   commit,
-		result: ServiceCommitResult{
-			Committed: true, PreparationRequired: true,
-		},
+		result:   CommitResult{Outcome: CommitPreparationRequired},
 	})
 	if _, valid := state.page.(preparationRequiredPage); !valid || !state.applyBlocked ||
 		state.status != "Preparation is required before validation" {
@@ -661,7 +1008,7 @@ func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
 	}
 	<-operations.cancelObserved
 	state.Update(<-result)
-	if state.busy || state.applying || state.status != "Cancelled" || state.err != nil {
+	if state.busy || state.applying || state.status != testLLMCancelled || state.err != nil {
 		t.Fatalf("cancelled state = %#v", state)
 	}
 
@@ -678,6 +1025,37 @@ func TestModelCancelsAndWaitsForBusyOperation(t *testing.T) {
 	_, quit := state.Update(<-result)
 	if quit == nil || state.busy || state.quitAfterOperation {
 		t.Fatalf("completed quit state = %#v", state)
+	}
+}
+
+func TestModelCancellationRejectsLateCatalogResults(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		start func(*model) tea.Cmd
+	}{
+		{name: "catalog", start: func(state *model) tea.Cmd { return state.startCatalog() }},
+		{name: "registered service", start: func(state *model) tea.Cmd {
+			return state.startOpenRegistered(registeredAPIID)
+		}},
+		{name: "Compose path", start: func(state *model) tea.Cmd { return state.startOpenPath(testComposePath) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state, _, _ := newTestModel(t)
+			state.page = openPathPage{value: testStableStatus}
+			command := test.start(state)
+			if command == nil {
+				t.Fatal("operation command is nil")
+			}
+			state.handleKey(key(keyEscape))
+			state.Update(command())
+			current, valid := state.page.(openPathPage)
+			if !valid || current.value != testStableStatus || state.busy || state.status != "Cancelled" {
+				t.Fatalf("late result changed cancelled operation: %#v", state)
+			}
+		})
 	}
 }
 
@@ -711,6 +1089,454 @@ func TestModelContainsOperationFailuresAndStaleResults(t *testing.T) {
 	}
 }
 
+func TestModelRefreshesHealthPendingApplyWithoutFailure(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan:    planView{status: statusReady},
+	}
+	state.page = review
+	operations.applyErr = application.ErrHealthPending
+
+	deliver(t, state, state.startApply(review))
+	if state.err != nil || state.status == statusOperationFailed {
+		t.Fatalf("pending apply state = %#v", state)
+	}
+	if !slices.Equal(operations.recordedCalls(), []string{applyCall, snapshotCall, evidenceCall}) {
+		t.Fatalf("pending apply calls = %q", operations.recordedCalls())
+	}
+}
+
+func TestModelRefreshesDegradedPredecessorAfterHealthRollback(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan:    planView{status: statusReady},
+	}
+	state.page = review
+	operations.resolutionErr = application.ErrHealthDegraded
+
+	deliver(t, state, state.startHealthResolution(healthConfirmationPage{
+		review: reviewPage{
+			request: review.request,
+			plan: planView{
+				status: statusReady, transaction: strings.Repeat("a", 32),
+				resolution: application.HealthResolutionRollback,
+			},
+		},
+		focus: confirmationApply,
+	}))
+	if state.err != nil || state.status == statusOperationFailed {
+		t.Fatalf("degraded predecessor state = %#v", state)
+	}
+	if !slices.Equal(operations.recordedCalls(), []string{
+		"resolve-health", snapshotCall, evidenceCall,
+	}) {
+		t.Fatalf("degraded predecessor calls = %q", operations.recordedCalls())
+	}
+}
+
+//nolint:funlen // One table-free boundary test keeps related health message routing together.
+func TestModelRoutesHealthMessagesAndRejectsStaleResults(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan: planView{
+			health: application.HealthConvergencePending, healthPoll: time.Nanosecond,
+			status: statusReady,
+		},
+	}
+	state.page = review
+	sequence := state.sequence
+	_, command := state.Update(healthPollMsg{sequence: sequence})
+	if command == nil {
+		t.Fatal("current health poll did not start a snapshot")
+	}
+	state.finishOperation()
+
+	poll := state.waitForHealth(review)
+	if poll == nil {
+		t.Fatal("pending health wait command is nil")
+	}
+	message, valid := poll().(healthPollMsg)
+	if !valid || message.sequence != state.sequence {
+		t.Fatalf("health poll message = %#v", message)
+	}
+
+	state.page = healthConfirmationPage{review: review}
+	state.status = statusReady
+	state.invalidateConfirmation()
+	if _, valid = state.page.(reviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("invalidated health confirmation = %#v", state)
+	}
+	state.page = healthConfirmationPage{review: review}
+	state.handleKey(key(testUnknownValue))
+	if _, valid = state.page.(healthConfirmationPage); !valid {
+		t.Fatalf("health confirmation routing = %T", state.page)
+	}
+
+	if state.startHealthResolution(healthConfirmationPage{}) != nil {
+		t.Fatal("invalid health resolution started")
+	}
+	state.page = review
+	if command = state.handleApplyResult(applyResultMsg{
+		sequence: state.sequence + 1, err: application.ErrHealthPending,
+	}); command != nil {
+		t.Fatal("stale pending apply returned a command")
+	}
+	state.page = homePage{}
+	state.busy = true
+	state.handleApplyResult(applyResultMsg{sequence: state.sequence, err: application.ErrHealthDegraded})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Health result could not be refreshed" {
+		t.Fatalf("health apply without review = %#v", state)
+	}
+
+	state.err = nil
+	state.page = review
+	state.busy = true
+	if command = state.handleHealthResolutionResult(healthResolutionResultMsg{
+		sequence: state.sequence + 1,
+	}); command != nil {
+		t.Fatal("stale health resolution returned a command")
+	}
+	state.busy = true
+	state.handleHealthResolutionResult(healthResolutionResultMsg{
+		sequence: state.sequence, err: errTestTUI,
+	})
+	if !errors.Is(state.err, errTestTUI) || state.status != statusOperationFailed {
+		t.Fatalf("failed health resolution = %#v", state)
+	}
+	state.err = nil
+	state.page = homePage{}
+	state.busy = true
+	state.handleHealthResolutionResult(healthResolutionResultMsg{
+		sequence: state.sequence, err: application.ErrSnapshotStale,
+	})
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Health decision could not be refreshed" {
+		t.Fatalf("health resolution without review = %#v", state)
+	}
+}
+
+func TestProjectPlanUsesApplicationHealthResolutionProjection(t *testing.T) {
+	t.Parallel()
+
+	operations := newOperationsFixture()
+	snapshot := operations.snapshot
+	snapshot.HasTransaction = true
+	snapshot.Transaction.ID = strings.Repeat("a", 32)
+	snapshot.Plan.Health = application.HealthConvergenceDegraded
+	snapshot.Plan.Observation.Health = application.WorkloadHealth{
+		Status: application.WorkloadHealthUnhealthy,
+	}
+	snapshot.AvailableHealthResolution = application.HealthResolutionRetryRestoreStart
+	view, err := projectPlan(snapshot)
+	if err != nil {
+		t.Fatalf("projectPlan(retry) error = %v", err)
+	}
+	if view.resolution != application.HealthResolutionRetryRestoreStart {
+		t.Fatalf("projected resolution = %q", view.resolution)
+	}
+
+	snapshot.AvailableHealthResolution = application.HealthResolutionRollback
+	snapshot.HealthResolutionRestoresPrevious = true
+	view, err = projectPlan(snapshot)
+	if err != nil || view.resolution != application.HealthResolutionRollback || !view.restoresPrevious {
+		t.Fatalf("projectPlan(rollback) = %#v, %v", view, err)
+	}
+
+	snapshot.AvailableHealthResolution = application.HealthResolutionCancelAdoption
+	snapshot.HealthResolutionRestoresPrevious = false
+	snapshot.Plan.Health = application.HealthConvergencePending
+	snapshot.Plan.Observation.Lifecycle = application.WorkloadLifecycleRestarting
+	view, err = projectPlan(snapshot)
+	if err != nil {
+		t.Fatalf("projectPlan(adoption) error = %v", err)
+	}
+	if view.resolution != application.HealthResolutionCancelAdoption || view.healthState != "restarting" {
+		t.Fatalf("pending adoption projection = %#v", view)
+	}
+
+	for _, invalid := range []application.OperationSnapshot{
+		{AvailableHealthResolution: application.HealthResolutionRollback},
+		{HealthResolutionRestoresPrevious: true},
+		{
+			HasTransaction: true, Transaction: application.SnapshotTransaction{ID: strings.Repeat("a", 32)},
+			AvailableHealthResolution:        application.HealthResolutionCancelAdoption,
+			HealthResolutionRestoresPrevious: true,
+		},
+		{
+			HasTransaction: true, Transaction: application.SnapshotTransaction{ID: strings.Repeat("a", 32)},
+			AvailableHealthResolution: application.HealthResolutionAction(testUnknownValue),
+		},
+	} {
+		invalid.Plan = snapshot.Plan
+		if _, invalidErr := projectPlan(invalid); !errors.Is(invalidErr, errInvalidInput) {
+			t.Fatalf("projectPlan(invalid projection %#v) error = %v", invalid, invalidErr)
+		}
+	}
+}
+
+func TestModelLeavesDegradedHealthForOperatorDecision(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	operations.snapshot.Plan.Health = application.HealthConvergenceDegraded
+	operations.snapshot.Plan.Observation.Health = application.WorkloadHealth{
+		Status: application.WorkloadHealthUnhealthy,
+	}
+
+	_, followup := state.Update(state.startSnapshot(application.Request{Service: testService})())
+	review := reviewPageValue(t, state)
+	if followup != nil || review.plan.health != application.HealthConvergenceDegraded ||
+		state.status != "Workload health requires a decision" {
+		t.Fatalf("degraded review = %#v, followup = %#v", state, followup)
+	}
+	if got := operations.recordedCalls(); !slices.Equal(got, []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("degraded review calls = %q", got)
+	}
+}
+
+func TestModelPollsPendingHealthOnlyFromCurrentIdleReview(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	request := application.Request{Service: testService}
+	operations.snapshot.Plan.Health = application.HealthConvergencePending
+	operations.snapshot.Plan.HealthPoll = time.Second
+	operations.snapshot.Plan.Observation.Lifecycle = application.WorkloadLifecycleRunning
+	operations.snapshot.Plan.Observation.Health = application.WorkloadHealth{
+		Status: application.WorkloadHealthStarting,
+	}
+
+	command := state.startSnapshot(request)
+	if command == nil {
+		t.Fatal("pending snapshot command is nil")
+	}
+	_, poll := state.Update(command())
+	review := reviewPageValue(t, state)
+	if poll == nil || review.plan.health != application.HealthConvergencePending {
+		t.Fatalf("pending review = %#v, poll = %#v", review, poll)
+	}
+	sequence := state.sequence
+	before := len(operations.recordedCalls())
+	if state.handleHealthPoll(healthPollMsg{sequence: sequence - 1}) != nil ||
+		len(operations.recordedCalls()) != before {
+		t.Fatal("stale health poll started an operation")
+	}
+	state.page = detailsPage{review: review}
+	if state.handleHealthPoll(healthPollMsg{sequence: sequence}) != nil ||
+		len(operations.recordedCalls()) != before {
+		t.Fatal("health poll outside review started an operation")
+	}
+	state.page = review
+	state.busy = true
+	if state.handleHealthPoll(healthPollMsg{sequence: sequence}) != nil {
+		t.Fatal("health poll started while busy")
+	}
+	state.busy = false
+	operations.snapshot.Plan.Health = application.HealthConvergenceNone
+	operations.snapshot.Plan.HealthPoll = 0
+	deliver(t, state, state.handleHealthPoll(healthPollMsg{sequence: sequence}))
+	if got := operations.recordedCalls(); !slices.Equal(got, []string{
+		snapshotCall, evidenceCall, snapshotCall, evidenceCall,
+	}) {
+		t.Fatalf("current health poll calls = %q", got)
+	}
+}
+
+func TestPendingHealthNavigationReturnsThroughFreshSnapshot(t *testing.T) {
+	t.Parallel()
+
+	newPendingReview := func() reviewPage {
+		return reviewPage{
+			request: application.Request{Service: testService},
+			plan: planView{
+				health: application.HealthConvergencePending,
+				status: statusReady,
+			},
+		}
+	}
+
+	state, _, operations := newTestModel(t)
+	review := newPendingReview()
+	if command := state.handleDetailsKey(detailsPage{review: review}, keyEscape); command == nil {
+		t.Fatal("returning from pending health details did not refresh")
+	} else {
+		command()
+	}
+	if got := operations.recordedCalls(); !slices.Equal(got, []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("details return calls = %q", got)
+	}
+
+	state, _, operations = newTestModel(t)
+	review = newPendingReview()
+	if command := state.handleContextualHelpKey(
+		contextualHelpPage{previous: review}, keyEscape,
+	); command == nil {
+		t.Fatal("returning from pending health help did not refresh")
+	} else {
+		command()
+	}
+	if got := operations.recordedCalls(); !slices.Equal(got, []string{snapshotCall, evidenceCall}) {
+		t.Fatalf("help return calls = %q", got)
+	}
+
+	state, _, _ = newTestModel(t)
+	review.plan.health = application.HealthConvergenceNone
+	if command := state.handleDetailsKey(detailsPage{review: review}, keyEscape); command != nil {
+		t.Fatal("settled health details return refreshed")
+	}
+	if command := state.handleContextualHelpKey(
+		contextualHelpPage{previous: review}, keyEscape,
+	); command != nil {
+		t.Fatal("settled health help return refreshed")
+	}
+}
+
+func TestModelResumesHealthyTransactionOnce(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	request := application.Request{Service: testService}
+	operations.snapshot.Plan.Health = application.HealthConvergenceHealthy
+	operations.snapshot.Plan.Observation.Lifecycle = application.WorkloadLifecycleRunning
+	operations.snapshot.Plan.Observation.Health = application.WorkloadHealth{
+		Status: application.WorkloadHealthHealthy,
+	}
+
+	command := state.startSnapshot(request)
+	_, resume := state.Update(command())
+	if resume == nil || !state.applying {
+		t.Fatalf("healthy snapshot did not resume = %#v", state)
+	}
+	operations.snapshot.Plan.Health = application.HealthConvergenceNone
+	deliver(t, state, resume)
+	calls := operations.recordedCalls()
+	if count := strings.Count(strings.Join(calls, ","), applyCall); count != 1 {
+		t.Fatalf("healthy resume calls = %q", calls)
+	}
+}
+
+func TestModelConfirmsExactHealthResolutionWithBackAsDefault(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		health application.HealthConvergence
+		action application.HealthResolutionAction
+	}{
+		{
+			name: "upgrade rollback", health: application.HealthConvergenceDegraded,
+			action: application.HealthResolutionRollback,
+		},
+		{
+			name: "adoption cancel", health: application.HealthConvergencePending,
+			action: application.HealthResolutionCancelAdoption,
+		},
+		{
+			name: "restore start retry", health: application.HealthConvergenceDegraded,
+			action: application.HealthResolutionRetryRestoreStart,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, _, operations := newTestModel(t)
+			transactionID := strings.Repeat("a", 32)
+			review := reviewPage{
+				request: application.Request{Service: testService},
+				plan: planView{
+					project: testProject, service: testService, status: statusReady,
+					health: test.health, healthPoll: time.Second,
+					transaction: transactionID, resolution: test.action,
+				},
+			}
+			state.page = review
+			state.handleReviewKey(review, keyEnter)
+			confirmation, valid := state.page.(healthConfirmationPage)
+			if !valid || confirmation.focus != confirmationBack {
+				t.Fatalf("initial health confirmation = %#v", state.page)
+			}
+			state.handleHealthConfirmationKey(confirmation, keyEnter)
+			if len(operations.recordedResolutions()) != 0 {
+				t.Fatal("default Back applied a health resolution")
+			}
+
+			state.page = review
+			state.handleReviewKey(review, keyEnter)
+			confirmation, valid = state.page.(healthConfirmationPage)
+			if !valid {
+				t.Fatalf("health confirmation page = %T", state.page)
+			}
+			for _, navigation := range []string{keyLeft, keyRight, keyShiftTab} {
+				state.page = confirmation
+				state.handleHealthConfirmationKey(confirmation, navigation)
+				focused, focusedValid := state.page.(healthConfirmationPage)
+				if !focusedValid || focused.focus != confirmationApply {
+					t.Fatalf("health confirmation %s did not change focus: %#v", navigation, state.page)
+				}
+			}
+			state.page = confirmation
+			state.handleHealthConfirmationKey(confirmation, keyTab)
+			confirmation, valid = state.page.(healthConfirmationPage)
+			if !valid {
+				t.Fatalf("focused health confirmation page = %T", state.page)
+			}
+			deliver(t, state, state.handleHealthConfirmationKey(confirmation, keyEnter))
+			want := application.HealthResolution{
+				Transaction: transactionID, Action: test.action,
+				Observation: review.plan.healthProof,
+			}
+			if got := operations.recordedResolutions(); !slices.Equal(got, []application.HealthResolution{want}) {
+				t.Fatalf("health resolutions = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestModelHealthRecoveryDoesNotOpenMutationOptions(t *testing.T) {
+	t.Parallel()
+
+	state, _, operations := newTestModel(t)
+	review := reviewPage{
+		request: application.Request{Service: testService},
+		plan: planView{
+			health: application.HealthConvergencePending, healthPoll: time.Second,
+			status: statusReady,
+		},
+	}
+	state.page = review
+	state.handleReviewKey(review, "o")
+	if _, valid := state.page.(detailsPage); !valid {
+		t.Fatalf("health options shortcut opened %T", state.page)
+	}
+	state.page = review
+	review.focus = reviewExplore
+	state.handleReviewKey(review, keyEnter)
+	if _, valid := state.page.(detailsPage); !valid {
+		t.Fatalf("health secondary action opened %T", state.page)
+	}
+	state.page = review
+	if command := state.handleReviewKey(review, keyQuit); command == nil ||
+		len(operations.recordedResolutions()) != 0 {
+		t.Fatal("quitting health review applied a resolution")
+	}
+
+	state.page = review
+	review.focus = reviewContinue
+	if command := state.handleReviewKey(review, keyEnter); command == nil {
+		t.Fatal("health review without a resolution did not refresh")
+	}
+	state.finishOperation()
+}
+
 func TestModelRequiresEvidenceAndSafePlanProjection(t *testing.T) {
 	t.Parallel()
 
@@ -727,6 +1553,13 @@ func TestModelRequiresEvidenceAndSafePlanProjection(t *testing.T) {
 	deliver(t, state, state.startSnapshot(request))
 	if !errors.Is(state.err, errInvalidInput) || state.status != "Review content could not be displayed safely" {
 		t.Fatalf("unsafe plan state = %#v", state)
+	}
+
+	operations.snapshot.Plan.Project = testProject
+	operations.snapshot.Plan.Health = application.HealthConvergence("new")
+	deliver(t, state, state.startSnapshot(request))
+	if !errors.Is(state.err, errInvalidInput) || state.status != "Review content could not be displayed safely" {
+		t.Fatalf("invalid health convergence = %#v", state)
 	}
 
 	operations.snapshotErr = errTestTUI
@@ -756,6 +1589,22 @@ func TestModelInvalidatesConfirmationBelowCompactFloor(t *testing.T) {
 		t.Fatalf("hard-floor confirmation = %#v", state)
 	}
 
+	healthReview := reviewPage{plan: planView{
+		status: statusReady, health: application.HealthConvergenceDegraded,
+		resolution: application.HealthResolutionRollback,
+	}}
+	state.page = healthReview
+	state.handleReviewKey(healthReview, keyEnter)
+	if _, valid := state.page.(healthConfirmationPage); valid ||
+		state.status != "Resize to continue to confirmation" {
+		t.Fatalf("hard-floor health confirmation = %#v", state)
+	}
+	state.page = healthConfirmationPage{review: healthReview}
+	state.handleHealthConfirmationKey(healthConfirmationPage{review: healthReview}, keyEnter)
+	if _, valid := state.page.(reviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("active hard-floor health confirmation = %#v", state)
+	}
+
 	state.resize(defaultWidth, defaultHeight)
 	preview := servicePreviewPage{draft: ServiceDraft{
 		Runtime: testRuntime, Image: testImage, Service: testService, ComposePath: testServicePath,
@@ -767,6 +1616,42 @@ func TestModelInvalidatesConfirmationBelowCompactFloor(t *testing.T) {
 	}
 }
 
+func TestModelDismissesHealthConfirmationWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	review := reviewPage{plan: planView{
+		status: statusReady, health: application.HealthConvergencePending,
+		healthPoll: time.Second, resolution: application.HealthResolutionCancelAdoption,
+	}}
+	for _, tt := range []struct {
+		name string
+		key  string
+		quit bool
+	}{
+		{name: "escape", key: keyEscape},
+		{name: "quit", key: keyQuit, quit: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			state, _, operations := newTestModel(t)
+			current := healthConfirmationPage{review: review, focus: confirmationBack}
+			state.page = current
+
+			command := state.handleHealthConfirmationKey(current, tt.key)
+			if tt.quit {
+				if command == nil {
+					t.Fatal("quit command is nil")
+				}
+			} else if _, valid := state.page.(reviewPage); !valid || command == nil {
+				t.Fatalf("dismissed health confirmation = %#v, command = %#v", state.page, command)
+			}
+			if len(operations.recordedResolutions()) != 0 {
+				t.Fatal("dismissing health confirmation applied a resolution")
+			}
+		})
+	}
+}
+
 //nolint:cyclop // One contract keeps every allowed and denied export boundary together.
 func TestModelExportsOnlyIdleReviewDetailsAtSafeLayout(t *testing.T) {
 	t.Parallel()
@@ -774,6 +1659,9 @@ func TestModelExportsOnlyIdleReviewDetailsAtSafeLayout(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	review := reviewPage{plan: planView{current: "current-image", proposed: "proposed-image"}}
 	state.page = review
+	if command := state.handleKey(key("z")); command != nil {
+		t.Fatalf("unbound review key command = %#v", command)
+	}
 	if command := state.handleKey(key("x")); command == nil ||
 		!strings.Contains(state.result.Export, "CURRENT\ncurrent-image\n\nPROPOSED\nproposed-image") {
 		t.Fatalf("review export = %q, command = %#v", state.result.Export, command)
@@ -840,11 +1728,14 @@ func TestModelObservesEventsWithoutChangingFlowState(t *testing.T) {
 	state.observeApplicationEvent(eventMsg{sequence: 7, event: event})
 	state.page = confirmationPage{review: review}
 	state.observeApplicationEvent(eventMsg{sequence: 7, event: event})
+	state.page = healthConfirmationPage{review: review}
+	state.observeApplicationEvent(eventMsg{sequence: 7, event: event})
 	state.page = homePage{}
 	state.observeApplicationEvent(eventMsg{sequence: 7, event: event})
-	if len(state.timeline.entries) != 4 || state.timeline.entries[1].outcome != observationCorrelated ||
+	if len(state.timeline.entries) != 5 || state.timeline.entries[1].outcome != observationCorrelated ||
 		state.timeline.entries[2].outcome != observationCorrelated ||
-		state.timeline.entries[3].outcome != observationStale {
+		state.timeline.entries[3].outcome != observationCorrelated ||
+		state.timeline.entries[4].outcome != observationStale {
 		t.Fatalf("page correlations = %#v", state.timeline.entries)
 	}
 }
@@ -897,6 +1788,79 @@ func TestModelRoutesPageNavigationAndContext(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // The table covers every text-editing page variant that suppresses letter shortcuts.
+func TestModelOpensContextualHelpOutsideTextEditing(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	review := reviewPage{plan: planView{
+		project: testProject, service: testService, runtime: testRuntime, status: statusReady,
+	}}
+	state.page = review
+	state.status = testStableStatus
+	state.handleKey(key("?"))
+	help, valid := state.page.(contextualHelpPage)
+	if !valid || help.location != testProject+" / "+testService+" / "+testRuntime ||
+		!strings.Contains(help.keys, "o Explore") || state.status != testStableStatus {
+		t.Fatalf("contextual help = %#v, status %q", state.page, state.status)
+	}
+	state.handleKey(key(testUnknownValue))
+	if _, valid := state.page.(contextualHelpPage); !valid {
+		t.Fatalf("unknown help key changed page to %T", state.page)
+	}
+	state.handleKey(key("?"))
+	if _, valid := state.page.(reviewPage); !valid {
+		t.Fatalf("closing help returned to %T", state.page)
+	}
+	state.handleKey(key("?"))
+	state.handleKey(key(keyEscape))
+	if _, valid := state.page.(reviewPage); !valid {
+		t.Fatalf("escaping help returned to %T", state.page)
+	}
+	state.handleKey(key("?"))
+	if command := state.handleKey(key(keyQuit)); command == nil {
+		t.Fatal("contextual help quit command is nil")
+	}
+
+	for _, test := range []struct {
+		page page
+		want bool
+	}{
+		{page: openPathPage{}, want: true},
+		{page: addServicePage{}, want: true},
+		{page: deploymentValuePage{}, want: true},
+		{page: llmQuestionPage{}, want: true},
+		{page: registrationPage{step: registrationRemoteStep}, want: true},
+		{page: registrationPage{step: registrationModeStep}},
+		{page: llmConfigurationPage{step: llmModelStep}, want: true},
+		{page: llmConfigurationPage{step: llmProviderStep}},
+		{page: commitPage{kind: commitKindService, editing: true}, want: true},
+		{page: commitPage{kind: commitKindService}},
+		{page: reviewPage{}},
+	} {
+		if got := pageAcceptsText(test.page); got != test.want {
+			t.Fatalf("pageAcceptsText(%T) = %t, want %t", test.page, got, test.want)
+		}
+	}
+	if pageAcceptsText(nil) {
+		t.Fatal("nil page accepts text")
+	}
+
+	state.page = openPathPage{}
+	state.handleKey(key("?"))
+	if current := openPathPageValue(t, state); current.value != "?" {
+		t.Fatalf("text input after ? = %q", current.value)
+	}
+
+	state.resize(fullMinimumWidth, fullMinimumHeight)
+	state.page = confirmationPage{review: review, focus: confirmationApply}
+	state.handleKey(key("?"))
+	state.resize(hardMinimumWidth, hardMinimumHeight)
+	if _, valid := state.page.(reviewPage); !valid || state.status != statusReviewLarger {
+		t.Fatalf("narrow help confirmation = %T, status %q", state.page, state.status)
+	}
+}
+
 //nolint:cyclop,funlen,gocognit,gocyclo,maintidx // One contract covers every page-specific keyboard boundary.
 func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	t.Parallel()
@@ -904,7 +1868,8 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
-	commit := commitServicePage{
+	commit := commitPage{
+		kind:    commitKindService,
 		preview: preview,
 		staged:  workspace.staged,
 		message: workspace.staged.CommitMessage,
@@ -917,9 +1882,11 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	pages := []page{
 		homePage{}, openPathPage{}, sourceDiagnosticPage{}, registrationPage{},
 		registrationConfirmationPage{}, addServicePage{}, servicePreviewPage{},
-		stageServiceConfirmationPage{}, commitServicePage{}, stagedDiffPage{},
+		stageServiceConfirmationPage{}, commitPage{}, stagedDiffPage{},
 		unsignedCommitConfirmationPage{}, preparationRequiredPage{}, selectServicePage{},
-		reviewPage{}, detailsPage{}, confirmationPage{},
+		reviewPage{}, reviewOptionsPage{}, explainPage{}, detailsPage{}, confirmationPage{}, llmConfigurationPage{},
+		llmSaveConfirmationPage{}, llmDiscardConfirmationPage{}, llmSaveOutcomeUnknownPage{}, llmQuestionPage{},
+		llmNetworkConfirmationPage{}, llmChoicesPage{}, contextualHelpPage{},
 	}
 	for _, current := range pages {
 		current.isPage()
@@ -1073,7 +2040,7 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	for _, name := range []string{keyLeft, keyRight, keyShiftTab} {
 		state.page = commit
 		state.handleKey(key(name))
-		current := commitServicePageValue(t, state)
+		current := commitPageValue(t, state)
 		if current.focus != confirmationApply {
 			t.Fatalf("commit review %s did not change focus", name)
 		}
@@ -1085,15 +2052,15 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	state.handleKey(key("j"))
 	state.handleKey(key("e"))
 	state.handleKey(key("esc"))
-	if current := commitServicePageValue(t, state); current.editing {
+	if current := commitPageValue(t, state); current.editing {
 		t.Fatal("commit message remained in edit mode")
 	}
-	current := commitServicePageValue(t, state)
+	current := commitPageValue(t, state)
 	current.editing = true
 	current.message = strings.Repeat("x", maximumCommitMessageBytes)
 	state.page = current
 	state.handleKey(key("x"))
-	if got := commitServicePageValue(t, state).message; len(got) != maximumCommitMessageBytes {
+	if got := commitPageValue(t, state).message; len(got) != maximumCommitMessageBytes {
 		t.Fatalf("oversized commit message length = %d", len(got))
 	}
 	state.page = commit
@@ -1120,7 +2087,7 @@ func TestModelKeyboardBoundaryContracts(t *testing.T) {
 	state.resize(hardMinimumWidth, hardMinimumHeight)
 	state.page = unsignedCommitConfirmationPage{commit: commit, focus: confirmationApply}
 	state.handleKey(key("enter"))
-	if _, valid := state.page.(commitServicePage); !valid || state.status != statusReviewLarger {
+	if _, valid := state.page.(commitPage); !valid || state.status != statusReviewLarger {
 		t.Fatalf("small unsigned confirmation = %#v", state)
 	}
 	state.resize(defaultWidth, defaultHeight)
@@ -1230,7 +2197,9 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 	state, _, operations := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
-	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{
+		kind: commitKindService, preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage,
+	}
 
 	state.sequence = 10
 	state.status = testStableStatus
@@ -1239,7 +2208,7 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 		serviceStageResultMsg{sequence: 9, err: errTestTUI},
 		serviceCommitResultMsg{sequence: 9, err: errTestTUI},
 		serviceSuspendResultMsg{sequence: 9, err: errTestTUI},
-		registrationResultMsg{sequence: 9, result: RegistrationResult{Blocker: BlockerInvalid}},
+		registrationResultMsg{sequence: 9, result: RegistrationResult{Failure: RepositorySetupInvalidInput}},
 	} {
 		state.Update(message)
 	}
@@ -1304,10 +2273,10 @@ func TestModelContainsWorkspaceResultsAndCanonicalInputs(t *testing.T) {
 	state.busy = true
 	state.Update(registrationResultMsg{
 		sequence: state.sequence,
-		result:   RegistrationResult{Blocker: BlockerUnavailable},
+		result:   RegistrationResult{Failure: RepositorySetupUnavailable},
 	})
-	if state.status != "Compose source is unavailable" {
-		t.Fatalf("registration blocker status = %q", state.status)
+	if state.status != repositorySetupUnavailableStatus {
+		t.Fatalf("registration failure status = %q", state.status)
 	}
 
 	state.sequence++
@@ -1460,7 +2429,9 @@ func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	preview := servicePreviewPage{input: testRuntimeCommand, draft: workspace.draft}
-	commit := commitServicePage{preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{
+		kind: commitKindService, preview: preview, staged: workspace.staged, message: workspace.staged.CommitMessage,
+	}
 	registration := registrationPage{
 		step: registrationCheckoutStep, mode: RepositorySetupExisting,
 		remote: testExistingRemote, checkout: testRepositoryPath,
@@ -1475,7 +2446,7 @@ func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
 	commit.focus = confirmationApply
 	state.page = commit
 	state.invalidateConfirmation()
-	if current := commitServicePageValue(t, state); current.editing || current.focus != confirmationBack {
+	if current := commitPageValue(t, state); current.editing || current.focus != confirmationBack {
 		t.Fatalf("invalidated commit review = %#v", current)
 	}
 
@@ -1508,5 +2479,35 @@ func TestModelRemainingStateTransitionBoundaries(t *testing.T) {
 	deliver(t, state, command)
 	if _, valid := state.page.(servicePreviewPage); !valid {
 		t.Fatalf("Back-and-save page = %T", state.page)
+	}
+}
+
+func TestCommitPageRejectsUnknownOwner(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestModel(t)
+	invalid := commitPage{kind: commitKind(255)}
+	for _, current := range []page{
+		invalid,
+		stagedDiffPage{commit: invalid},
+		unsignedCommitConfirmationPage{commit: invalid},
+	} {
+		state.page = current
+		if _, handled := state.handleCommitPageKey(key(keyEnter)); handled {
+			t.Fatalf("handleCommitPageKey(%T) accepted unknown owner", current)
+		}
+		if _, valid := state.commitPageBody(80, 24); valid {
+			t.Fatalf("commitPageBody(%T) accepted unknown owner", current)
+		}
+		if _, valid := state.commitFooter(); valid {
+			t.Fatalf("commitFooter(%T) accepted unknown owner", current)
+		}
+	}
+	if command := state.startCommit(invalid, false); command != nil || !errors.Is(state.err, errInvalidInput) {
+		t.Fatalf("startCommit(unknown) = %v, %v", command, state.err)
+	}
+	state.err = nil
+	if command := state.startCommitDiscard(invalid); command != nil || !errors.Is(state.err, errInvalidInput) {
+		t.Fatalf("startCommitDiscard(unknown) = %v, %v", command, state.err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/terminaltext"
 )
 
@@ -28,17 +29,20 @@ const (
 	detailsPadding     = 2
 	selectionBaseRows  = 3
 	reviewBodyBaseRows = 7
-	reviewStatusRows   = 7
+	reviewStatusRows   = 9
+	statusCardBorders  = 2
+	statusCardPadding  = 2
 	detailsBaseRows    = 12
 	diagnosticBaseRows = 16
-	commitBaseRows     = 10
-	stagedDiffBaseRows = 6
+	helpBodyBaseRows   = 8
+	reviewOptionsRows  = 3
 	colorAmber         = "\x1b[38;5;214m"
 	colorMuted         = "\x1b[38;5;245m"
 	colorSuccess       = "\x1b[38;5;42m"
 	colorFailure       = "\x1b[38;5;196m"
 	colorReset         = "\x1b[0m"
 	confirmationKeys   = "Tab Focus   Enter Choose   Esc Back   q Quit"
+	scrollBackKeys     = "Up/Down Scroll   d/Esc Back   q Quit"
 )
 
 type layoutTier uint8
@@ -119,7 +123,7 @@ func (state *model) fullView(width, height int) []string {
 		if index < len(body) {
 			right = body[index]
 		}
-		lines = append(lines, padCells(left, fullRailWidth)+state.symbol(" │ ", " | ")+right)
+		lines = append(lines, padCells(left, fullRailWidth)+state.symbol("│ ", "| ")+right)
 	}
 	lines = append(lines, horizontal, state.footer(width))
 
@@ -157,6 +161,7 @@ func (state *model) compactBody(width, height int) []string {
 	return body[:min(len(body), height)]
 }
 
+//nolint:cyclop // This switch is the closed page-to-footer contract for the hard-floor layout.
 func (state *model) hardFloorView(width int) []string {
 	next := "q Quit"
 	switch state.page.(type) {
@@ -166,16 +171,35 @@ func (state *model) hardFloorView(width int) []string {
 		next = "Esc Back   q Quit"
 	case sourceDiagnosticPage:
 		next = "Up/Down Scroll   Enter Back"
+	case contextualHelpPage:
+		next = "?/Esc Back   q Quit"
+	case deploymentDraftConfirmationPage, llmDiscardConfirmationPage:
+		next = "Esc Continue editing"
 	case addServicePage, servicePreviewPage, stageServiceConfirmationPage,
-		commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage,
-		deploymentFieldsPage, deploymentValuePage, deploymentPreviewPage,
-		stageDeploymentConfirmationPage, deploymentHistoryPage,
-		restoreDeploymentConfirmationPage, preparationRequiredPage:
+		commitPage, stagedDiffPage, unsignedCommitConfirmationPage,
+		deploymentFieldsPage, deploymentValuePage, deploymentPreviewPage, deploymentDetailsPage,
+		stageDeploymentConfirmationPage, deploymentDiffPage,
+		deploymentHistoryPage, restoreDeploymentConfirmationPage, preparationRequiredPage, llmConfigurationPage,
+		llmSaveConfirmationPage, llmSaveOutcomeUnknownPage,
+		llmQuestionPage, llmNetworkConfirmationPage, llmChoicesPage:
 		next = "Esc Back   q Quit"
+	case registrationPage, registrationConfirmationPage:
+		next = state.pageFooterKeys()
 	case selectServicePage:
 		next = "Enter Review   Esc Back"
-	case reviewPage, detailsPage, confirmationPage:
+	case reviewOptionsPage:
+		next = "Enter Select   Esc Back   q Quit"
+	case reviewPage, detailsPage, confirmationPage, healthConfirmationPage:
 		next = "r Review   Esc Back   q Quit"
+	case explainPage:
+		next = "Enter/Esc Fresh review   q Quit"
+	}
+	textInput := pageAcceptsText(state.page)
+	if textInput {
+		next = state.pageFooterKeys()
+	}
+	if _, help := state.page.(contextualHelpPage); !help && !textInput {
+		next = "? Help   " + next
 	}
 
 	return []string{
@@ -194,50 +218,54 @@ func (state *model) header(width int) string {
 }
 
 func (state *model) locationLine() string {
+	if current, valid := state.page.(contextualHelpPage); valid {
+		return current.location + " / Help"
+	}
+
+	return state.pageLocationLine()
+}
+
+//nolint:cyclop // This switch is the closed page-to-location contract for navigation context.
+func (state *model) pageLocationLine() string {
 	if location, valid := state.workspaceLocation(); valid {
+		return location
+	}
+	if location, valid := state.registrationLocation(); valid {
 		return location
 	}
 	switch current := state.page.(type) {
 	case reviewPage:
 		return current.plan.project + " / " + current.plan.service + " / " + current.plan.runtime
+	case reviewOptionsPage:
+		return current.review.plan.project + " / " + current.review.plan.service + " / Options"
+	case explainPage:
+		return current.review.plan.project + " / " + current.review.plan.service + " / Explain"
 	case detailsPage:
 		return current.review.plan.project + " / " + current.review.plan.service + " / Details"
 	case confirmationPage:
 		return current.review.plan.project + " / " + current.review.plan.service + " / Confirm"
+	case healthConfirmationPage:
+		return current.review.plan.project + " / " + current.review.plan.service + " / Health decision"
 	case selectServicePage:
 		return "Home / Select service"
 	case openPathPage:
 		return "Home / Open Compose file"
 	case sourceDiagnosticPage:
 		return "Home / Compose source issue"
-	case registrationPage, registrationConfirmationPage:
-		return "Home / Repository setup"
 	default:
 		return "Home"
 	}
 }
 
 func (state *model) workspaceLocation() (string, bool) {
+	if location, valid := state.llmWorkspaceLocation(); valid {
+		return location, true
+	}
 	if location, valid := state.deploymentWorkspaceLocation(); valid {
 		return location, true
 	}
 
 	return state.serviceWorkspaceLocation()
-}
-
-func (state *model) serviceWorkspaceLocation() (string, bool) {
-	switch state.page.(type) {
-	case addServicePage:
-		return "Home / Add service / Input", true
-	case servicePreviewPage, stageServiceConfirmationPage:
-		return "Home / Add service / Preview", true
-	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
-		return "Home / Add service / Commit", true
-	case preparationRequiredPage:
-		return "Home / Add service / Prepare", true
-	default:
-		return "", false
-	}
 }
 
 func (state *model) deploymentWorkspaceLocation() (string, bool) {
@@ -246,32 +274,22 @@ func (state *model) deploymentWorkspaceLocation() (string, bool) {
 		return "Home / Edit deployment / Field", true
 	case deploymentValuePage:
 		return "Home / Edit deployment / Value", true
-	case deploymentPreviewPage, stageDeploymentConfirmationPage,
-		restoreDeploymentConfirmationPage:
+	case deploymentPreviewPage, deploymentDetailsPage, stageDeploymentConfirmationPage, deploymentDiffPage,
+		deploymentDraftConfirmationPage, restoreDeploymentConfirmationPage:
 		return "Home / Edit deployment / Review", true
 	case deploymentHistoryPage:
 		return "Home / Edit deployment / History", true
-	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+	case commitPage, stagedDiffPage, unsignedCommitConfirmationPage:
 		return "Home / Edit deployment / Commit", state.deploymentCommitPage()
 	default:
 		return "", false
 	}
 }
 
-func (state *model) deploymentCommitPage() bool {
-	switch current := state.page.(type) {
-	case commitServicePage:
-		return current.deployment != nil
-	case stagedDiffPage:
-		return current.commit.deployment != nil
-	case unsignedCommitConfirmationPage:
-		return current.commit.deployment != nil
-	default:
-		return false
-	}
-}
-
 func (state *model) rail() []string {
+	if lines, valid := state.llmWorkspaceRail(); valid {
+		return lines
+	}
 	if lines, valid := state.deploymentWorkspaceRail(); valid {
 		return lines
 	}
@@ -281,9 +299,14 @@ func (state *model) rail() []string {
 	steps := []string{"Select", "Review", "Confirm", "Apply"}
 	current := 0
 	switch state.page.(type) {
-	case reviewPage, detailsPage:
+	case contextualHelpPage:
+		return []string{
+			state.muted("HELP"), "", state.accent(state.symbol("● ", "[*] ") + "Keyboard"),
+			"", state.muted("RETURN"), "Previous page",
+		}
+	case reviewPage, reviewOptionsPage, explainPage, detailsPage:
 		current = 1
-	case confirmationPage:
+	case confirmationPage, healthConfirmationPage:
 		current = 2
 	}
 	if state.busy && state.applying {
@@ -295,26 +318,6 @@ func (state *model) rail() []string {
 	return state.flowRail("FLOW", steps, current)
 }
 
-func (state *model) serviceWorkspaceRail() ([]string, bool) {
-	current := -1
-	switch state.page.(type) {
-	case addServicePage:
-		current = 0
-	case servicePreviewPage, stageServiceConfirmationPage:
-		current = 1
-	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
-		current = 2
-	case preparationRequiredPage:
-		current = 3
-	}
-	if current < 0 {
-		return nil, false
-	}
-	steps := []string{"Input", "Preview", "Commit", "Validate"}
-
-	return state.flowRail("ADD SERVICE", steps, current), true
-}
-
 func (state *model) deploymentWorkspaceRail() ([]string, bool) {
 	current := -1
 	switch state.page.(type) {
@@ -322,10 +325,10 @@ func (state *model) deploymentWorkspaceRail() ([]string, bool) {
 		current = 0
 	case deploymentValuePage:
 		current = 1
-	case deploymentPreviewPage, stageDeploymentConfirmationPage,
-		restoreDeploymentConfirmationPage:
+	case deploymentPreviewPage, deploymentDetailsPage, stageDeploymentConfirmationPage, deploymentDiffPage,
+		deploymentDraftConfirmationPage, restoreDeploymentConfirmationPage:
 		current = 2
-	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
+	case commitPage, stagedDiffPage, unsignedCommitConfirmationPage:
 		if state.deploymentCommitPage() {
 			current = 3
 		}
@@ -353,7 +356,6 @@ func (state *model) flowRail(label string, steps []string, current int) []string
 			lines = append(lines, state.muted(state.symbol("│", " |")))
 		}
 	}
-	lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
 
 	return lines
 }
@@ -362,8 +364,9 @@ func (state *model) body(width int) []string {
 	return state.bodyWithin(width, int(^uint(0)>>1))
 }
 
+//nolint:cyclop // This switch is the closed renderer for core navigation pages.
 func (state *model) bodyWithin(width, height int) []string {
-	lines, setupPage := state.auxiliaryPageBody(width)
+	lines, setupPage := state.auxiliaryPageBody(width, height)
 	if !setupPage {
 		switch current := state.page.(type) {
 		case homePage:
@@ -372,18 +375,41 @@ func (state *model) bodyWithin(width, height int) []string {
 			lines = state.openPathBody(current, width)
 		case sourceDiagnosticPage:
 			lines = state.sourceDiagnosticBody(current, width)
+		case contextualHelpPage:
+			lines = state.contextualHelpBody(current, width)
 		case selectServicePage:
 			lines = state.selectServiceBody(current, width)
 		case reviewPage:
 			lines = state.reviewBody(current, width)
+		case reviewOptionsPage:
+			lines = state.reviewOptionsBody(current, width)
+		case explainPage:
+			lines = state.explainBody(current, width)
 		case detailsPage:
 			lines = state.detailsBody(current, width)
 		case confirmationPage:
 			lines = state.confirmationBody(current, width)
+		case healthConfirmationPage:
+			lines = state.healthConfirmationBody(current, width)
 		}
 	}
 
 	return state.appendBodyState(lines)
+}
+
+func (state *model) contextualHelpBody(current contextualHelpPage, width int) []string {
+	lines := make([]string, 0, helpBodyBaseRows)
+	lines = append(lines,
+		state.title("Keyboard help"),
+		"",
+		"Keys for "+current.location+".",
+		"",
+		state.muted("AVAILABLE KEYS"),
+	)
+	lines = append(lines, terminaltext.Wrap(current.keys, max(width-detailsPadding, 1))...)
+	lines = append(lines, "", "Press ? or Esc to return.")
+
+	return lines
 }
 
 func (state *model) bodyStateRows() int {
@@ -395,9 +421,13 @@ func (state *model) appendBodyState(lines []string) []string {
 	if state.mutationOutcome != "" && (!reviewing || state.mutationOutcome != statusApplyCompleted) {
 		lines = append(lines, "", state.success(state.symbol("✓ ", "OK ")+state.mutationOutcome))
 	}
+	if state.deploymentFailure != "" {
+		lines = append(lines, "", state.failure(state.symbol("× ", "[FAILED] ")+"Action did not finish."),
+			deploymentFailureStatus(state.deploymentFailure))
+	}
 	if state.err != nil {
 		lines = append(lines, "", state.failure(state.symbol("× ", "[FAIL] ")+"Operation failed."),
-			"Exit and rerun the equivalent command with --debug for diagnostic context.")
+			"Exit and run `maniud --debug tui` for diagnostic context.")
 	}
 
 	return lines
@@ -410,7 +440,7 @@ func (state *model) sourceDiagnosticBody(current sourceDiagnosticPage, width int
 }
 
 func (state *model) sourceDiagnosticLines(diagnostic SourceDiagnostic, width int) []string {
-	position := "Unavailable"
+	position := displayUnavailable
 	if diagnostic.Line > 0 {
 		position = fmt.Sprintf("line %d", diagnostic.Line)
 		if diagnostic.Column > 0 {
@@ -435,7 +465,6 @@ func (state *model) sourceDiagnosticLines(diagnostic SourceDiagnostic, width int
 	lines = append(lines, terminaltext.Wrap(reason, max(width-detailsPadding, 1))...)
 	lines = append(lines, "", state.muted("ACTION"))
 	lines = append(lines, terminaltext.Wrap(action, max(width-detailsPadding, 1))...)
-	lines = append(lines, "", state.muted("Up/Down Scroll   Enter Back   q Quit"))
 
 	return lines
 }
@@ -443,20 +472,29 @@ func (state *model) sourceDiagnosticLines(diagnostic SourceDiagnostic, width int
 func sourceDiagnosticText(reason SourceDiagnosticReason) (string, string) {
 	switch reason {
 	case DiagnosticYAMLSyntax:
-		return "YAML syntax is invalid", "Fix the YAML syntax, then retry."
+		return "YAML syntax is invalid", "Fix the YAML syntax outside Maniud, exit, then rerun `maniud tui`."
 	case DiagnosticYAMLStructure:
-		return "YAML mapping is invalid", "Remove duplicate keys or invalid YAML values, then retry."
+		return "YAML mapping is invalid",
+			"Remove duplicate keys or invalid YAML values outside Maniud, exit, then rerun `maniud tui`."
 	case DiagnosticYAMLUnsupported:
-		return "YAML feature is not supported", "Replace the unsupported YAML feature with explicit values, then retry."
+		return "YAML feature is not supported",
+			"Replace the unsupported YAML feature outside Maniud, exit, then rerun `maniud tui`."
 	case DiagnosticComposeValidation:
-		return "Compose validation failed", "Fix the Compose fields or required variables, then retry."
+		return "Compose validation failed",
+			"Fix the Compose fields or required variables outside Maniud, exit, then rerun `maniud tui`."
 	default:
-		return "Compose validation failed", "Fix the Compose file, then retry."
+		return "Compose validation failed", "Fix the Compose file outside Maniud, exit, then rerun `maniud tui`."
 	}
 }
 
-func (state *model) auxiliaryPageBody(width int) ([]string, bool) {
+func (state *model) auxiliaryPageBody(width, height int) ([]string, bool) {
+	if lines, valid := state.llmPageBody(width); valid {
+		return lines, true
+	}
 	if lines, valid := state.registrationPageBody(width); valid {
+		return lines, true
+	}
+	if lines, valid := state.commitPageBody(width, height); valid {
 		return lines, true
 	}
 	if lines, valid := state.deploymentPageBody(width); valid {
@@ -464,38 +502,6 @@ func (state *model) auxiliaryPageBody(width int) ([]string, bool) {
 	}
 
 	return state.serviceWorkspacePageBody(width)
-}
-
-func (state *model) serviceWorkspacePageBody(width int) ([]string, bool) {
-	switch current := state.page.(type) {
-	case addServicePage:
-		return state.addServiceBody(current, width), true
-	case servicePreviewPage:
-		return state.servicePreviewBody(current, width), true
-	case stageServiceConfirmationPage:
-		return state.stageServiceConfirmationBody(current, width), true
-	case commitServicePage:
-		return state.commitServiceBody(current, width), true
-	case stagedDiffPage:
-		return state.stagedDiffBody(current, width), true
-	case unsignedCommitConfirmationPage:
-		return state.unsignedCommitConfirmationBody(current, width), true
-	case preparationRequiredPage:
-		return state.preparationRequiredBody(current, width), true
-	default:
-		return nil, false
-	}
-}
-
-func (state *model) registrationPageBody(width int) ([]string, bool) {
-	switch current := state.page.(type) {
-	case registrationPage:
-		return state.registrationBody(current, width), true
-	case registrationConfirmationPage:
-		return state.registrationConfirmationBody(current, width), true
-	default:
-		return nil, false
-	}
 }
 
 func (state *model) homeBody(current homePage, width int) []string {
@@ -555,173 +561,6 @@ func visibleHomeServices(total, cursor, limit int) (int, int) {
 	return start, start + limit
 }
 
-func (state *model) addServiceBody(current addServicePage, width int) []string {
-	value := current.value
-	if value == "" {
-		value = "docker://registry.example/service@sha256:..."
-	}
-
-	return []string{
-		state.title("Add service"),
-		"Enter a fixed image URI or a complete docker, podman, or nerdctl create/run command.",
-		"",
-		state.accent(terminaltext.Middle(value, width, "…") + state.symbol("▌", "_")),
-		"",
-		"Examples:",
-		"  docker://registry.example/service@sha256:<digest>",
-		"  docker run --name service registry.example/service@sha256:<digest>",
-		"",
-		state.muted("Enter Preview   Esc Back"),
-	}
-}
-
-func (state *model) servicePreviewBody(current servicePreviewPage, width int) []string {
-	draft := current.draft
-	title := "Review parsed service"
-	description := "The pasted command was parsed, not run."
-	continueLabel := "Review file mutation"
-	if draft.Recovered {
-		title = "Previous draft found"
-		description = "The saved draft matches this service input. Continue to review and commit it."
-		continueLabel = "Continue saved draft"
-	}
-	lines := []string{
-		state.title(title),
-		description,
-		"",
-		"Runtime   " + terminaltext.Middle(draft.Runtime, max(width-serviceFieldWidth, 1), "…"),
-		"Service   " + terminaltext.Middle(draft.Service, max(width-serviceFieldWidth, 1), "…"),
-		"Image     " + terminaltext.Middle(draft.Image, max(width-serviceFieldWidth, 1), "…"),
-		"Compose   " + terminaltext.Middle(draft.ComposePath, max(width-serviceFieldWidth, 1), "…"),
-	}
-	if draft.Preparation != "" {
-		lines = append(lines,
-			"Prepare   "+terminaltext.Middle(draft.Preparation, max(width-serviceFieldWidth, 1), "…"),
-		)
-	}
-	if draft.WarningCount > 0 {
-		lines = append(lines, fmt.Sprintf("Warnings  %d item(s) require review", draft.WarningCount))
-	}
-	lines = append(lines, "", state.choice(true, continueLabel, width), state.muted("Enter Continue   Esc Edit"))
-
-	return lines
-}
-
-func (state *model) stageServiceConfirmationBody(
-	current stageServiceConfirmationPage,
-	width int,
-) []string {
-	draft := current.preview.draft
-	action := "Write and stage files"
-	description := "Write the generated files to the desired-state repository and stage them in Git?"
-	if draft.Recovered {
-		action = "Stage saved draft"
-		description = "Stage the saved draft files in Git?"
-	}
-	lines := []string{
-		state.title("Confirm file mutation"),
-		description,
-		"No commit or runtime operation will run on this page.",
-		"",
-		"Compose   " + terminaltext.Middle(draft.ComposePath, max(width-serviceFieldWidth, 1), "…"),
-	}
-	if draft.Preparation != "" {
-		lines = append(lines,
-			"Prepare   "+terminaltext.Middle(draft.Preparation, max(width-serviceFieldWidth, 1), "…"),
-		)
-	}
-	lines = append(lines,
-		"",
-		state.choice(current.focus == confirmationBack, "Back", width),
-		state.choice(current.focus == confirmationApply, action, width),
-		"",
-		state.muted("Tab Change focus   Enter Select   Esc Back"),
-	)
-
-	return lines
-}
-
-func (state *model) commitServiceBody(current commitServicePage, width int) []string {
-	message := terminaltext.Middle(current.message, max(width-serviceFieldWidth, 1), "…")
-	if current.editing {
-		message += state.symbol("▌", "_")
-	}
-	diff := stagedServiceDiffLines(current, width)
-	diff = diff[current.scroll:min(current.scroll+diffSummaryRows, len(diff))]
-	lines := make([]string, 0, commitBaseRows+len(diff))
-	lines = append(lines,
-		state.title("Review and commit"),
-		"Target    "+terminaltext.Middle(current.staged.ComposePath, max(width-serviceFieldWidth, 1), "…"),
-		"Message   "+message,
-		"",
-		state.muted("STAGED DIFF"),
-	)
-	lines = append(lines, diff...)
-	lines = append(lines, "", state.choice(current.focus == confirmationBack, "Back and save draft", width),
-		state.choice(current.focus == confirmationApply, "Create signed commit", width), "",
-		state.muted("e Edit message   d Full diff   Up/Down Scroll   Tab Focus   Enter Select"))
-
-	return lines
-}
-
-func (state *model) stagedDiffBody(current stagedDiffPage, width int) []string {
-	lines := state.stagedDiffLines(current.commit, width)
-
-	return lines[current.scroll:]
-}
-
-func (state *model) stagedDiffLines(commit commitServicePage, width int) []string {
-	lines := make([]string, 0, stagedDiffBaseRows)
-	lines = append(lines, state.title("Staged diff"), "This page is read-only.", "")
-	lines = append(lines, stagedServiceDiffLines(commit, width)...)
-	lines = append(lines, "", state.muted("Up/Down Scroll   d/Esc Back"))
-
-	return lines
-}
-
-func stagedServiceDiffLines(current commitServicePage, width int) []string {
-	available := max(width-detailsPadding, 1)
-	if current.diffWidth == available && current.diffLines != nil {
-		return current.diffLines
-	}
-
-	return terminaltext.Wrap(current.staged.Diff, available)
-}
-
-func (state *model) unsignedCommitConfirmationBody(
-	current unsignedCommitConfirmationPage,
-	width int,
-) []string {
-	message := terminaltext.Middle(current.commit.message, max(width-serviceFieldWidth, 1), "…")
-
-	return []string{
-		state.title("Confirm unsigned commit"),
-		"Git could not create a signed commit with the configured identity and signing key.",
-		"The staged files are unchanged. Continue only if an unsigned history entry is acceptable.",
-		"",
-		"Message   " + message,
-		"",
-		state.choice(current.focus == confirmationBack, "Back", width),
-		state.choice(current.focus == confirmationApply, "Create unsigned commit", width),
-		"",
-		state.muted("Tab Change focus   Enter Select   Esc Back"),
-	}
-}
-
-func (state *model) preparationRequiredBody(current preparationRequiredPage, width int) []string {
-	return []string{
-		state.title("Preparation required"),
-		"The Compose commit was created, but this service needs a host preparation step.",
-		"Apply is disabled for the rest of this TUI session.",
-		"",
-		"Service   " + terminaltext.Middle(current.draft.Service, max(width-serviceFieldWidth, 1), "…"),
-		"Prepare   " + terminaltext.Middle(current.draft.Preparation, max(width-serviceFieldWidth, 1), "…"),
-		"",
-		state.choice(true, "Exit to next steps", width),
-		state.muted("Enter/Esc Exit"),
-	}
-}
-
 func (state *model) openPathBody(current openPathPage, width int) []string {
 	value := current.value
 	if value == "" {
@@ -734,80 +573,6 @@ func (state *model) openPathBody(current openPathPage, width int) []string {
 		"Enter a path from a clean Git checkout.",
 		"",
 		state.accent(line + state.symbol("▌", "_")),
-		"",
-		state.muted("Enter  Open    Esc  Back"),
-	}
-}
-
-func (state *model) registrationBody(current registrationPage, width int) []string {
-	switch current.step {
-	case registrationModeStep:
-		return []string{
-			state.title("Set up repository"),
-			"Choose where the desired-state repository comes from.",
-			"",
-			state.choice(current.cursor == 0, "Create private GitHub repository", width),
-			state.choice(current.cursor == 1, "Use existing Git repository", width),
-			"",
-			state.muted("Up/Down Choose   Enter Continue   Esc Skip"),
-		}
-	case registrationRemoteStep:
-		title := "GitHub repository"
-		description := "Enter OWNER/REPOSITORY. Maniud will invoke gh and create a private repository."
-		label := "Name  "
-		if current.mode == RepositorySetupExisting {
-			title = "Existing Git repository"
-			description = "Enter an HTTPS or file remote. This path uses git and does not invoke gh."
-			label = "Remote  "
-		}
-		line := label + terminaltext.Middle(current.remote, max(width-terminaltext.Width(label), 1), "…")
-
-		return []string{
-			state.title(title), description, "", state.accent(line + state.symbol("▌", "_")), "",
-			state.muted("Enter Continue   Esc Back"),
-		}
-	case registrationCheckoutStep:
-		label := "Path  "
-		line := label + terminaltext.Middle(current.checkout, max(width-terminaltext.Width(label), 1), "…")
-
-		return []string{
-			state.title("Local checkout"),
-			"Choose an absolute path for the desired-state checkout.",
-			"",
-			state.accent(line + state.symbol("▌", "_")),
-			"",
-			state.muted("Enter Review   Esc Back"),
-		}
-	default:
-		return []string{state.title("Set up repository"), "", "Repository setup is unavailable"}
-	}
-}
-
-func (state *model) registrationConfirmationBody(
-	current registrationConfirmationPage,
-	width int,
-) []string {
-	request := registrationRequest(current.registration)
-	remote := terminaltext.Middle(request.Remote, max(width-pathLabelWidth, 1), "…")
-	path := terminaltext.Middle(request.Checkout, max(width-pathLabelWidth, 1), "…")
-	description := "Create the private GitHub repository, clone it, and register the checkout?"
-	action := "Create and register"
-	if request.Mode == RepositorySetupExisting {
-		description = "Clone or reuse this Git repository and register the clean checkout?"
-		action = "Clone and register"
-	}
-
-	return []string{
-		state.title("Confirm repository setup"),
-		description,
-		"",
-		"Source  " + remote,
-		"Path    " + path,
-		"",
-		state.choice(current.focus == confirmationBack, "Back", width),
-		state.choice(current.focus == confirmationApply, action, width),
-		"",
-		state.muted("Tab Change focus   Enter Select   Esc Back"),
 	}
 }
 
@@ -825,21 +590,30 @@ func (state *model) selectServiceBody(current selectServicePage, width int) []st
 func (state *model) reviewBody(current reviewPage, width int) []string {
 	plan := current.plan
 	lines := make([]string, 0, reviewBodyBaseRows)
+	title := "Review image change"
+	description := "Compare the current and proposed image identities before continuing."
+	if plan.health != application.HealthConvergenceNone {
+		title = "Review workload health"
+		description = "Review the bounded health state before choosing the next action."
+	}
 	lines = append(lines,
-		state.title("Review image change"),
-		"Compare the current and proposed image identities before continuing.",
+		state.title(title),
+		description,
 		"",
-		fmt.Sprintf("Service   %s / %s", plan.project, plan.service),
-		fmt.Sprintf("Runtime   %s on %s", plan.runtime, plan.platform),
+		"Platform  "+plan.platform,
 		"Action    "+plan.kind,
-		"",
 	)
+	if plan.health != application.HealthConvergenceNone {
+		lines = append(lines, "Health    "+healthSummary(plan))
+	}
+	lines = append(lines, "")
 	lines = append(lines, imageComparison(plan.current, plan.proposed, width)...)
 	lines = append(lines, state.reviewStatusBody(current, width, false)...)
 
 	return lines
 }
 
+//nolint:cyclop // Compact and full layouts render the same closed health and action states.
 func (state *model) reviewStatusBody(review reviewPage, width int, compact bool) []string {
 	plan := review.plan
 	status := plan.status
@@ -847,28 +621,75 @@ func (state *model) reviewStatusBody(review reviewPage, width int, compact bool)
 		status = statusApplyCompleted
 	}
 	lines := make([]string, 0, reviewStatusRows)
-	if !compact {
+	if compact {
+		lines = append(lines, state.statusTitle(status))
+	} else {
 		lines = append(lines, "")
+		if plan.health == application.HealthConvergenceNone {
+			lines = append(lines, state.statusCard(status, width)...)
+		} else {
+			lines = append(lines, state.healthStatusCard(plan, width)...)
+		}
 	}
-	lines = append(lines, state.statusCard(status))
 	if plan.warningText != "" {
 		lines = append(lines, state.failure(plan.warningText))
-	}
-	if !compact {
-		lines = append(lines, "Compose validation and read-only runtime checks passed.")
 	}
 	if latest := state.timeline.latestCorrelated(review.correlation); latest != "" {
 		lines = append(lines, state.muted("Latest observation: "+latest))
 	}
-	if state.mutationOutcome != statusApplyCompleted {
+	if compact && plan.health == application.HealthConvergenceNone &&
+		state.mutationOutcome != statusApplyCompleted && state.err == nil {
 		lines = append(lines, "No runtime change has started.")
 	}
 	if !compact {
 		lines = append(lines, "")
 	}
-	lines = append(lines, state.choice(true, "Continue to confirmation", width))
-	if !compact {
-		lines = append(lines, state.muted("e Edit deployment   h History   d Details   x Export   r Refresh   Esc Back"))
+	primary, secondary := "Continue to confirmation", "Explore options"
+	if state.configReloadNeeded {
+		primary = "Reload LLM configuration"
+	} else if plan.health != application.HealthConvergenceNone {
+		primary = healthActionLabel(plan)
+		secondary = "View details"
+	}
+	lines = append(lines,
+		state.choice(review.focus == reviewContinue, primary, width),
+		state.choice(review.focus == reviewExplore, secondary, width),
+	)
+
+	return lines
+}
+
+func (state *model) reviewOptionsBody(current reviewOptionsPage, width int) []string {
+	options := []string{
+		"Explain this change",
+		labelAskLLMDeployment,
+		"Edit deployment parameters",
+		"View deployment history",
+	}
+	lines := make([]string, 0, reviewOptionsRows+len(options))
+	lines = append(lines,
+		state.title("Explore options"),
+		"Choose another way to inspect or update this service.",
+		"",
+	)
+	for index, option := range options {
+		lines = append(lines, state.choice(current.cursor == index, option, width))
+	}
+
+	return lines
+}
+
+func (state *model) explainBody(current explainPage, width int) []string {
+	plan := current.review.plan
+	lines := []string{
+		state.title("Why this change"),
+		"Maniud derived this explanation from the validated local plan.",
+		"",
+		"Action   " + plan.kind,
+		"Service  " + terminaltext.Middle(plan.project+" / "+plan.service, max(width-serviceFieldWidth, 1), "…"),
+		"Reason   The proposed immutable image identity differs from the current runtime identity.",
+		"",
+		"No provider request or mutation has started.",
 	}
 
 	return lines
@@ -895,15 +716,24 @@ func (state *model) detailsLines(review reviewPage, width int) []string {
 	available := max(width-detailsPadding, 1)
 	projection := state.detailProjection(review)
 	lines := make([]string, 0, detailsBaseRows)
+	title := "Image details"
+	description := "Full image identities. This page is read-only."
+	if review.plan.health != application.HealthConvergenceNone {
+		title = "Workload health details"
+		description = "Bounded runtime health and image identities. This page is read-only."
+	}
 	lines = append(lines,
-		state.title("Image details"),
-		"Full image identities. This page is read-only.",
+		state.title(title),
+		description,
 		"",
 		state.muted("CURRENT"),
 	)
 	lines = append(lines, terminaltext.Wrap(projection.current, available)...)
 	lines = append(lines, "", state.muted("PROPOSED"))
 	lines = append(lines, terminaltext.Wrap(projection.proposed, available)...)
+	if review.plan.health != application.HealthConvergenceNone {
+		lines = append(lines, "", state.muted("HEALTH"), healthSummary(review.plan))
+	}
 	lines = append(lines, "", state.muted("SESSION TIMELINE"))
 	if len(projection.timeline) == 0 {
 		lines = append(lines, "No application observations.")
@@ -916,7 +746,6 @@ func (state *model) detailsLines(review reviewPage, width int) []string {
 	if projection.truncated {
 		lines = append(lines, "Timeline truncated: yes")
 	}
-	lines = append(lines, "", state.muted("Up/Down Scroll   x Export   d/Esc Back"))
 
 	return lines
 }
@@ -931,35 +760,126 @@ func (state *model) confirmationBody(current confirmationPage, width int) []stri
 		"",
 		state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, "Apply", width),
-		"",
-		state.muted("Tab Change focus   Enter Choose   Esc Back"),
 	}
 }
 
-func (state *model) footer(width int) string {
-	if keys, valid := state.deploymentWorkspaceFooter(); valid {
-		return state.muted(terminaltext.Clip(keys, width))
+func (state *model) healthConfirmationBody(current healthConfirmationPage, width int) []string {
+	plan := current.review.plan
+	title := "Confirm health decision"
+	detail := "This action is no longer available if the transaction or workload health has changed."
+	action := "Apply health decision"
+	switch plan.resolution {
+	case application.HealthResolutionRollback:
+		action = "Rollback candidate"
+		detail = "Maniud will stop and discard the transaction-owned candidate."
+		if plan.restoresPrevious {
+			detail += " It will then restore the previous workload."
+		}
+	case application.HealthResolutionCancelAdoption:
+		action = "Cancel adoption"
+		detail = "Maniud will remove only the local adoption intent. The unmanaged workload will remain unchanged."
+	case application.HealthResolutionRetryRestoreStart:
+		action = "Retry restore start"
+		detail = "Maniud will restart the exact stopped predecessor shown here. " +
+			"The rolled-back candidate will remain discarded."
 	}
-	if keys, valid := state.serviceWorkspaceFooter(); valid {
-		return state.muted(terminaltext.Clip(keys, width))
+
+	return []string{
+		state.title(title),
+		fmt.Sprintf("Resolve health for %s / %s?", plan.project, plan.service),
+		detail,
+		"",
+		state.choice(current.focus == confirmationBack, "Back", width),
+		state.choice(current.focus == confirmationApply, action, width),
+	}
+}
+
+func healthActionLabel(plan planView) string {
+	switch plan.resolution {
+	case application.HealthResolutionRollback:
+		return "Rollback candidate"
+	case application.HealthResolutionCancelAdoption:
+		return "Cancel adoption"
+	case application.HealthResolutionRetryRestoreStart:
+		return "Retry restore start"
+	default:
+		return "Refresh health"
+	}
+}
+
+func healthSummary(plan planView) string {
+	state := plan.healthState
+	if state == "" {
+		state = displayUnavailable
+	}
+	if state == "unhealthy" && plan.healthFails > 0 {
+		return fmt.Sprintf("%s (%d failing checks)", state, plan.healthFails)
+	}
+
+	return state
+}
+
+func (state *model) footer(width int) string {
+	keys := state.footerKeys()
+	if _, help := state.page.(contextualHelpPage); !help && !pageAcceptsText(state.page) &&
+		!strings.Contains(keys, "? Help") {
+		keys = "? Help   " + keys
+	}
+
+	return state.muted(terminaltext.Clip(keys, width))
+}
+
+func (state *model) footerKeys() string {
+	if _, valid := state.page.(contextualHelpPage); valid {
+		return "?/Esc Back   q Quit"
+	}
+
+	return state.pageFooterKeys()
+}
+
+func (state *model) pageFooterKeys() string {
+	if keys, valid := state.workspaceFooter(); valid {
+		return keys
+	}
+	if keys, valid := state.registrationFooter(); valid {
+		return keys
 	}
 	keys := "↑/↓ Navigate   Enter Select   q Quit"
 	switch state.page.(type) {
 	case reviewPage:
-		keys = "Enter Continue   e Edit   h History   d Details   x Export   r Refresh   Esc Back   q Quit"
+		keys = "Tab Focus  Enter Choose  o Explore  d Details  x Export  r Refresh  Esc Back  q Quit"
+	case reviewOptionsPage:
+		keys = "Up/Down Navigate   Enter Select   Esc Back   q Quit"
+	case explainPage:
+		keys = "Enter/Esc Fresh review   q Quit"
 	case detailsPage:
 		keys = "↑/↓ Scroll   x Export   d/Esc Back   q Quit"
-	case confirmationPage:
+	case confirmationPage, healthConfirmationPage:
 		keys = confirmationKeys
 	case openPathPage:
 		keys = "Type path   Enter Open   Esc Back"
-	case registrationPage:
-		keys = "Edit path   Enter Review   Esc Skip"
-	case registrationConfirmationPage:
-		keys = confirmationKeys
+	case sourceDiagnosticPage:
+		keys = "Up/Down Scroll   Enter Back   q Quit"
 	}
 
-	return state.muted(terminaltext.Clip(keys, width))
+	return keys
+}
+
+func (state *model) workspaceFooter() (string, bool) {
+	if keys, valid := state.llmWorkspaceFooter(); valid {
+		return keys, true
+	}
+	if keys, valid := state.commitFooter(); valid {
+		return keys, true
+	}
+	if keys, valid := state.deploymentWorkspaceFooter(); valid {
+		return keys, true
+	}
+	if keys, valid := state.serviceWorkspaceFooter(); valid {
+		return keys, true
+	}
+
+	return "", false
 }
 
 func (state *model) deploymentWorkspaceFooter() (string, bool) {
@@ -969,103 +889,20 @@ func (state *model) deploymentWorkspaceFooter() (string, bool) {
 	case deploymentValuePage:
 		return "Type value   Enter Validate   Esc Back", true
 	case deploymentPreviewPage:
-		return "Enter Continue   Esc Back   q Quit", true
+		return "Up/Down Scroll   d Details   Enter Continue   Esc Back   q Quit", true
+	case deploymentDetailsPage:
+		return scrollBackKeys, true
+	case deploymentDiffPage:
+		return scrollBackKeys, true
+	case deploymentDraftConfirmationPage:
+		return "Tab Focus   Enter Choose   Esc Continue editing", true
 	case deploymentHistoryPage:
 		return "Up/Down Navigate   Enter Review restore   Esc Back", true
-	case stageDeploymentConfirmationPage, restoreDeploymentConfirmationPage:
+	case stageDeploymentConfirmationPage:
+		return "Tab Focus   Enter Choose   d Full diff   Esc Back   q Quit", true
+	case restoreDeploymentConfirmationPage:
 		return confirmationKeys, true
-	case commitServicePage, stagedDiffPage, unsignedCommitConfirmationPage:
-		if state.deploymentCommitPage() {
-			return state.serviceWorkspaceFooter()
-		}
 	}
 
 	return "", false
-}
-
-func (state *model) serviceWorkspaceFooter() (string, bool) {
-	switch state.page.(type) {
-	case addServicePage:
-		return "Type input   Enter Preview   Esc Back", true
-	case servicePreviewPage:
-		return "Enter Continue   Esc Edit   q Quit", true
-	case stageServiceConfirmationPage, unsignedCommitConfirmationPage:
-		return confirmationKeys, true
-	case commitServicePage:
-		return "e Edit   d Diff   Tab Focus   Enter Choose   q Quit", true
-	case stagedDiffPage:
-		return "Up/Down Scroll   d/Esc Back   q Quit", true
-	case preparationRequiredPage:
-		return "Enter/Esc Exit", true
-	default:
-		return "", false
-	}
-}
-
-func (state *model) statusCard(status string) string {
-	if status == statusApplyCompleted {
-		return state.success(state.symbol("✓ ", "[x] ") + status)
-	}
-
-	return state.accent(state.symbol("⬟ ", "[OK] ") + status)
-}
-
-func (state *model) choice(selected bool, label string, width int) string {
-	marker := "  "
-	if selected {
-		marker = state.accent(state.symbol("› ", "> "))
-	}
-
-	return marker + terminaltext.Middle(label, max(width-terminaltext.Width(marker), 1), "…")
-}
-
-func (state *model) symbol(unicodeValue, asciiValue string) string {
-	if state.options.Unicode {
-		return unicodeValue
-	}
-
-	return asciiValue
-}
-
-func (state *model) title(value string) string {
-	return state.accent(value)
-}
-
-func (state *model) accent(value string) string {
-	return state.color(colorAmber, value)
-}
-
-func (state *model) muted(value string) string {
-	return state.color(colorMuted, value)
-}
-
-func (state *model) success(value string) string {
-	return state.color(colorSuccess, value)
-}
-
-func (state *model) failure(value string) string {
-	return state.color(colorFailure, value)
-}
-
-func (state *model) color(code, value string) string {
-	if !state.options.Color {
-		return value
-	}
-
-	return code + value + colorReset
-}
-
-func padCells(value string, width int) string {
-	clipped := terminaltext.Clip(value, width)
-
-	return clipped + strings.Repeat(" ", max(width-terminaltext.Width(clipped), 0))
-}
-
-func fitView(lines []string, width, height int) string {
-	visible := lines[:min(len(lines), height)]
-	for index, line := range visible {
-		visible[index] = terminaltext.Clip(line, width)
-	}
-
-	return strings.Join(visible, "\n")
 }

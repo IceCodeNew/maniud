@@ -123,7 +123,7 @@ func TestTimelineValidationAndCorrelationBoundaries(t *testing.T) {
 	for _, kind := range []application.PlanKind{
 		"", application.PlanBootstrap, application.PlanAdopt, application.PlanUnchanged,
 		application.PlanUpgrade, application.PlanResume, application.PlanProbeUnknownEffect,
-		application.PlanRestore,
+		application.PlanRestore, application.PlanHealthDegraded,
 	} {
 		if !validEventPlan(kind) {
 			t.Fatalf("validEventPlan(%q) = false", kind)

@@ -35,8 +35,10 @@ const (
 	testUnknownValue     = "unknown"
 	testSecretValue      = "secret"
 	testOtherValue       = "other"
+	applyCall            = "apply"
 	dryRunCall           = "dry-run"
 	snapshotCall         = "snapshot"
+	stageCall            = "stage"
 	evidenceCall         = "evidence"
 	registeredAPIID      = "services/api.yaml"
 	testServicePath      = "services/service.yaml"
@@ -111,10 +113,12 @@ type operationsFixture struct {
 	mu             sync.Mutex
 	calls          []string
 	requests       []application.Request
+	resolutions    []application.HealthResolution
 	dryRunPlan     application.Plan
 	snapshot       application.OperationSnapshot
 	evidence       application.EvidenceBundle
 	applyErr       error
+	resolutionErr  error
 	dryRunErr      error
 	snapshotErr    error
 	evidenceErr    error
@@ -129,7 +133,7 @@ type workspaceFixture struct {
 	mu                   sync.Mutex
 	draft                ServiceDraft
 	staged               StagedService
-	commit               ServiceCommitResult
+	commit               CommitResult
 	previewErr           error
 	stageErr             error
 	commitErr            error
@@ -147,7 +151,7 @@ func (fixture *workspaceFixture) Preview(_ context.Context, input string) (Servi
 }
 
 func (fixture *workspaceFixture) Stage(context.Context) (StagedService, error) {
-	fixture.record("stage")
+	fixture.record(stageCall)
 
 	return fixture.staged, fixture.stageErr
 }
@@ -156,7 +160,7 @@ func (fixture *workspaceFixture) Commit(
 	_ context.Context,
 	message string,
 	unsigned bool,
-) (ServiceCommitResult, error) {
+) (CommitResult, error) {
 	fixture.record(fmt.Sprintf("commit:%t:%s", unsigned, message))
 
 	return fixture.commit, fixture.commitErr
@@ -242,8 +246,8 @@ func (*deploymentWorkspaceFixture) Commit(
 	context.Context,
 	string,
 	bool,
-) (DeploymentCommitResult, error) {
-	return DeploymentCommitResult{}, nil
+) (CommitResult, error) {
+	return CommitResult{}, nil
 }
 
 func (*deploymentWorkspaceFixture) Discard(context.Context) error {
@@ -270,7 +274,7 @@ func (fixture *operationsFixture) Apply(
 	ctx context.Context,
 	request application.Request,
 ) (application.Plan, error) {
-	fixture.record("apply", request)
+	fixture.record(applyCall, request)
 	if fixture.blockApply {
 		<-ctx.Done()
 		fixture.cancelOnce.Do(func() { close(fixture.cancelObserved) })
@@ -279,6 +283,20 @@ func (fixture *operationsFixture) Apply(
 	}
 
 	return fixture.snapshot.Plan, fixture.applyErr
+}
+
+func (fixture *operationsFixture) ResolveHealth(
+	_ context.Context,
+	request application.Request,
+	resolution application.HealthResolution,
+) (application.Plan, error) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	fixture.calls = append(fixture.calls, "resolve-health")
+	fixture.requests = append(fixture.requests, request)
+	fixture.resolutions = append(fixture.resolutions, resolution)
+
+	return fixture.snapshot.Plan, fixture.resolutionErr
 }
 
 func (fixture *operationsFixture) Snapshot(
@@ -314,6 +332,13 @@ func (fixture *operationsFixture) recordedCalls() []string {
 	defer fixture.mu.Unlock()
 
 	return slices.Clone(fixture.calls)
+}
+
+func (fixture *operationsFixture) recordedResolutions() []application.HealthResolution {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+
+	return slices.Clone(fixture.resolutions)
 }
 
 func newOperationsFixture() *operationsFixture {
@@ -368,8 +393,8 @@ func newTestModel(t *testing.T) (*model, *catalogFixture, *operationsFixture) {
 		pathResult:       OpenResult{Targets: []Target{target}},
 	}
 	operations := newOperationsFixture()
-	state := newModelWithDeployments(
-		t.Context(), catalog, newWorkspaceFixture(), nil, operations, NewEventStream(), Options{},
+	state := newModelWithCapabilities(
+		t.Context(), catalog, newWorkspaceFixture(), nil, nil, operations, NewEventStream(), Options{},
 	)
 	state.resize(defaultWidth, defaultHeight)
 
@@ -437,12 +462,12 @@ func registrationPageValue(t *testing.T, state *model) registrationPage {
 	return value
 }
 
-func commitServicePageValue(t *testing.T, state *model) commitServicePage {
+func commitPageValue(t *testing.T, state *model) commitPage {
 	t.Helper()
 
-	value, valid := state.page.(commitServicePage)
+	value, valid := state.page.(commitPage)
 	if !valid {
-		t.Fatalf("page = %T, want commitServicePage", state.page)
+		t.Fatalf("page = %T, want commitPage", state.page)
 	}
 
 	return value
@@ -471,6 +496,7 @@ func key(name string) tea.KeyPressMsg {
 		keyShiftTab: {Code: tea.KeyTab, Mod: tea.ModShift},
 		"backspace": {Code: tea.KeyBackspace},
 		"ctrl+c":    {Code: 'c', Mod: tea.ModCtrl},
+		"ctrl+e":    {Code: 'e', Mod: tea.ModCtrl},
 	}
 	if message, found := keys[name]; found {
 		return tea.KeyPressMsg(message)
@@ -535,23 +561,23 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 		{catalog: catalog, workspace: workspace, deployments: deployments, operations: operations, events: nil},
 	}
 	for _, test := range tests {
-		if _, err := Run(
+		if _, err := RunWithAssistant(
 			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.deployments,
-			test.operations, test.events, Options{},
+			nil, test.operations, test.events, Options{},
 		); !errors.Is(err, errInvalidInput) {
-			t.Fatalf("Run(invalid) error = %v", err)
+			t.Fatalf("RunWithAssistant(invalid) error = %v", err)
 		}
 	}
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := Run(
-		cancelled, nil, io.Discard, catalog, workspace, deployments, operations, events, Options{},
+	if _, err := RunWithAssistant(
+		cancelled, nil, io.Discard, catalog, workspace, deployments, nil, operations, events, Options{},
 	); !errors.Is(
 		err,
 		context.Canceled,
 	) {
-		t.Fatalf("Run(cancelled) error = %v", err)
+		t.Fatalf("RunWithAssistant(cancelled) error = %v", err)
 	}
 	hasDeadline, timeRemaining, suspendContextErr := workspace.recordedSuspendContext()
 	if !hasDeadline || suspendContextErr != nil || timeRemaining <= 0 || timeRemaining > workspaceSuspendTimeout {
@@ -564,19 +590,44 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 	}
 }
 
+func TestRunClosesAssistantOnInvalidDependencies(t *testing.T) {
+	t.Parallel()
+
+	workspace := newWorkspaceFixture()
+	operations := newOperationsFixture()
+	events := NewEventStream()
+	assistant := &assistantFixture{}
+	if _, err := RunWithAssistant(
+		t.Context(), nil, io.Discard, nil, workspace,
+		&deploymentAssistFixture{deploymentWorkflowFixture: newDeploymentWorkflowFixture()}, assistant,
+		operations, events, Options{},
+	); !errors.Is(err, errInvalidInput) || assistant.closed != 1 {
+		t.Fatalf("RunWithAssistant(invalid dependency) error = %v, closes = %d", err, assistant.closed)
+	}
+	assistant = &assistantFixture{}
+	if _, err := RunWithAssistant(
+		t.Context(), nil, io.Discard, &catalogFixture{}, workspace, &deploymentWorkspaceFixture{}, assistant,
+		operations, events, Options{},
+	); !errors.Is(err, errInvalidInput) || assistant.closed != 1 {
+		t.Fatalf("RunWithAssistant(invalid deployment workspace) error = %v, closes = %d", err, assistant.closed)
+	}
+}
+
 func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	t.Parallel()
 
 	ready := make(chan struct{})
 	catalog := &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
 	workspace := newWorkspaceFixture()
-	if _, err := Run(
+	assistant := &assistantFixture{}
+	if _, err := RunWithAssistant(
 		t.Context(),
 		&signalReader{ready: ready, content: []byte("q")},
 		io.Discard,
 		catalog,
 		workspace,
-		&deploymentWorkspaceFixture{},
+		&deploymentAssistFixture{deploymentWorkflowFixture: newDeploymentWorkflowFixture()},
+		assistant,
 		newOperationsFixture(),
 		NewEventStream(),
 		Options{},
@@ -586,14 +637,17 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	if !slices.Equal(workspace.recordedCalls(), []string{"suspend"}) {
 		t.Fatalf("Run(success) workspace calls = %q", workspace.recordedCalls())
 	}
+	if assistant.closed != 1 {
+		t.Fatalf("RunWithAssistant() closes = %d", assistant.closed)
+	}
 
 	ready = make(chan struct{})
 	catalog = &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
-	if _, err := Run(
+	if _, err := RunWithAssistant(
 		t.Context(), failingReader{ready: ready}, io.Discard, catalog, newWorkspaceFixture(),
-		&deploymentWorkspaceFixture{}, newOperationsFixture(), NewEventStream(), Options{},
+		&deploymentWorkspaceFixture{}, nil, newOperationsFixture(), NewEventStream(), Options{},
 	); !errors.Is(err, errTestTUI) {
-		t.Fatalf("Run(reader failure) error = %v", err)
+		t.Fatalf("RunWithAssistant(reader failure) error = %v", err)
 	}
 }
 
@@ -621,11 +675,11 @@ func TestRunReturnsContainedOperationFailure(t *testing.T) {
 		{ready: evidenceReady, content: []byte("q")},
 	}}
 	output := &renderSignalWriter{needle: []byte(registeredAPIID), ready: homeReady}
-	if _, err := Run(
+	if _, err := RunWithAssistant(
 		t.Context(), reader, output, catalog, newWorkspaceFixture(), &deploymentWorkspaceFixture{},
-		operations, NewEventStream(), Options{},
+		nil, operations, NewEventStream(), Options{},
 	); !errors.Is(err, errInvalidInput) {
-		t.Fatalf("Run(operation failure) error = %v", err)
+		t.Fatalf("RunWithAssistant(operation failure) error = %v", err)
 	}
 }
 
@@ -654,16 +708,16 @@ func TestRunReturnsFrozenExportAfterTerminalSession(t *testing.T) {
 		needles: [][]byte{[]byte(registeredAPIID), []byte("Review image change")},
 		ready:   []chan struct{}{homeReady, reviewReady},
 	}
-	result, err := Run(
+	result, err := RunWithAssistant(
 		t.Context(), reader, output, catalog, workspace, &deploymentWorkspaceFixture{},
-		newOperationsFixture(), NewEventStream(), Options{},
+		nil, newOperationsFixture(), NewEventStream(), Options{},
 	)
 	if err != nil || !strings.Contains(result.Export, "Maniud session details") ||
 		!strings.Contains(result.Export, "registry.example/team/api@sha256:") {
-		t.Fatalf("Run(export) = %q, %v", result.Export, err)
+		t.Fatalf("RunWithAssistant(export) = %q, %v", result.Export, err)
 	}
 	if !slices.Equal(workspace.recordedCalls(), []string{"suspend"}) {
-		t.Fatalf("Run(export) workspace calls = %q", workspace.recordedCalls())
+		t.Fatalf("RunWithAssistant(export) workspace calls = %q", workspace.recordedCalls())
 	}
 }
 
