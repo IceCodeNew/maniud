@@ -29,7 +29,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/sirupsen/logrus v1.10.2
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/mod v0.40.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
@@ -86,5 +86,5 @@ replace (
 	github.com/IceCodeNew/maniud/containerconfig/podman => ./containerconfig/podman
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv => ./containerconfig/runtimeargv
 	github.com/IceCodeNew/maniud/imageref => ./imageref
-	github.com/nikoksr/notify => github.com/IceCodeNew/notify v0.0.0-20260825033926-0a827094afac
+	github.com/nikoksr/notify => github.com/IceCodeNew/notify v0.0.0-20260904181137-39e4e26bcbde
 )
