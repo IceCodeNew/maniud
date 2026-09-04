@@ -3,10 +3,8 @@ package application
 
 import (
 	"errors"
-	"math"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/IceCodeNew/maniud/containerconfig"
 )
@@ -43,8 +41,8 @@ func TestDeploymentFieldsUseStableClosedIdentifiers(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // The table proves every typed field representation.
-func TestDeploymentPatchAppliesEveryTypedField(t *testing.T) {
+//nolint:cyclop // The table proves every closed field representation.
+func TestDeploymentPatchAppliesEveryField(t *testing.T) {
 	t.Parallel()
 
 	retries := 2
@@ -55,33 +53,33 @@ func TestDeploymentPatchAppliesEveryTypedField(t *testing.T) {
 	tests := []struct {
 		name  string
 		field DeploymentField
-		value DeploymentValue
+		value string
 		check func(containerconfig.Spec) bool
 	}{
-		{"cpus", DeploymentCPUs, DeploymentCPU(1.5), func(spec containerconfig.Spec) bool { return spec.CPUs == "1.5" }},
-		{"memory", DeploymentMemory, DeploymentBytes(512), func(spec containerconfig.Spec) bool { return spec.MemoryBytes == 512 }},
-		{"pids", DeploymentPIDs, DeploymentInteger(-1), func(spec containerconfig.Spec) bool { return spec.PidsLimit != nil && *spec.PidsLimit == -1 }},
-		{"restart", DeploymentRestart, DeploymentRestartPolicy("on-failure:3"), func(spec containerconfig.Spec) bool { return spec.Restart == "on-failure:3" }},
-		{"shared memory", DeploymentSharedMemory, DeploymentBytes(256), func(spec containerconfig.Spec) bool { return spec.SharedMemoryBytes == 256 }},
-		{"stop grace", DeploymentStopGrace, DeploymentDuration(5 * time.Second), func(spec containerconfig.Spec) bool { return spec.StopTimeout != nil && *spec.StopTimeout == 5 }},
-		{"init", DeploymentInit, DeploymentBoolean(true), func(spec containerconfig.Spec) bool { return spec.Init != nil && *spec.Init }},
-		{"read only", DeploymentReadOnly, DeploymentBoolean(false), func(spec containerconfig.Spec) bool { return spec.ReadOnly != nil && !*spec.ReadOnly }},
-		{"no new privileges", DeploymentNoNewPrivileges, DeploymentEnabled{}, func(spec containerconfig.Spec) bool { return spec.NoNewPrivileges }},
-		{"health interval", DeploymentHealthInterval, DeploymentDuration(5 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.Interval == "5s" }},
-		{"health timeout", DeploymentHealthTimeout, DeploymentDuration(6 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.Timeout == "6s" }},
-		{"health retries", DeploymentHealthRetries, DeploymentRetries(7), func(spec containerconfig.Spec) bool {
+		{"cpus", DeploymentCPUs, "1.5", func(spec containerconfig.Spec) bool { return spec.CPUs == "1.5" }},
+		{"memory", DeploymentMemory, "512", func(spec containerconfig.Spec) bool { return spec.MemoryBytes == 512 }},
+		{"pids", DeploymentPIDs, "-1", func(spec containerconfig.Spec) bool { return spec.PidsLimit != nil && *spec.PidsLimit == -1 }},
+		{"restart", DeploymentRestart, "on-failure:3", func(spec containerconfig.Spec) bool { return spec.Restart == "on-failure:3" }},
+		{"shared memory", DeploymentSharedMemory, "256", func(spec containerconfig.Spec) bool { return spec.SharedMemoryBytes == 256 }},
+		{"stop grace", DeploymentStopGrace, "5s", func(spec containerconfig.Spec) bool { return spec.StopTimeout != nil && *spec.StopTimeout == 5 }},
+		{"init", DeploymentInit, "true", func(spec containerconfig.Spec) bool { return spec.Init != nil && *spec.Init }},
+		{"read only", DeploymentReadOnly, "false", func(spec containerconfig.Spec) bool { return spec.ReadOnly != nil && !*spec.ReadOnly }},
+		{"no new privileges", DeploymentNoNewPrivileges, "true", func(spec containerconfig.Spec) bool { return spec.NoNewPrivileges }},
+		{"health interval", DeploymentHealthInterval, "5s", func(spec containerconfig.Spec) bool { return spec.Healthcheck.Interval == "5s" }},
+		{"health timeout", DeploymentHealthTimeout, "6s", func(spec containerconfig.Spec) bool { return spec.Healthcheck.Timeout == "6s" }},
+		{"health retries", DeploymentHealthRetries, "7", func(spec containerconfig.Spec) bool {
 			return spec.Healthcheck.Retries != nil && *spec.Healthcheck.Retries == 7
 		}},
-		{"health start period", DeploymentHealthStartPeriod, DeploymentDuration(8 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.StartPeriod == "8s" }},
-		{"health start interval", DeploymentHealthStartInterval, DeploymentDuration(9 * time.Second), func(spec containerconfig.Spec) bool { return spec.Healthcheck.StartInterval == "9s" }},
+		{"health start period", DeploymentHealthStartPeriod, "8s", func(spec containerconfig.Spec) bool { return spec.Healthcheck.StartPeriod == "8s" }},
+		{"health start interval", DeploymentHealthStartInterval, "9s", func(spec containerconfig.Spec) bool { return spec.Healthcheck.StartInterval == "9s" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			patch, err := NewDeploymentPatch(test.field, test.value)
+			patch, err := ParseDeploymentPatch(test.field.ID(), test.value, false)
 			if err != nil || patch.Field() != test.field {
-				t.Fatalf("NewDeploymentPatch() = %#v, %v", patch, err)
+				t.Fatalf("ParseDeploymentPatch() = %#v, %v", patch, err)
 			}
 			got, err := patch.ApplyTo(baseline)
 			if err != nil || !test.check(got) || !slices.Equal(baseline.Healthcheck.Test, []string{"CMD", "true"}) {
@@ -108,9 +106,9 @@ func TestDeploymentPatchUnsetsOptionalFields(t *testing.T) {
 		if !field.AllowsUnset() {
 			continue
 		}
-		patch, err := NewDeploymentPatch(field, DeploymentUnset{})
+		patch, err := ParseDeploymentPatch(field.ID(), "ignored", true)
 		if err != nil {
-			t.Fatalf("NewDeploymentPatch(%s, unset) error = %v", field.ID(), err)
+			t.Fatalf("ParseDeploymentPatch(%s, unset) error = %v", field.ID(), err)
 		}
 		got, err := patch.ApplyTo(baseline)
 		if err != nil || deploymentFieldPresent(got, field) {
@@ -119,37 +117,44 @@ func TestDeploymentPatchUnsetsOptionalFields(t *testing.T) {
 	}
 }
 
-func TestDeploymentPatchRejectsInvalidPairingsAndHealthState(t *testing.T) {
+func TestDeploymentPatchRejectsInvalidValuesAndHealthState(t *testing.T) {
 	t.Parallel()
 
 	invalid := []struct {
 		field DeploymentField
-		value DeploymentValue
+		value string
+		unset bool
 	}{
-		{0, DeploymentCPU(1)},
-		{DeploymentCPUs, nil},
-		{DeploymentCPUs, DeploymentCPU(0)},
-		{DeploymentCPUs, DeploymentCPU(float32(math.Inf(1)))},
-		{DeploymentCPUs, DeploymentBytes(1)},
-		{DeploymentMemory, DeploymentBytes(0)},
-		{DeploymentPIDs, DeploymentInteger(0)},
-		{DeploymentField(255), DeploymentInteger(1)},
-		{DeploymentRestart, DeploymentRestartPolicy("on-failure:0")},
-		{DeploymentRestart, DeploymentRestartPolicy("sometimes")},
-		{DeploymentStopGrace, DeploymentDuration(time.Millisecond)},
-		{DeploymentInit, DeploymentInteger(1)},
-		{DeploymentNoNewPrivileges, DeploymentUnset{}},
-		{DeploymentHealthRetries, DeploymentInteger(0)},
-		{DeploymentHealthRetries, DeploymentRetries(0)},
-		{DeploymentHealthInterval, DeploymentDuration(0)},
+		{0, "1", false},
+		{DeploymentCPUs, "", false},
+		{DeploymentCPUs, "0", false},
+		{DeploymentCPUs, "Inf", false},
+		{DeploymentCPUs, "1e20", false},
+		{DeploymentMemory, "0", false},
+		{DeploymentSharedMemory, "not-bytes", false},
+		{DeploymentPIDs, "0", false},
+		{DeploymentField(255), "1", false},
+		{DeploymentRestart, "on-failure:0", false},
+		{DeploymentRestart, "sometimes", false},
+		{DeploymentStopGrace, "1ms", false},
+		{DeploymentInit, "not-a-boolean", false},
+		{DeploymentReadOnly, "not-a-boolean", false},
+		{DeploymentNoNewPrivileges, "", true},
+		{DeploymentHealthRetries, "0", false},
+		{DeploymentHealthInterval, "0s", false},
+		{DeploymentHealthTimeout, "not-a-duration", false},
+		{DeploymentHealthStartPeriod, "not-a-duration", false},
+		{DeploymentHealthStartInterval, "not-a-duration", false},
 	}
 	for _, test := range invalid {
-		if _, err := NewDeploymentPatch(test.field, test.value); !errors.Is(err, ErrInvalidDeploymentPatch) {
-			t.Fatalf("NewDeploymentPatch(%v, %#v) error = %v", test.field, test.value, err)
+		if _, err := ParseDeploymentPatch(test.field.ID(), test.value, test.unset); !errors.Is(
+			err, ErrInvalidDeploymentPatch,
+		) {
+			t.Fatalf("ParseDeploymentPatch(%v, %q, %t) error = %v", test.field, test.value, test.unset, err)
 		}
 	}
 
-	patch, err := NewDeploymentPatch(DeploymentHealthTimeout, DeploymentDuration(time.Second))
+	patch, err := ParseDeploymentPatch(DeploymentHealthTimeout.ID(), "1s", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,24 +169,19 @@ func TestDeploymentPatchRejectsInvalidPairingsAndHealthState(t *testing.T) {
 	if _, err = (DeploymentPatch{}).ApplyTo(containerconfig.Spec{}); !errors.Is(err, ErrInvalidDeploymentPatch) {
 		t.Fatalf("ApplyTo(zero patch) error = %v", err)
 	}
+	if _, err = (DeploymentPatch{field: DeploymentCPUs, value: "invalid"}).ApplyTo(
+		containerconfig.Spec{},
+	); !errors.Is(err, ErrInvalidDeploymentPatch) {
+		t.Fatalf("ApplyTo(forged patch) error = %v", err)
+	}
 }
 
-func TestDeploymentValueFamilyAndRestartPolicies(t *testing.T) {
+func TestDeploymentRestartPolicies(t *testing.T) {
 	t.Parallel()
 
-	DeploymentCPU(1).deploymentValue()
-	DeploymentBytes(1).deploymentValue()
-	DeploymentInteger(1).deploymentValue()
-	DeploymentRetries(1).deploymentValue()
-	DeploymentRestartPolicy("always").deploymentValue()
-	DeploymentDuration(time.Second).deploymentValue()
-	DeploymentBoolean(true).deploymentValue()
-	(DeploymentEnabled{}).deploymentValue()
-	(DeploymentUnset{}).deploymentValue()
-
-	for _, policy := range []DeploymentRestartPolicy{"no", "always", "unless-stopped", "on-failure"} {
-		if _, err := NewDeploymentPatch(DeploymentRestart, policy); err != nil {
-			t.Fatalf("NewDeploymentPatch(restart %q) error = %v", policy, err)
+	for _, policy := range []string{"no", "always", "unless-stopped", "on-failure"} {
+		if _, err := ParseDeploymentPatch(DeploymentRestart.ID(), policy, false); err != nil {
+			t.Fatalf("ParseDeploymentPatch(restart %q) error = %v", policy, err)
 		}
 	}
 }
@@ -192,8 +192,8 @@ func TestDeploymentDispatchIgnoresValuesOutsideTheClosedContract(t *testing.T) {
 	spec := containerconfig.Spec{NoNewPrivileges: true}
 	unsetDeploymentField(&spec, DeploymentNoNewPrivileges)
 	unsetDeploymentField(&spec, DeploymentField(255))
-	setDeploymentField(&spec, DeploymentPatch{field: DeploymentField(255), value: DeploymentInteger(1)})
-	if !spec.NoNewPrivileges {
+	err := setDeploymentField(&spec, DeploymentField(255), "1")
+	if !errors.Is(err, ErrInvalidDeploymentPatch) || !spec.NoNewPrivileges {
 		t.Fatal("closed deployment dispatch cleared no-new-privileges")
 	}
 }

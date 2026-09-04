@@ -28,7 +28,8 @@ const (
 	EventActionCompleted EventKind = "action_completed"
 	// EventTransactionSucceeded reports a committed applied-service generation.
 	EventTransactionSucceeded EventKind = "transaction_succeeded"
-	// EventTransactionDegraded reports a transaction that requires restoration.
+	// EventTransactionDegraded reports a transaction that requires restoration
+	// or an explicit workload-health decision.
 	EventTransactionDegraded EventKind = "transaction_degraded"
 	// EventTransactionRestored reports completed automatic restoration. The
 	// failed transaction remains the durable record of the unsuccessful upgrade.

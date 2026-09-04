@@ -30,6 +30,8 @@ const (
 	testDifferentWorkload = "different-workload"
 	testProcessEntrypoint = "/usr/local/bin/api"
 	testProcessCommand    = "serve"
+	testHealthCommand     = "CMD"
+	testTrueCommand       = "true"
 	eventJournal          = "journal"
 	eventApplied          = "applied"
 )
@@ -282,7 +284,8 @@ func emptyObservation() WorkloadObservation {
 		StorageDigest:        domain.Digest{},
 		RuntimeMounts:        nil,
 		ConfigurationMatches: false,
-		Running:              false,
+		Lifecycle:            WorkloadLifecycleUnknown,
+		Health:               WorkloadHealth{},
 		Ownership:            testOwnership(domain.OwnershipConflicting),
 	}
 }

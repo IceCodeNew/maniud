@@ -44,6 +44,7 @@ type SnapshotAppliedService struct {
 	Reference     string
 	Manifest      string
 	ImageConfig   string
+	Healthcheck   bool
 }
 
 // SnapshotAction is one durable effect boundary. Intent and postcondition are
@@ -59,15 +60,17 @@ type SnapshotAction struct {
 // OperationSnapshot correlates one typed runtime observation with durable
 // state read immediately before and after that observation.
 type OperationSnapshot struct {
-	CapturedAt     time.Time
-	Plan           Plan
-	Runtime        RuntimeEvidence
-	Transaction    SnapshotTransaction
-	HasTransaction bool
-	Applied        SnapshotAppliedService
-	HasApplied     bool
-	Actions        []SnapshotAction
-	DroppedEvents  uint64
+	CapturedAt                       time.Time
+	Plan                             Plan
+	Runtime                          RuntimeEvidence
+	Transaction                      SnapshotTransaction
+	HasTransaction                   bool
+	Applied                          SnapshotAppliedService
+	HasApplied                       bool
+	Actions                          []SnapshotAction
+	DroppedEvents                    uint64
+	AvailableHealthResolution        HealthResolutionAction
+	HealthResolutionRestoresPrevious bool
 }
 
 type snapshotJournal struct {
@@ -153,6 +156,7 @@ func (facade *ApplyFacade) captureSnapshot(
 	if err != nil {
 		return empty, false, fmt.Errorf("capture snapshot observation: %w", err)
 	}
+	capturedAt := facade.now().UTC()
 	if !validWorkloadObservation(observation, desired.workload) {
 		return empty, false, ErrConflictingState
 	}
@@ -172,6 +176,7 @@ func (facade *ApplyFacade) captureSnapshot(
 		before.hasTransaction,
 		before.applied,
 		before.hasApplied,
+		capturedAt,
 	)
 	preparation.Actions = slices.Clone(before.actions)
 	preparation, err = classifyPreparedApply(preparation)
@@ -179,7 +184,7 @@ func (facade *ApplyFacade) captureSnapshot(
 		return empty, false, err
 	}
 
-	return operationSnapshot(facade, preparation), true, nil
+	return operationSnapshot(facade, capturedAt, preparation), true, nil
 }
 
 func (facade *ApplyFacade) readSnapshotJournal(
@@ -258,15 +263,18 @@ func sameSnapshotActions(left, right []store.Action) bool {
 	return true
 }
 
-func operationSnapshot(facade *ApplyFacade, preparation Preparation) OperationSnapshot {
+func operationSnapshot(facade *ApplyFacade, capturedAt time.Time, preparation Preparation) OperationSnapshot {
+	healthResolution, restoresPrevious := healthResolutionForSnapshot(preparation)
 	snapshot := OperationSnapshot{
-		CapturedAt:     facade.now().UTC(),
-		Plan:           preparation.Plan,
-		Runtime:        preparation.Execution,
-		HasTransaction: preparation.HasTransaction,
-		HasApplied:     preparation.HasApplied,
-		Actions:        snapshotActions(preparation.Actions),
-		DroppedEvents:  droppedEvents(facade.events),
+		CapturedAt:                       capturedAt,
+		Plan:                             preparation.Plan,
+		Runtime:                          preparation.Execution,
+		HasTransaction:                   preparation.HasTransaction,
+		HasApplied:                       preparation.HasApplied,
+		Actions:                          snapshotActions(preparation.Actions),
+		DroppedEvents:                    droppedEvents(facade.events),
+		AvailableHealthResolution:        healthResolution,
+		HealthResolutionRestoresPrevious: restoresPrevious,
 	}
 	if preparation.HasTransaction {
 		snapshot.Transaction = snapshotTransaction(preparation.Transaction)
@@ -308,6 +316,7 @@ func snapshotAppliedService(applied store.AppliedService) SnapshotAppliedService
 		Reference:     applied.ReferenceDigest.String(),
 		Manifest:      applied.PlatformManifestDigest.String(),
 		ImageConfig:   applied.ImageConfigDigest.String(),
+		Healthcheck:   applied.Healthcheck,
 	}
 }
 

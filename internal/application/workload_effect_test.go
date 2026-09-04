@@ -1,3 +1,4 @@
+//nolint:goconst // Lifecycle and mutation labels remain local to their fixture tables.
 package application
 
 import (
@@ -733,6 +734,7 @@ func createdWorkloadEffectEvidence(
 		RuntimeMounts:        runtimeMounts,
 		ConfigurationMatches: true,
 		Lifecycle:            WorkloadLifecycleCreated,
+		Health:               testWorkloadHealth(workload),
 		Ownership: domain.WorkloadOwnership{
 			Status:           domain.OwnershipManaged,
 			Service:          workload.ServiceName,
@@ -743,6 +745,14 @@ func createdWorkloadEffectEvidence(
 			PlatformManifest: workload.Image.PlatformManifest,
 		},
 	}
+}
+
+func testWorkloadHealth(workload domain.DesiredWorkload) WorkloadHealth {
+	if activeHealthcheck(workload) {
+		return WorkloadHealth{Status: WorkloadHealthHealthy}
+	}
+
+	return WorkloadHealth{Status: WorkloadHealthAbsent}
 }
 
 func testRuntimeMounts(workload domain.DesiredWorkload) []domain.RuntimeMount {

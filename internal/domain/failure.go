@@ -11,6 +11,10 @@ const (
 	ErrorOperationCancelled ErrorCode = "operation_cancelled"
 	// ErrorApplyFailed identifies an apply whose validation could not complete.
 	ErrorApplyFailed ErrorCode = "apply_failed"
+	// ErrorHealthPending identifies an applied workload still converging on health.
+	ErrorHealthPending ErrorCode = "health_pending"
+	// ErrorHealthDegraded identifies workload health that requires an operator decision.
+	ErrorHealthDegraded ErrorCode = "health_degraded"
 	// ErrorGenerationFailed identifies generation that could not complete.
 	ErrorGenerationFailed ErrorCode = "generation_failed"
 	// ErrorRuntimeNotBuilt identifies a selected runtime omitted from the binary.
@@ -64,6 +68,28 @@ func ApplyFailed(retryable bool) *FailureError {
 		code:       ErrorApplyFailed,
 		message:    applyFailedMessage,
 		retryable:  retryable,
+		exitStatus: 1,
+	}
+}
+
+// HealthPending reports that a non-interactive apply stopped at a durable
+// health gate that may converge without another mutation.
+func HealthPending() *FailureError {
+	return &FailureError{
+		code:       ErrorHealthPending,
+		message:    "workload health is pending; retry the same command to resume",
+		retryable:  true,
+		exitStatus: 1,
+	}
+}
+
+// HealthDegraded reports that a workload was left running for an explicit
+// health decision in the TUI.
+func HealthDegraded() *FailureError {
+	return &FailureError{
+		code:       ErrorHealthDegraded,
+		message:    "workload health requires a decision; run 'maniud tui' to review it",
+		retryable:  false,
 		exitStatus: 1,
 	}
 }

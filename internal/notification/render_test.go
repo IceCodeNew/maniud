@@ -68,7 +68,6 @@ func TestRenderApplicationEventOmitsEmptyAndDefaultFields(t *testing.T) {
 
 func TestRenderApplicationEventProjectsGitOpsSourceTransitions(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name  string
 		event application.Event
@@ -85,6 +84,26 @@ func TestRenderApplicationEventProjectsGitOpsSourceTransitions(t *testing.T) {
 				body: "event: gitops_source_blocked\nsource: services/api.yaml\n" +
 					"reason: invalid_compose_source",
 			},
+		},
+		{
+			name: "recovered source",
+			event: application.Event{
+				Kind: application.EventGitOpsSourceRecovered, Source: notificationTestSource,
+				Reason: application.EventReasonInvalidComposeSource,
+			},
+			want: notificationMessage{title: "maniud GitOps source recovered",
+				body: "event: gitops_source_recovered\nsource: services/api.yaml\n" +
+					"reason: invalid_compose_source",
+			},
+		},
+		{
+			name: "recovery source blocked",
+			event: application.Event{
+				Kind:   application.EventGitOpsSourceBlocked,
+				Reason: application.EventReasonRecoverySourceBlocked,
+			},
+			want: notificationMessage{title: "maniud GitOps source blocked",
+				body: "event: gitops_source_blocked\nreason: recovery_source_blocked"},
 		},
 		{
 			name: "recovery source recovered",
