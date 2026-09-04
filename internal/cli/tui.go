@@ -27,6 +27,7 @@ type tuiRunner func(
 	io.Writer,
 	tui.Catalog,
 	tui.ServiceWorkspace,
+	tui.DeploymentWorkspace,
 	tui.Operations,
 	*tui.EventStream,
 	tui.Options,
@@ -76,9 +77,10 @@ func executeProductionTUIWith(
 	}
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes)
+	deployments := defaultTUIDeploymentWorkspace(environment)
 
 	result, runErr := run(
-		ctx, input, output, catalog, workspace, dependencies.operations, tuiEvents, tuiOptions(environment),
+		ctx, input, output, catalog, workspace, deployments, dependencies.operations, tuiEvents, tuiOptions(environment),
 	)
 	runErr = runtimes.Classify(runErr)
 	exportErr := writeTUIExport(output, stderr, result.Export)

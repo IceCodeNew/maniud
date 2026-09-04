@@ -43,6 +43,15 @@ type tuiStagedService struct {
 	expectedTree string
 }
 
+type tuiStagedProof struct {
+	repository      string
+	base            gitTreeState
+	paths           []string
+	indexStatus     string
+	expectedTree    string
+	attributeSource string
+}
+
 type tuiServiceWorkspace struct {
 	mu               sync.Mutex
 	registrationPath string
@@ -350,7 +359,10 @@ func stagedTUIDiff(ctx context.Context, repository string, paths []string) ([]by
 	diff, err := runGit(
 		ctx,
 		repository,
-		append([]string{"diff", "--cached", "--no-ext-diff", "--no-renames", "--binary", "--"}, paths...)...,
+		append(
+			[]string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", "--"},
+			paths...,
+		)...,
 	)
 	if err != nil || len(diff) == 0 {
 		return nil, compose.ErrInvalidSource
@@ -367,6 +379,51 @@ func generatedRelativePaths(generated generatedCompose) []string {
 	slices.Sort(paths)
 
 	return paths
+}
+
+func exactStagedPaths(ctx context.Context, repository string, paths []string) bool {
+	expected := make([]string, len(paths))
+	for index, path := range paths {
+		expected[index] = "A  " + filepath.ToSlash(path)
+	}
+
+	return gitStatusMatchesWithTUIDrafts(ctx, repository, expected)
+}
+
+func exactStagedPathStatusWithAttributes(
+	ctx context.Context,
+	repository string,
+	paths []string,
+	indexStatus string,
+	attributeSource string,
+) bool {
+	arguments := []string{}
+	if attributeSource != "" {
+		arguments = append(arguments, "--attr-source="+attributeSource)
+	}
+	arguments = append(
+		arguments,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none",
+	)
+	status, err := runGit(ctx, repository, arguments...)
+	if err != nil {
+		return false
+	}
+	entries, valid := splitNullTerminated(status)
+	if !valid || len(entries) != len(paths) {
+		return false
+	}
+	expected := make([]string, len(paths))
+	for index, path := range paths {
+		expected[index] = indexStatus + "  " + filepath.ToSlash(path)
+	}
+	actual := make([]string, len(entries))
+	for index, entry := range entries {
+		actual[index] = string(entry)
+	}
+	slices.Sort(actual)
+
+	return slices.Equal(actual, expected)
 }
 
 func verifyTUIBaseState(ctx context.Context, draft tuiServiceDraft) bool {
@@ -733,15 +790,6 @@ func generatedArtifactMatches(artifact generatedArtifact) bool {
 	return err == nil && matched
 }
 
-func exactStagedPaths(ctx context.Context, repository string, paths []string) bool {
-	expected := make([]string, len(paths))
-	for index, path := range paths {
-		expected[index] = "A  " + filepath.ToSlash(path)
-	}
-
-	return gitStatusMatchesWithTUIDrafts(ctx, repository, expected)
-}
-
 func writeGitTree(ctx context.Context, repository string) (string, error) {
 	output, err := runGit(ctx, repository, "write-tree")
 	value := strings.TrimSpace(string(output))
@@ -829,10 +877,19 @@ func (workspace *tuiServiceWorkspace) settleCommit(
 }
 
 func commitTUIStaged(ctx context.Context, staged tuiStagedService, message string, unsigned bool) error {
+	return commitTUIStagedProof(ctx, staged.proof(), message, unsigned)
+}
+
+func commitTUIStagedProof(
+	ctx context.Context,
+	staged tuiStagedProof,
+	message string,
+	unsigned bool,
+) error {
 	if unsigned {
 		_, err := runGit(
 			ctx,
-			staged.draft.repository,
+			staged.repository,
 			"-c", "user.name=maniud",
 			"-c", "user.email=maniud@localhost",
 			"-c", "commit.gpgsign=false",
@@ -841,11 +898,11 @@ func commitTUIStaged(ctx context.Context, staged tuiStagedService, message strin
 
 		return err
 	}
-	if err := validateGitProcessConfiguration(ctx, staged.draft.repository); err != nil {
+	if err := validateGitProcessConfiguration(ctx, staged.repository); err != nil {
 		return err
 	}
 	_, err := runGitWithUserConfig(
-		ctx, staged.draft.repository, "commit", "--quiet", "-S", "--no-verify", "-m", message,
+		ctx, staged.repository, "commit", "--quiet", "-S", "--no-verify", "-m", message,
 	)
 
 	return err
@@ -866,6 +923,26 @@ func verifyTUIStagedState(ctx context.Context, staged tuiStagedService) bool {
 	return err == nil && tree == staged.expectedTree
 }
 
+func (staged tuiStagedService) proof() tuiStagedProof {
+	return tuiStagedProof{
+		repository: staged.draft.repository, base: staged.draft.base, paths: staged.paths,
+		indexStatus: "A", expectedTree: staged.expectedTree,
+	}
+}
+
+func verifyTUIStagedProof(ctx context.Context, staged tuiStagedProof) bool {
+	head, err := resolveGitObject(ctx, staged.repository, "HEAD^{commit}")
+	if err != nil || head != staged.base.head ||
+		!exactStagedPathStatusWithAttributes(
+			ctx, staged.repository, staged.paths, staged.indexStatus, staged.attributeSource,
+		) {
+		return false
+	}
+	tree, err := writeGitTree(ctx, staged.repository)
+
+	return err == nil && tree == staged.expectedTree
+}
+
 func proveTUICommit(
 	ctx context.Context,
 	staged tuiStagedService,
@@ -880,6 +957,26 @@ func proveTUICommit(
 		return "", verifyTUIStagedState(ctx, staged)
 	}
 	if !proveNewTUICommit(ctx, staged, head, message, requireSignature) {
+		return "", false
+	}
+
+	return head, false
+}
+
+func proveTUIStagedCommit(
+	ctx context.Context,
+	staged tuiStagedProof,
+	message string,
+	requireSignature bool,
+) (string, bool) {
+	head, err := resolveGitObject(ctx, staged.repository, "HEAD^{commit}")
+	if err != nil {
+		return "", false
+	}
+	if head == staged.base.head {
+		return "", verifyTUIStagedProof(ctx, staged)
+	}
+	if !proveNewTUIStagedCommit(ctx, staged, head, message, requireSignature) {
 		return "", false
 	}
 
@@ -905,6 +1002,21 @@ func proveNewTUICommit(
 	return err == nil && state.head == head && state.tree == staged.expectedTree
 }
 
+func proveNewTUIStagedCommit(
+	ctx context.Context,
+	staged tuiStagedProof,
+	head string,
+	message string,
+	requireSignature bool,
+) bool {
+	if !matchesTUIStagedCommit(ctx, staged, head, message, requireSignature) {
+		return false
+	}
+	state, err := cleanGitTreeWithAttributeSource(ctx, staged.repository, staged.attributeSource)
+
+	return err == nil && state.head == head && state.tree == staged.expectedTree
+}
+
 func matchesTUICommit(
 	ctx context.Context,
 	staged tuiStagedService,
@@ -912,16 +1024,26 @@ func matchesTUICommit(
 	message string,
 	requireSignature bool,
 ) bool {
-	parents, err := runGit(ctx, staged.draft.repository, "rev-list", "--parents", "-n", "1", head)
+	return matchesTUIStagedCommit(ctx, staged.proof(), head, message, requireSignature)
+}
+
+func matchesTUIStagedCommit(
+	ctx context.Context,
+	staged tuiStagedProof,
+	head string,
+	message string,
+	requireSignature bool,
+) bool {
+	parents, err := runGit(ctx, staged.repository, "rev-list", "--parents", "-n", "1", head)
 	fields := strings.Fields(string(parents))
-	if err != nil || len(fields) != 2 || fields[0] != head || fields[1] != staged.draft.base.head {
+	if err != nil || len(fields) != 2 || fields[0] != head || fields[1] != staged.base.head {
 		return false
 	}
-	tree, err := resolveGitObject(ctx, staged.draft.repository, head+"^{tree}")
+	tree, err := resolveGitObject(ctx, staged.repository, head+"^{tree}")
 	if err != nil || tree != staged.expectedTree {
 		return false
 	}
-	if !gitCommitMatches(ctx, staged.draft.repository, head, message, requireSignature) {
+	if !gitCommitMatches(ctx, staged.repository, head, message, requireSignature) {
 		return false
 	}
 
@@ -939,9 +1061,15 @@ func gitCommitMatches(ctx context.Context, repository, head, message string, req
 }
 
 func gitCommitHasSignature(ctx context.Context, repository, head string) bool {
+	present, err := gitCommitSignaturePresent(ctx, repository, head)
+
+	return err == nil && present
+}
+
+func gitCommitSignaturePresent(ctx context.Context, repository, head string) (bool, error) {
 	commit, err := runGit(ctx, repository, "cat-file", "commit", head)
 
-	return err == nil && bytes.Contains(commit, []byte("\ngpgsig "))
+	return bytes.Contains(commit, []byte("\ngpgsig ")), err
 }
 
 //nolint:cyclop // Readback keeps immutable source, checkout, runtime, and provenance proofs ordered.

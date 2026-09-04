@@ -57,9 +57,15 @@ maniud tui
 
 Review 页对比当前镜像身份和建议镜像身份。较长的镜像地址仍保留在并排表格中，中间部分会缩略。按 `d` 可以在 Details 页查看完整值和本次 session 的时间线。
 
+按 `e` 可以编辑部署参数。编辑页列出支持的 CPU、内存、进程、生命周期和 healthcheck 字段，并显示当前值。输入新值，或者在允许删除的字段上按 `u`，即可恢复 Compose 默认值。`maniud` 会先在内存中验证完整 Compose source，再打开独立的写入和暂存确认页。提交页显示实际 staged diff，并沿用服务接入流程的签名提交与显式未签名降级。提交文件不会把变更应用到 runtime。
+
+按 `h` 可以查看当前 Compose 文件在 first-parent 历史中最近 100 个相关提交。History 页只说明提交中是否存在签名，不验证签名者。选择较早的文件版本后，`maniud` 会重新构建并验证 candidate；确认后创建新的 restore commit，不改写 Git 历史。当前文件版本不能创建无内容的 restore commit。
+
 Review 页支持这些操作：
 
 - Enter 打开 apply 确认页。
+- `e` 打开部署参数编辑页。
+- `h` 打开部署历史。
 - `d` 打开 Details。
 - `x` 导出当前 Details 内容并退出。
 - `r` 重新执行 dry-run、snapshot 和 evidence。

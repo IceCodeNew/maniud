@@ -29,6 +29,8 @@ const (
 	keyQuit                   = "q"
 	statusReviewStaged        = "Review the staged change"
 	statusSignedCommitMissing = "Signed commit was not created"
+	statusCommitUnverified    = "Commit result could not be verified"
+	statusDeploymentUnchanged = "Deployment candidate is unchanged"
 	maximumDisplayBytes       = 64 << 10
 	maximumDisplayRunes       = 16 << 10
 	maximumDisplayCells       = 16 << 10
@@ -183,14 +185,15 @@ type stageServiceConfirmationPage struct {
 func (stageServiceConfirmationPage) isPage() {}
 
 type commitServicePage struct {
-	preview   servicePreviewPage
-	staged    StagedService
-	message   string
-	focus     confirmationFocus
-	editing   bool
-	scroll    int
-	diffWidth int
-	diffLines []string
+	preview    servicePreviewPage
+	staged     StagedService
+	message    string
+	focus      confirmationFocus
+	editing    bool
+	scroll     int
+	diffWidth  int
+	diffLines  []string
+	deployment *deploymentPreviewPage
 }
 
 func (commitServicePage) isPage() {}
@@ -271,12 +274,13 @@ type confirmationPage struct {
 func (confirmationPage) isPage() {}
 
 type model struct {
-	ctx        context.Context //nolint:containedctx // The model and context share one Bubble Tea session lifetime.
-	catalog    Catalog
-	workspace  ServiceWorkspace
-	operations Operations
-	events     *EventStream
-	options    Options
+	ctx         context.Context //nolint:containedctx // The model and context share one Bubble Tea session lifetime.
+	catalog     Catalog
+	workspace   ServiceWorkspace
+	deployments DeploymentWorkspace
+	operations  Operations
+	events      *EventStream
+	options     Options
 
 	width              int
 	height             int
@@ -296,16 +300,18 @@ type model struct {
 	result             Result
 }
 
-func newModel(
+func newModelWithDeployments(
 	ctx context.Context,
 	catalog Catalog,
 	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
 	operations Operations,
 	events *EventStream,
 	options Options,
 ) *model {
 	return &model{
-		ctx: ctx, catalog: catalog, workspace: workspace, operations: operations, events: events, options: options,
+		ctx: ctx, catalog: catalog, workspace: workspace, deployments: deployments,
+		operations: operations, events: events, options: options,
 		page: homePage{catalog: CatalogSnapshot{State: CatalogMissing}}, status: "Loading services",
 		timeline: newSessionTimeline(),
 	}
@@ -328,7 +334,7 @@ func waitForContext(ctx context.Context) tea.Cmd {
 }
 
 func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // Bubble Tea requires tea.Model.
-	if command, handled := state.handleServiceWorkspaceMessage(message); handled {
+	if command, handled := state.handleWorkspaceMessage(message); handled {
 		return state, command
 	}
 	if command, handled := state.handleOperationMessage(message); handled {
@@ -354,6 +360,14 @@ func (state *model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:iret
 	}
 
 	return state, nil
+}
+
+func (state *model) handleWorkspaceMessage(message tea.Msg) (tea.Cmd, bool) {
+	if command, handled := state.handleServiceWorkspaceMessage(message); handled {
+		return command, true
+	}
+
+	return state.handleDeploymentWorkspaceMessage(message)
 }
 
 func (state *model) handleOperationMessage(message tea.Msg) (tea.Cmd, bool) {
@@ -473,6 +487,12 @@ func (state *model) invalidateConfirmation() {
 	case stageServiceConfirmationPage:
 		state.page = current.preview
 		state.status = statusReviewLarger
+	case stageDeploymentConfirmationPage:
+		state.page = current.preview
+		state.status = statusReviewLarger
+	case restoreDeploymentConfirmationPage:
+		state.page = current.history
+		state.status = statusReviewLarger
 	case unsignedCommitConfirmationPage:
 		state.page = current.commit
 		state.status = statusReviewLarger
@@ -516,6 +536,9 @@ func (state *model) handleKey(message tea.KeyPressMsg) tea.Cmd {
 
 func (state *model) handleAuxiliaryPageKey(message tea.KeyPressMsg) (tea.Cmd, bool) {
 	if command, handled := state.handleRegistrationPageKey(message); handled {
+		return command, true
+	}
+	if command, handled := state.handleDeploymentPageKey(message); handled {
 		return command, true
 	}
 
@@ -953,12 +976,12 @@ func (state *model) handleCommitReviewKey(current commitServicePage, key string)
 		state.status = "Edit the commit message"
 	case keyEnter:
 		if current.focus == confirmationBack {
-			return state.startServiceSuspend(current.preview)
+			return state.startCommitDiscard(current)
 		}
 
 		return state.startServiceCommit(current, false)
 	case keyEscape:
-		return state.startServiceSuspend(current.preview)
+		return state.startCommitDiscard(current)
 	case keyQuit:
 		return tea.Quit
 	}
@@ -966,6 +989,14 @@ func (state *model) handleCommitReviewKey(current commitServicePage, key string)
 	state.clampPageScroll()
 
 	return nil
+}
+
+func (state *model) startCommitDiscard(current commitServicePage) tea.Cmd {
+	if current.deployment != nil {
+		return state.startDeploymentDiscard(*current.deployment)
+	}
+
+	return state.startServiceSuspend(current.preview)
 }
 
 func (state *model) handleCommitMessageKey(current commitServicePage, message tea.KeyPressMsg) tea.Cmd {
@@ -1133,6 +1164,10 @@ func (state *model) handleReviewKey(current reviewPage, key string) tea.Cmd {
 		state.status = "Full image references"
 	case "r":
 		return state.startSnapshot(current.request)
+	case "e":
+		return state.startDeploymentFields(current)
+	case "h":
+		return state.startDeploymentHistory(current)
 	case keyEscape:
 		return state.startCatalog()
 	case keyQuit:
@@ -1279,6 +1314,9 @@ func (state *model) startServiceStage(preview servicePreviewPage) tea.Cmd {
 }
 
 func (state *model) startServiceCommit(commit commitServicePage, unsigned bool) tea.Cmd {
+	if commit.deployment != nil {
+		return state.startDeploymentCommit(commit, unsigned)
+	}
 	state.page = commit
 
 	return state.begin("Creating commit", func(ctx context.Context, sequence uint64) tea.Cmd {
@@ -1460,7 +1498,7 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 	}
 	if invalidServiceCommitResult(result.result) {
 		state.err = errInvalidInput
-		state.status = "Commit result could not be verified"
+		state.status = statusCommitUnverified
 
 		return command
 	}
@@ -1472,7 +1510,7 @@ func (state *model) handleServiceCommitResult(result serviceCommitResultMsg) tea
 	}
 	if !result.result.Committed {
 		state.err = errInvalidInput
-		state.status = "Commit result could not be verified"
+		state.status = statusCommitUnverified
 
 		return command
 	}
