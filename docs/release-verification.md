@@ -13,6 +13,61 @@ Download the binary for your host, `SHA256SUMS`, and the matching `maniud_X.Y.Z.
 
 All release binaries use `CGO_ENABLED=0`.
 
+## Install a verified release with GitHub CLI
+
+Install [GitHub CLI](https://cli.github.com/) first. This block selects the current stable release and your host architecture, verifies both downloaded files against the release bundle, checks the one matching checksum entry, and installs the binary under `$HOME/.local/bin`.
+
+```sh
+set -eu
+
+repo='IceCodeNew/maniud'
+tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+version="${tag#v}"
+
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)  platform='darwin_arm64' ;;
+  Darwin:x86_64) platform='darwin_amd64' ;;
+  Linux:aarch64 | Linux:arm64) platform='linux_arm64' ;;
+  Linux:x86_64) platform='linux_amd64' ;;
+  *) printf 'unsupported host: %s %s\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
+esac
+
+artifact="maniud_${version}_${platform}"
+bundle="maniud_${version}.sigstore.json"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-install.XXXXXX")"
+trap 'rm -rf "$workdir"' EXIT
+
+gh release download "$tag" --repo "$repo" --dir "$workdir" \
+  --pattern "$artifact" --pattern SHA256SUMS --pattern "$bundle"
+cd "$workdir"
+
+for subject in "$artifact" SHA256SUMS; do
+  gh attestation verify "$subject" \
+    --repo "$repo" \
+    --bundle "$bundle" \
+    --signer-workflow "$repo/.github/workflows/release.yml" \
+    --source-ref refs/heads/master \
+    --deny-self-hosted-runners
+done
+
+expected="$(awk -v file="$artifact" '
+  $2 == file { digest = $1; count++ }
+  END { if (count != 1) exit 1; print digest }
+' SHA256SUMS)"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$artifact" | awk '{print $1}')"
+else
+  actual="$(shasum -a 256 "$artifact" | awk '{print $1}')"
+fi
+test "$actual" = "$expected"
+
+install -d "$HOME/.local/bin"
+install -m 0755 "$artifact" "$HOME/.local/bin/maniud"
+"$HOME/.local/bin/maniud" --version
+```
+
+Add `$HOME/.local/bin` to `PATH` if your shell does not already include it. Stop if any command fails.
+
 ## Check the SHA-256 digest
 
 Set the downloaded filename and compare it with its exact checksum entry:

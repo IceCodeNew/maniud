@@ -13,6 +13,61 @@
 
 所有发布二进制文件都使用 `CGO_ENABLED=0`。
 
+## 使用 GitHub CLI 安装已验证的 Release
+
+请先安装 [GitHub CLI](https://cli.github.com/)。下面的命令会选择当前稳定版本和本机架构，使用 release bundle 核验 binary 与 `SHA256SUMS`，检查唯一匹配的 checksum，再把程序安装到 `$HOME/.local/bin`。
+
+```sh
+set -eu
+
+repo='IceCodeNew/maniud'
+tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+version="${tag#v}"
+
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)  platform='darwin_arm64' ;;
+  Darwin:x86_64) platform='darwin_amd64' ;;
+  Linux:aarch64 | Linux:arm64) platform='linux_arm64' ;;
+  Linux:x86_64) platform='linux_amd64' ;;
+  *) printf 'unsupported host: %s %s\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
+esac
+
+artifact="maniud_${version}_${platform}"
+bundle="maniud_${version}.sigstore.json"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-install.XXXXXX")"
+trap 'rm -rf "$workdir"' EXIT
+
+gh release download "$tag" --repo "$repo" --dir "$workdir" \
+  --pattern "$artifact" --pattern SHA256SUMS --pattern "$bundle"
+cd "$workdir"
+
+for subject in "$artifact" SHA256SUMS; do
+  gh attestation verify "$subject" \
+    --repo "$repo" \
+    --bundle "$bundle" \
+    --signer-workflow "$repo/.github/workflows/release.yml" \
+    --source-ref refs/heads/master \
+    --deny-self-hosted-runners
+done
+
+expected="$(awk -v file="$artifact" '
+  $2 == file { digest = $1; count++ }
+  END { if (count != 1) exit 1; print digest }
+' SHA256SUMS)"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$artifact" | awk '{print $1}')"
+else
+  actual="$(shasum -a 256 "$artifact" | awk '{print $1}')"
+fi
+test "$actual" = "$expected"
+
+install -d "$HOME/.local/bin"
+install -m 0755 "$artifact" "$HOME/.local/bin/maniud"
+"$HOME/.local/bin/maniud" --version
+```
+
+如果 shell 尚未从 `$HOME/.local/bin` 查找命令，请把这个目录添加到 `PATH`。任一步骤失败都应立即停止。
+
 ## 检查 SHA-256 摘要
 
 先设置下载的文件名，再与 `SHA256SUMS` 中的确切记录比较：

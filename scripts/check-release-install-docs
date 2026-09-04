@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -z "${GH_TOKEN:-}" ]]; then
+	printf '%s\n' 'GH_TOKEN is required to verify the documented release install' >&2
+	exit 2
+fi
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/maniud-release-install.XXXXXX")"
+trap 'rm -rf "$temporary_dir"' EXIT
+
+install_script="$temporary_dir/install.sh"
+python3 - \
+	"$repo_root/docs/release-verification.md" \
+	"## Install a verified release with GitHub CLI" \
+	"$repo_root/docs/release-verification.zh-CN.md" \
+	"## 使用 GitHub CLI 安装已验证的 Release" \
+	"$install_script" <<'PY'
+from pathlib import Path
+import sys
+
+
+def shell_block(document: str, heading: str) -> str:
+    lines = Path(document).read_text(encoding="utf-8").splitlines()
+    if lines.count(heading) != 1:
+        raise SystemExit(f"{document}: expected one {heading!r} heading")
+    heading_index = lines.index(heading)
+    try:
+        start = lines.index("```sh", heading_index + 1) + 1
+        end = lines.index("```", start)
+    except ValueError as error:
+        raise SystemExit(f"{document}: install section has no complete sh block") from error
+    if any(line.startswith("## ") for line in lines[heading_index + 1 : start]):
+        raise SystemExit(f"{document}: install heading has no sh block")
+    return "\n".join(lines[start:end]) + "\n"
+
+
+english = shell_block(sys.argv[1], sys.argv[2])
+chinese = shell_block(sys.argv[3], sys.argv[4])
+if english != chinese:
+    raise SystemExit("release install command differs between English and Chinese guides")
+Path(sys.argv[5]).write_text(english, encoding="utf-8")
+PY
+
+home="$temporary_dir/home"
+runtime_tmp="$temporary_dir/tmp"
+mkdir -p "$home" "$runtime_tmp"
+HOME="$home" \
+	GH_CONFIG_DIR="$temporary_dir/gh" \
+	TMPDIR="$runtime_tmp" \
+	bash "$install_script"
+
+installed_version="$("$home/.local/bin/maniud" --version)"
+if [[ ! "$installed_version" =~ ^maniud\ (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+	printf 'documented release install returned an invalid version: %s\n' "$installed_version" >&2
+	exit 1
+fi
+printf 'documented release install passed: %s\n' "$installed_version"
