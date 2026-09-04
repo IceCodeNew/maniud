@@ -23,6 +23,7 @@ set -eu
 repo='IceCodeNew/maniud'
 tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
 version="${tag#v}"
+release_sha="$(gh api "repos/$repo/commits/$tag" --jq .sha)"
 
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64)  platform='darwin_arm64' ;;
@@ -47,6 +48,7 @@ for subject in "$artifact" SHA256SUMS; do
     --bundle "$bundle" \
     --signer-workflow "$repo/.github/workflows/release.yml" \
     --source-ref refs/heads/master \
+    --source-digest "$release_sha" \
     --deny-self-hosted-runners
 done
 
@@ -60,6 +62,9 @@ else
   actual="$(shasum -a 256 "$artifact" | awk '{print $1}')"
 fi
 test "$actual" = "$expected"
+
+chmod 0755 "$artifact"
+test "$("./$artifact" --version)" = "maniud $version"
 
 install -d "$HOME/.local/bin"
 install -m 0755 "$artifact" "$HOME/.local/bin/maniud"
@@ -83,13 +88,16 @@ test -n "$expected" && test "$actual" = "$expected"
 
 ## 核验 Sigstore attestation
 
-核对二进制文件对应的仓库、Release workflow、master 分支和 bundle：
+先把 `tag` 设为下载的版本，再核对二进制文件对应的仓库、Release workflow、发布 commit、master 分支和 bundle：
 
 ```sh
+tag=vX.Y.Z
+release_sha="$(gh api "repos/IceCodeNew/maniud/commits/$tag" --jq .sha)"
 gh attestation verify "$artifact" \
   --repo IceCodeNew/maniud \
   --signer-workflow IceCodeNew/maniud/.github/workflows/release.yml \
   --source-ref refs/heads/master \
+  --source-digest "$release_sha" \
   --deny-self-hosted-runners \
   --bundle maniud_X.Y.Z.sigstore.json
 ```
@@ -101,9 +109,10 @@ gh attestation verify SHA256SUMS \
   --repo IceCodeNew/maniud \
   --signer-workflow IceCodeNew/maniud/.github/workflows/release.yml \
   --source-ref refs/heads/master \
+  --source-digest "$release_sha" \
   --deny-self-hosted-runners \
   --bundle maniud_X.Y.Z.sigstore.json
 ```
 
-仓库、工作流、来源分支、产物摘要或校验和有一项不符时，应拒绝该下载。
+仓库、工作流、发布 commit、来源分支、产物摘要或校验和有一项不符时，应拒绝该下载。
 完成核验并安装二进制文件后，请运行 `maniud --version` 确认发布版本。

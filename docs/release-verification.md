@@ -23,6 +23,7 @@ set -eu
 repo='IceCodeNew/maniud'
 tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
 version="${tag#v}"
+release_sha="$(gh api "repos/$repo/commits/$tag" --jq .sha)"
 
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64)  platform='darwin_arm64' ;;
@@ -47,6 +48,7 @@ for subject in "$artifact" SHA256SUMS; do
     --bundle "$bundle" \
     --signer-workflow "$repo/.github/workflows/release.yml" \
     --source-ref refs/heads/master \
+    --source-digest "$release_sha" \
     --deny-self-hosted-runners
 done
 
@@ -60,6 +62,9 @@ else
   actual="$(shasum -a 256 "$artifact" | awk '{print $1}')"
 fi
 test "$actual" = "$expected"
+
+chmod 0755 "$artifact"
+test "$("./$artifact" --version)" = "maniud $version"
 
 install -d "$HOME/.local/bin"
 install -m 0755 "$artifact" "$HOME/.local/bin/maniud"
@@ -83,13 +88,16 @@ Stop if the entry is missing or the digest differs.
 
 ## Verify the Sigstore attestations
 
-Verify the selected binary against the repository, Release workflow, master branch, and bundle:
+Set `tag` to the downloaded release. Then verify the selected binary against the repository, Release workflow, exact release commit, master branch, and bundle:
 
 ```sh
+tag=vX.Y.Z
+release_sha="$(gh api "repos/IceCodeNew/maniud/commits/$tag" --jq .sha)"
 gh attestation verify "$artifact" \
   --repo IceCodeNew/maniud \
   --signer-workflow IceCodeNew/maniud/.github/workflows/release.yml \
   --source-ref refs/heads/master \
+  --source-digest "$release_sha" \
   --deny-self-hosted-runners \
   --bundle maniud_X.Y.Z.sigstore.json
 ```
@@ -101,9 +109,10 @@ gh attestation verify SHA256SUMS \
   --repo IceCodeNew/maniud \
   --signer-workflow IceCodeNew/maniud/.github/workflows/release.yml \
   --source-ref refs/heads/master \
+  --source-digest "$release_sha" \
   --deny-self-hosted-runners \
   --bundle maniud_X.Y.Z.sigstore.json
 ```
 
-Reject the download when the repository, workflow, source branch, subject digest, or checksum does not match.
+Reject the download when the repository, workflow, release commit, source branch, subject digest, or checksum does not match.
 After verification, install the binary and confirm that `maniud --version` reports the expected release.
