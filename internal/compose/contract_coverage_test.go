@@ -29,7 +29,7 @@ func TestWorkloadSpecFullFieldMappingAndRejections(t *testing.T) {
 	stop := composetypes.Duration(3 * time.Second)
 	retries := uint64(2)
 	service := composetypes.ServiceConfig{
-		Name: "api", ContainerName: "container", NetworkMode: composeBridgeNetwork,
+		Name: apiService, ContainerName: "container", NetworkMode: composeBridgeNetwork,
 		CgroupParent: "parent", Cgroup: "private",
 		CPUS: 1.5, Hostname: "host", MemLimit: 1024, OomScoreAdj: 2, PidsLimit: 3, Restart: "always",
 		ShmSize: 2048, StopSignal: "SIGTERM", StopGracePeriod: &stop, User: "1000",
