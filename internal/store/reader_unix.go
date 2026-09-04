@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/IceCodeNew/maniud/internal/domain"
 	modernsqlite "modernc.org/sqlite"
 )
 
@@ -292,6 +293,36 @@ func (reader *Reader) UnresolvedTransaction(
 	return reader.unresolvedResult(record, found)
 }
 
+// UnresolvedRepositoryTransactions returns the bounded unresolved inventory
+// for one repository scope from the Reader's stable snapshot.
+func (reader *Reader) UnresolvedRepositoryTransactions(
+	ctx context.Context,
+	scope domain.Digest,
+) ([]Transaction, error) {
+	if reader == nil || scope == (domain.Digest{}) {
+		return nil, ErrInvalidState
+	}
+
+	if !reader.closed && reader.database == nil && reader.transaction == nil && reader.anchor == nil {
+		if ctx.Err() != nil {
+			return nil, classifyContext(ctx)
+		}
+
+		return nil, nil
+	}
+
+	if reader.requireValid() != nil {
+		return nil, ErrInvalidState
+	}
+
+	records, err := unresolvedRepositoryTransactions(ctx, reader.transaction, scope)
+	if err != nil {
+		return nil, err
+	}
+
+	return reader.transactionResult(records)
+}
+
 // AppliedService returns the latest committed workload generation from the
 // Reader's stable snapshot.
 func (reader *Reader) AppliedService(
@@ -445,6 +476,15 @@ func (reader *Reader) backupResult(record BackupIndex, found bool) (BackupIndex,
 }
 
 func (reader *Reader) actionResult(records []Action) ([]Action, error) {
+	err := reader.requireValid()
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+func (reader *Reader) transactionResult(records []Transaction) ([]Transaction, error) {
 	err := reader.requireValid()
 	if err != nil {
 		return nil, err

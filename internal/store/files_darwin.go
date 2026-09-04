@@ -24,6 +24,7 @@ func platformEntryPath(anchor *stateAnchor, name string) string {
 
 func statIdentity(metadata unix.Stat_t) fileIdentity {
 	return fileIdentity{
+		//nolint:gosec // Darwin stat.Dev is int32; device identity is stored as uint64.
 		device: uint64(metadata.Dev),
 		inode:  metadata.Ino,
 		mode:   uint32(metadata.Mode),
