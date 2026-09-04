@@ -45,7 +45,7 @@ func TestExecuteGitOpsInitRemovesRepositoryWhenRegistrationFails(t *testing.T) {
 	}
 	existing := gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: gitOpsTestRepository, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: gitOpsTestCommit,
+		Remote: gitOpsRemoteName, RemoteURL: gitOpsTestRepository, BaselineCommit: gitOpsTestCommit,
 	}
 	if err = writeGitOpsRegistration(gitOpsRegistrationPath(statePath), existing); err != nil {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)
@@ -133,10 +133,7 @@ func TestReuseInitializedGitOpsCheckoutRejectsDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanGitTree() error = %v", err)
 	}
-	registration := gitOpsRegistration{
-		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: state.head,
-	}
+	registration := testGitOpsRegistration(t, root, state.head)
 	if err = reuseInitializedGitOpsCheckout(
 		t.Context(), registration, root+"-other", gitOpsTestBranch,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
@@ -298,6 +295,7 @@ func TestWriteGitOpsRegistrationRejectsDifferentExistingFile(t *testing.T) {
 		Repository:     gitOpsTestRepository,
 		Branch:         gitOpsTestBranch,
 		Remote:         gitOpsRemoteName,
+		RemoteURL:      gitOpsTestRepository,
 		BaselineCommit: gitOpsTestCommit,
 	}
 	if err := writeGitOpsRegistration(path, first); err != nil {
@@ -311,6 +309,16 @@ func TestWriteGitOpsRegistrationRejectsDifferentExistingFile(t *testing.T) {
 	second.BaselineCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if err := writeGitOpsRegistration(path, second); !errors.Is(err, errGitOpsRegistrationExists) {
 		t.Fatalf("writeGitOpsRegistration(conflict) = %v", err)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), gitOpsRegistrationName)
+	legacy := first
+	legacy.RemoteURL = ""
+	if err := writeGitOpsRegistration(legacyPath, legacy); err != nil {
+		t.Fatalf("writeGitOpsRegistration(legacy) error = %v", err)
+	}
+	if err := writeGitOpsRegistration(legacyPath, second); !errors.Is(err, errGitOpsRegistrationExists) {
+		t.Fatalf("writeGitOpsRegistration(legacy conflict) = %v", err)
 	}
 }
 
@@ -340,6 +348,7 @@ func TestGitOpsRegistrationRejectsInvalidFiles(t *testing.T) {
 		Repository:     gitOpsTestRepository,
 		Branch:         gitOpsTestBranch,
 		Remote:         gitOpsRemoteName,
+		RemoteURL:      gitOpsTestRepository,
 		BaselineCommit: gitOpsTestCommit,
 	}
 	root := t.TempDir()
@@ -424,7 +433,7 @@ func TestGitOpsRepositoryRejectsInvalidCheckoutBoundaries(t *testing.T) {
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("resolveGitOpsRepository(relative) = %v", err)
 	}
-	if _, _, err := inspectGitOpsCheckout(
+	if _, _, _, err := inspectGitOpsCheckout(
 		t.Context(), repositoryValue, gitOpsTestBranch,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("inspectGitOpsCheckout(relative) = %v", err)
@@ -450,7 +459,7 @@ func TestGitOpsRepositoryRejectsInvalidCheckoutBoundaries(t *testing.T) {
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("resolveGitOpsRepository(subdirectory) = %v", err)
 	}
-	if _, _, err := inspectGitOpsCheckout(
+	if _, _, _, err := inspectGitOpsCheckout(
 		t.Context(), root, "other",
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("inspectGitOpsCheckout(wrong branch) = %v", err)
@@ -466,7 +475,7 @@ func TestGitOpsRepositoryRejectsInvalidConfiguration(t *testing.T) {
 	); err != nil {
 		t.Fatalf("git remote set-url error = %v", err)
 	}
-	if _, _, err := inspectGitOpsCheckout(
+	if _, _, _, err := inspectGitOpsCheckout(
 		t.Context(), root, gitOpsTestBranch,
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("inspectGitOpsCheckout(invalid remote) = %v", err)
@@ -506,8 +515,12 @@ func TestGitOpsRepositoryRejectsInvalidGitState(t *testing.T) {
 	}
 
 	root = initGitOpsTestRepository(t)
+	remote, err := gitRemoteURL(t.Context(), root, gitOpsRemoteName)
+	if err != nil {
+		t.Fatalf("gitRemoteURL(valid) = %v", err)
+	}
 	if _, err := gitOpsRepositoryScope(t.Context(), gitOpsRegistration{
-		Remote: gitOpsRemoteName,
+		Remote: gitOpsRemoteName, RemoteURL: remote,
 	}, root); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("gitOpsRepositoryScope(invalid branch) = %v", err)
 	}
@@ -527,7 +540,9 @@ func TestProveGitOpsCheckoutRejectsMissingUpstream(t *testing.T) {
 	if _, err := runGit(t.Context(), root, "update-ref", "-d", ref); err != nil {
 		t.Fatalf("git update-ref -d error = %v", err)
 	}
-	if _, _, err := proveGitOpsCheckout(t.Context(), root, gitOpsTestBranch); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	if _, _, _, err := proveGitOpsCheckout(
+		t.Context(), root, gitOpsTestBranch,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("proveGitOpsCheckout(missing upstream) = %v", err)
 	}
 
@@ -540,7 +555,9 @@ func TestProveGitOpsCheckoutRejectsMissingUpstream(t *testing.T) {
 	if _, err := runGit(t.Context(), root, "reset", "--quiet", "--hard", "HEAD~1"); err != nil {
 		t.Fatalf("git reset --hard error = %v", err)
 	}
-	if _, _, err := proveGitOpsCheckout(t.Context(), root, gitOpsTestBranch); !errors.Is(err, errGitOpsRepositoryInvalid) {
+	if _, _, _, err := proveGitOpsCheckout(
+		t.Context(), root, gitOpsTestBranch,
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("proveGitOpsCheckout(upstream ahead) = %v", err)
 	}
 }
@@ -549,13 +566,12 @@ func TestProveGitOpsCheckoutRejectsFinalCheckoutDrift(t *testing.T) {
 	t.Parallel()
 
 	root := initGitOpsTestRepository(t)
-	_, _, err := proveGitOpsCheckoutWithFinalCheck(
+	if _, _, _, err := proveGitOpsCheckoutWithFinalCheck(
 		t.Context(), root, gitOpsTestBranch,
 		func(context.Context, string) (gitTreeState, error) {
 			return gitTreeState{}, compose.ErrInvalidSource
 		},
-	)
-	if !errors.Is(err, errGitOpsRepositoryInvalid) {
+	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("proveGitOpsCheckoutWithFinalCheck() = %v", err)
 	}
 }

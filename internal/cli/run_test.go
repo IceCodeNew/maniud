@@ -161,12 +161,13 @@ func TestRunHelpPages(t *testing.T) {
 		},
 		{
 			args:         []string{debugOption, string(commandApply), shortHelpOption},
-			wantContains: []string{"Usage: maniud apply", "Dry run passed", jsonOption},
+			wantContains: []string{"Usage: maniud apply", "Dry run passed", jsonOption, "health-degraded"},
 		},
 		{
 			args: []string{string(commandTUI), helpOption},
 			wantContains: []string{
-				"Usage: maniud tui", "terminal input and output", "maniud apply --dry-run <compose>",
+				"Usage: maniud tui", "repository setup", "deployment parameter edits", "LLM recommendations",
+				"terminal input and output", "maniud apply --dry-run <compose>",
 			},
 		},
 		{
@@ -254,7 +255,7 @@ func TestRunProductionBuildsGenerationDependencies(t *testing.T) {
 
 			output := new(bytes.Buffer)
 			status := runProduction(
-				context.Background(), test.args, nil, output, io.Discard, map[string]string{}, test.getwd,
+				t.Context(), test.args, nil, output, io.Discard, map[string]string{}, test.getwd,
 				testRuntimePlugins(t),
 			)
 			if status != 1 || !strings.Contains(output.String(), test.wantCode) {

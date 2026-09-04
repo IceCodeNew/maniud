@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/tui"
 )
@@ -90,6 +93,17 @@ func TestTUIOptionsHonorTerminalEnvironment(t *testing.T) {
 	if unicodeTerminal(map[string]string{languageEnvironment: utf8Locale}, func(string) int { return 2 }) {
 		t.Fatal("unicodeTerminal(wide canonical symbol) succeeded")
 	}
+	for _, wide := range []string{"×", "›", "─", "│", "┌", "┐", "└", "┘", "▌", "○", "●", "✓", "⬟", "…"} {
+		if unicodeTerminal(map[string]string{languageEnvironment: utf8Locale}, func(symbol string) int {
+			if symbol == wide {
+				return 2
+			}
+
+			return 1
+		}) {
+			t.Fatalf("unicodeTerminal accepted wide rendered symbol %q", wide)
+		}
+	}
 }
 
 func TestClassifyTUIFailure(t *testing.T) {
@@ -158,6 +172,7 @@ func TestWriteTUIInstructionsUsesShellReadyLines(t *testing.T) {
 	}
 }
 
+//nolint:funlen // Each setup dependency has a distinct contained failure fixture.
 func TestExecuteProductionTUIContainsSetupFailures(t *testing.T) {
 	t.Parallel()
 
@@ -193,6 +208,22 @@ func TestExecuteProductionTUIContainsSetupFailures(t *testing.T) {
 			name: "dependencies", environment: environment,
 			workingDir: func() (string, error) { return "", io.ErrClosedPipe },
 			terminal:   terminal, wantError: io.ErrClosedPipe,
+		},
+		{
+			name: "assistant working directory", environment: environment,
+			workingDir: func() func() (string, error) {
+				calls := 0
+
+				return func() (string, error) {
+					calls++
+					if calls == 2 {
+						return "", io.ErrClosedPipe
+					}
+
+					return workingDirectory, nil
+				}
+			}(),
+			terminal: terminal, wantError: io.ErrClosedPipe,
 		},
 	}
 	for _, test := range tests {
@@ -273,7 +304,8 @@ func TestExecuteProductionTUIWritesPostCommitInstructionsAfterFailure(t *testing
 			_ tui.Catalog,
 			workspace tui.ServiceWorkspace,
 			_ tui.DeploymentWorkspace,
-			_ tui.Operations,
+			_ tui.Assistant,
+			_ applyDependencies,
 			_ *tui.EventStream,
 			_ tui.Options,
 		) (tui.Result, error) {
@@ -319,7 +351,8 @@ func TestExecuteProductionTUIWritesExportAfterTerminalAndBeforeInstructions(t *t
 			_ tui.Catalog,
 			workspace tui.ServiceWorkspace,
 			_ tui.DeploymentWorkspace,
-			_ tui.Operations,
+			_ tui.Assistant,
+			_ applyDependencies,
 			_ *tui.EventStream,
 			_ tui.Options,
 		) (tui.Result, error) {
@@ -348,11 +381,229 @@ func productionTUIRunner(result error) tuiRunner {
 		tui.Catalog,
 		tui.ServiceWorkspace,
 		tui.DeploymentWorkspace,
-		tui.Operations,
+		tui.Assistant,
+		applyDependencies,
 		*tui.EventStream,
 		tui.Options,
 	) (tui.Result, error) {
 		return tui.Result{}, result
+	}
+}
+
+type tuiCatalogFixture struct {
+	snapshot tui.CatalogSnapshot
+	ready    chan struct{}
+	once     sync.Once
+}
+
+func (fixture *tuiCatalogFixture) Snapshot(context.Context) tui.CatalogSnapshot {
+	if fixture.ready != nil {
+		fixture.once.Do(func() { close(fixture.ready) })
+	}
+
+	return fixture.snapshot
+}
+
+func (*tuiCatalogFixture) OpenRegistered(context.Context, string) tui.OpenResult {
+	return tui.OpenResult{Blocker: tui.BlockerNotFound}
+}
+
+func (*tuiCatalogFixture) OpenPath(context.Context, string) tui.OpenResult {
+	return tui.OpenResult{Blocker: tui.BlockerNotFound}
+}
+
+func (fixture *tuiCatalogFixture) Register(context.Context, tui.RepositorySetupRequest) tui.RegistrationResult {
+	return tui.RegistrationResult{Snapshot: fixture.snapshot}
+}
+
+type tuiWorkspaceFixture struct{}
+
+func (*tuiWorkspaceFixture) Preview(context.Context, string) (tui.ServiceDraft, error) {
+	return tui.ServiceDraft{}, nil
+}
+
+func (*tuiWorkspaceFixture) Stage(context.Context) (tui.StagedService, error) {
+	return tui.StagedService{}, nil
+}
+
+func (*tuiWorkspaceFixture) Commit(context.Context, string, bool) (tui.CommitResult, error) {
+	return tui.CommitResult{}, nil
+}
+
+func (*tuiWorkspaceFixture) Suspend(context.Context) error {
+	return nil
+}
+
+type tuiDeploymentWorkspaceFixture struct{}
+
+func (*tuiDeploymentWorkspaceFixture) Fields(
+	context.Context,
+	application.Request,
+) ([]tui.DeploymentFieldState, error) {
+	return nil, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Preview(
+	context.Context,
+	application.Request,
+	string,
+	string,
+	bool,
+) (tui.DeploymentEditPreview, error) {
+	return tui.DeploymentEditPreview{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) PreviewRestore(
+	context.Context,
+	application.Request,
+	string,
+) (tui.DeploymentEditPreview, error) {
+	return tui.DeploymentEditPreview{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Stage(context.Context) (tui.StagedDeploymentEdit, error) {
+	return tui.StagedDeploymentEdit{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Commit(
+	context.Context,
+	string,
+	bool,
+) (tui.CommitResult, error) {
+	return tui.CommitResult{}, nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) Discard(context.Context) error {
+	return nil
+}
+
+func (*tuiDeploymentWorkspaceFixture) History(
+	context.Context,
+	application.Request,
+) ([]tui.DeploymentHistoryEntry, error) {
+	return nil, nil
+}
+
+type tuiOperationsFixture struct{}
+
+func (*tuiOperationsFixture) DryRun(
+	context.Context,
+	application.Request,
+) (application.Plan, error) {
+	return application.Plan{}, nil
+}
+
+func (*tuiOperationsFixture) Apply(
+	context.Context,
+	application.Request,
+) (application.Plan, error) {
+	return application.Plan{}, nil
+}
+
+func (*tuiOperationsFixture) ResolveHealth(
+	context.Context,
+	application.Request,
+	application.HealthResolution,
+) (application.Plan, error) {
+	return application.Plan{}, nil
+}
+
+func (*tuiOperationsFixture) RepositoryInventory(
+	context.Context,
+	compose.RepositoryScope,
+) ([]application.RepositoryTransaction, error) {
+	return nil, nil
+}
+
+func (*tuiOperationsFixture) Snapshot(
+	context.Context,
+	application.Request,
+) (application.OperationSnapshot, error) {
+	return application.OperationSnapshot{}, nil
+}
+
+func (*tuiOperationsFixture) Evidence(application.OperationSnapshot) (application.EvidenceBundle, error) {
+	return application.EvidenceBundle{Version: application.EvidenceBundleVersion}, nil
+}
+
+func TestExecuteTUIRunsCatalogHome(t *testing.T) {
+	t.Parallel()
+
+	ready := make(chan struct{})
+	catalog := &tuiCatalogFixture{
+		snapshot: tui.CatalogSnapshot{State: tui.CatalogMissing},
+		ready:    ready,
+	}
+	input := &tuiSignalReader{ready: ready, content: []byte("q")}
+	dependencies := applyDependencies{operations: &tuiOperationsFixture{}}
+	if _, err := executeTUIWithAssistant(
+		t.Context(), input, io.Discard, catalog, &tuiWorkspaceFixture{},
+		&tuiDeploymentWorkspaceFixture{}, nil, dependencies, tui.NewEventStream(), tui.Options{},
+	); err != nil {
+		t.Fatalf("executeTUIWithAssistant() error = %v", err)
+	}
+}
+
+func TestExecuteTUIContainsReaderFailure(t *testing.T) {
+	t.Parallel()
+
+	ready := make(chan struct{})
+	catalog := &tuiCatalogFixture{
+		snapshot: tui.CatalogSnapshot{State: tui.CatalogMissing},
+		ready:    ready,
+	}
+	dependencies := applyDependencies{operations: &tuiOperationsFixture{}}
+	if _, err := executeTUIWithAssistant(
+		t.Context(), tuiFailingReader{ready: ready}, io.Discard, catalog, &tuiWorkspaceFixture{},
+		&tuiDeploymentWorkspaceFixture{}, nil, dependencies, tui.NewEventStream(), tui.Options{},
+	); !errors.Is(err, errApplyTest) || !strings.Contains(err.Error(), "run TUI") {
+		t.Fatalf("executeTUIWithAssistant(reader failure) error = %v", err)
+	}
+}
+
+func TestExecuteTUIRejectsInvalidDependencies(t *testing.T) {
+	t.Parallel()
+
+	validCatalog := &tuiCatalogFixture{}
+	validWorkspace := &tuiWorkspaceFixture{}
+	validDeployments := &tuiDeploymentWorkspaceFixture{}
+	validDependencies := applyDependencies{operations: &tuiOperationsFixture{}}
+	events := tui.NewEventStream()
+	tests := []struct {
+		catalog      tui.Catalog
+		workspace    tui.ServiceWorkspace
+		deployments  tui.DeploymentWorkspace
+		dependencies applyDependencies
+		events       *tui.EventStream
+	}{
+		{
+			catalog: nil, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: nil, deployments: validDeployments,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: nil,
+			dependencies: validDependencies, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: applyDependencies{}, events: events,
+		},
+		{
+			catalog: validCatalog, workspace: validWorkspace, deployments: validDeployments,
+			dependencies: validDependencies, events: nil,
+		},
+	}
+	for _, test := range tests {
+		if _, err := executeTUIWithAssistant(
+			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.deployments,
+			nil, test.dependencies, test.events, tui.Options{},
+		); !errors.Is(err, errInvalidArguments) {
+			t.Fatalf("executeTUIWithAssistant(invalid) error = %v", err)
+		}
 	}
 }
 
@@ -403,6 +654,20 @@ func (eventSinkWithoutCounter) TryPublish(application.Event) bool {
 type tuiSignalReader struct {
 	ready   <-chan struct{}
 	content []byte
+}
+
+type tuiFailingReader struct {
+	ready <-chan struct{}
+}
+
+func (reader tuiFailingReader) Read([]byte) (int, error) {
+	select {
+	case <-reader.ready:
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("wait for TUI render: %w", context.DeadlineExceeded)
+	}
+
+	return 0, errApplyTest
 }
 
 func (reader *tuiSignalReader) Read(destination []byte) (int, error) {

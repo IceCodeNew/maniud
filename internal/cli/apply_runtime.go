@@ -19,6 +19,11 @@ import (
 type applyOperations interface {
 	DryRun(ctx context.Context, request application.Request) (application.Plan, error)
 	Apply(ctx context.Context, request application.Request) (application.Plan, error)
+	ResolveHealth(
+		ctx context.Context,
+		request application.Request,
+		resolution application.HealthResolution,
+	) (application.Plan, error)
 	RepositoryInventory(
 		ctx context.Context,
 		scope compose.RepositoryScope,
@@ -114,6 +119,12 @@ func classifyApplyFailure(err error) *domain.FailureError {
 	}
 	if errors.Is(err, runtimeplugin.ErrNotBuilt) {
 		return domain.RuntimeNotBuilt()
+	}
+	if errors.Is(err, application.ErrHealthPending) {
+		return domain.HealthPending()
+	}
+	if errors.Is(err, application.ErrHealthDegraded) {
+		return domain.HealthDegraded()
 	}
 
 	retryable := errors.Is(err, runtimeplugin.ErrUnavailable) || errors.Is(err, registry.ErrUnavailable) ||

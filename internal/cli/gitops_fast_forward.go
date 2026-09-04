@@ -13,16 +13,14 @@ type gitOpsCheckoutSelection struct {
 
 func fastForwardGitOpsCheckout(
 	ctx context.Context,
-	path string,
-	branch string,
-	registeredCommit string,
+	registration gitOpsRegistration,
 ) (gitOpsCheckoutSelection, error) {
-	root, before, err := registeredGitOpsCheckout(ctx, path, branch, registeredCommit)
+	root, before, _, err := registeredGitOpsCheckout(ctx, registration)
 	if err != nil {
 		return gitOpsCheckoutSelection{}, err
 	}
 
-	upstream, err := fetchGitOpsCommit(ctx, root, branch)
+	upstream, err := fetchGitOpsCommit(ctx, root, registration.Branch, registration.RemoteURL)
 	if err != nil {
 		return gitOpsCheckoutSelection{}, errGitOpsRepositoryInvalid
 	}
@@ -42,38 +40,76 @@ func fastForwardGitOpsCheckout(
 
 func registeredGitOpsCheckout(
 	ctx context.Context,
-	path string,
-	branch string,
-	registeredCommit string,
-) (string, string, error) {
-	if !validGitObjectID(registeredCommit) {
-		return "", "", errGitOpsRepositoryInvalid
+	registration gitOpsRegistration,
+) (string, string, string, error) {
+	root, before, remote, err := proveRegisteredGitOpsCheckout(ctx, registration)
+	if err != nil {
+		return "", "", "", errGitOpsRepositoryInvalid
+	}
+	if registration.RemoteURL == "" || remote != registration.RemoteURL {
+		return "", "", "", errGitOpsRepositoryInvalid
 	}
 
-	root, before, err := inspectGitOpsCheckoutWithState(
-		ctx, path, branch, gitTreeAllowingTUIDrafts,
-	)
-	if err != nil || requireFastForward(ctx, root, registeredCommit, before.head) != nil {
-		return "", "", errGitOpsRepositoryInvalid
-	}
-
-	return root, before.head, nil
+	return root, before, remote, nil
 }
 
-func fetchGitOpsCommit(ctx context.Context, root, branch string) (string, error) {
-	return fetchGitOpsCommitWithResolver(ctx, root, branch, resolveGitObject)
+func bindGitOpsRemote(
+	ctx context.Context,
+	registrationPath string,
+	registration gitOpsRegistration,
+) (gitOpsRegistration, error) {
+	_, _, remote, err := proveRegisteredGitOpsCheckout(ctx, registration)
+	if err != nil {
+		return gitOpsRegistration{}, errGitOpsRepositoryInvalid
+	}
+	if registration.RemoteURL != "" {
+		if registration.RemoteURL != remote {
+			return gitOpsRegistration{}, errGitOpsRepositoryInvalid
+		}
+
+		return registration, nil
+	}
+	registration.RemoteURL = remote
+	if err = writeGitOpsRegistration(registrationPath, registration); err != nil {
+		return gitOpsRegistration{}, err
+	}
+
+	return registration, nil
+}
+
+func proveRegisteredGitOpsCheckout(
+	ctx context.Context,
+	registration gitOpsRegistration,
+) (string, string, string, error) {
+	if !validGitOpsRegistration(registration) {
+		return "", "", "", errGitOpsRepositoryInvalid
+	}
+
+	root, before, remote, err := inspectGitOpsCheckoutWithState(
+		ctx, registration.Repository, registration.Branch, gitTreeAllowingTUIDrafts,
+	)
+	if err != nil || requireFastForward(ctx, root, registration.BaselineCommit, before.head) != nil {
+		return "", "", "", errGitOpsRepositoryInvalid
+	}
+
+	return root, before.head, remote, nil
+}
+
+func fetchGitOpsCommit(ctx context.Context, root, branch, remoteURL string) (string, error) {
+	return fetchGitOpsCommitWithResolver(ctx, root, branch, remoteURL, resolveGitObject)
 }
 
 func fetchGitOpsCommitWithResolver(
 	ctx context.Context,
 	root string,
 	branch string,
+	remoteURL string,
 	resolve func(context.Context, string, string) (string, error),
 ) (string, error) {
 	remoteBranch := gitOpsRemoteName + "/" + branch
 	refspec := "refs/heads/" + branch + ":refs/remotes/" + remoteBranch
-	remoteURL, err := gitRemoteURL(ctx, root, gitOpsRemoteName)
-	if err != nil {
+	actualRemote, err := gitRemoteURL(ctx, root, gitOpsRemoteName)
+	if err != nil || remoteURL == "" || actualRemote != remoteURL {
 		return "", errGitOpsRepositoryInvalid
 	}
 	if _, err := runGit(

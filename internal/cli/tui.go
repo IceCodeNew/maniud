@@ -28,10 +28,37 @@ type tuiRunner func(
 	tui.Catalog,
 	tui.ServiceWorkspace,
 	tui.DeploymentWorkspace,
-	tui.Operations,
+	tui.Assistant,
+	applyDependencies,
 	*tui.EventStream,
 	tui.Options,
 ) (tui.Result, error)
+
+func executeTUIWithAssistant(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	catalog tui.Catalog,
+	workspace tui.ServiceWorkspace,
+	deployments tui.DeploymentWorkspace,
+	assistant tui.Assistant,
+	dependencies applyDependencies,
+	events *tui.EventStream,
+	options tui.Options,
+) (tui.Result, error) {
+	if catalog == nil || workspace == nil || deployments == nil || dependencies.operations == nil || events == nil {
+		return tui.Result{}, errInvalidArguments
+	}
+
+	result, err := tui.RunWithAssistant(
+		ctx, input, output, catalog, workspace, deployments, assistant, dependencies.operations, events, options,
+	)
+	if err != nil {
+		return result, fmt.Errorf("run TUI: %w", err)
+	}
+
+	return result, nil
+}
 
 func executeProductionTUI(
 	ctx context.Context,
@@ -44,7 +71,7 @@ func executeProductionTUI(
 ) error {
 	return executeProductionTUIWith(
 		ctx, input, output, stderr, environment, getWorkingDirectory, runtimes, notifications,
-		tui.IsTerminal, tui.Run,
+		tui.IsTerminal, executeTUIWithAssistant,
 	)
 }
 
@@ -78,9 +105,15 @@ func executeProductionTUIWith(
 	catalog := defaultTUICatalog(environment, dependencies.loadSource)
 	workspace := defaultTUIServiceWorkspace(environment, runtimes)
 	deployments := defaultTUIDeploymentWorkspace(environment)
+	workingDirectory, err := getWorkingDirectory()
+	if err != nil {
+		return err
+	}
+	assistant := defaultTUIAssistant(environment, workingDirectory, deployments, dependencies.operations)
 
 	result, runErr := run(
-		ctx, input, output, catalog, workspace, deployments, dependencies.operations, tuiEvents, tuiOptions(environment),
+		ctx, input, output, catalog, workspace, deployments, assistant,
+		dependencies, tuiEvents, tuiOptions(environment),
 	)
 	runErr = runtimes.Classify(runErr)
 	exportErr := writeTUIExport(output, stderr, result.Export)
@@ -170,7 +203,7 @@ func unicodeTerminal(environment map[string]string, width func(string) int) bool
 	if !strings.Contains(normalized, "UTF-8") && !strings.Contains(normalized, "UTF8") {
 		return false
 	}
-	for _, symbol := range []string{"◆", "✓", "›", "│", "─", "…", "▌"} {
+	for _, symbol := range []string{"×", "›", "─", "│", "┌", "┐", "└", "┘", "▌", "○", "●", "✓", "⬟", "…"} {
 		if width(symbol) != 1 {
 			return false
 		}
