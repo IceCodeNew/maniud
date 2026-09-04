@@ -16,13 +16,14 @@ import (
 func Run(
 	ctx context.Context,
 	args []string,
-	_ io.Reader,
+	stdin io.Reader,
 	stdout, stderr io.Writer,
 	runtimes runtimeplugin.Set,
 ) int {
 	return runProduction(
 		ctx,
 		args,
+		stdin,
 		stdout,
 		stderr,
 		environmentMap(os.Environ()),
@@ -35,6 +36,7 @@ func Run(
 func runProduction(
 	ctx context.Context,
 	args []string,
+	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
 	environment map[string]string,
@@ -65,6 +67,10 @@ func runProduction(
 		}
 
 		return runtimes.Classify(executeApply(ctx, arguments, stdout, dependencies))
+	}, func(tuiInvocation) error {
+		return executeProductionTUI(
+			ctx, stdin, stdout, stderr, environment, getWorkingDirectory, runtimes, &notifications,
+		)
 	}, func(arguments gitOpsInitInvocation) error {
 		return executeGitOpsInit(ctx, arguments, environment)
 	}, func(arguments daemonInvocation) error {
@@ -92,7 +98,7 @@ func run(
 	executeGen func(genInvocation) error,
 	executeApply func(applyInvocation) error,
 ) int {
-	return runWithEnvironment(ctx, args, stdout, nil, executeGen, executeApply, nil, nil, nil)
+	return runWithEnvironment(ctx, args, stdout, nil, executeGen, executeApply, nil, nil, nil, nil)
 }
 
 func runWithEnvironment(
@@ -102,6 +108,7 @@ func runWithEnvironment(
 	environment map[string]string,
 	executeGen func(genInvocation) error,
 	executeApply func(applyInvocation) error,
+	executeTUI func(tuiInvocation) error,
 	executeGitOpsInit func(gitOpsInitInvocation) error,
 	executeDaemon func(daemonInvocation) error,
 	executeDoctor func(doctorInvocation) error,
@@ -125,6 +132,7 @@ func runWithEnvironment(
 		environment,
 		executeGen,
 		executeApply,
+		executeTUI,
 		executeGitOpsInit,
 		executeDaemon,
 		executeDoctor,
@@ -137,6 +145,7 @@ func dispatchParsedCommand(
 	environment map[string]string,
 	executeGen func(genInvocation) error,
 	executeApply func(applyInvocation) error,
+	executeTUI func(tuiInvocation) error,
 	executeGitOpsInit func(gitOpsInitInvocation) error,
 	executeDaemon func(daemonInvocation) error,
 	executeDoctor func(doctorInvocation) error,
@@ -146,6 +155,8 @@ func dispatchParsedCommand(
 		return runGen(parsed, stdout, environment, executeGen)
 	case commandApply:
 		return runApply(parsed, stdout, environment, executeApply)
+	case commandTUI:
+		return runTUI(parsed, stdout, environment, executeTUI)
 	case commandGitOpsInit:
 		return runGitOpsInit(parsed, stdout, environment, executeGitOpsInit)
 	case commandDaemonStart, commandDaemonStop:
@@ -188,6 +199,18 @@ func runApply(
 	return runApplicationCommand(
 		parsed, stdout, environment, execute, classifyApplyFailure,
 		"apply application service is unavailable",
+	)
+}
+
+func runTUI(
+	parsed invocation,
+	stdout io.Writer,
+	environment map[string]string,
+	execute func(tuiInvocation) error,
+) int {
+	return runApplicationCommand(
+		parsed, stdout, environment, execute, classifyTUIFailure,
+		"TUI application service is unavailable",
 	)
 }
 
