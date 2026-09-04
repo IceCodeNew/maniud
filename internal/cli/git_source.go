@@ -194,11 +194,23 @@ type gitTreeState struct {
 }
 
 func cleanGitTree(ctx context.Context, root string) (gitTreeState, error) {
-	status, err := runGit(
-		ctx,
-		root,
+	return cleanGitTreeWithAttributeSource(ctx, root, "")
+}
+
+func cleanGitTreeWithAttributeSource(
+	ctx context.Context,
+	root string,
+	attributeSource string,
+) (gitTreeState, error) {
+	arguments := []string{}
+	if attributeSource != "" {
+		arguments = append(arguments, "--attr-source="+attributeSource)
+	}
+	arguments = append(
+		arguments,
 		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none",
 	)
+	status, err := runGit(ctx, root, arguments...)
 	if err != nil || len(status) != 0 {
 		return gitTreeState{}, compose.ErrInvalidSource
 	}
