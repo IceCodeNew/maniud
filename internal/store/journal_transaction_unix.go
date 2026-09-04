@@ -75,7 +75,7 @@ func insertJournalTransaction(
 			"WHERE EXISTS (SELECT 1 FROM writer_leases "+
 			"WHERE service_id = ? AND epoch = ? AND owner = ?) "+
 			"AND NOT EXISTS (SELECT 1 FROM journal_transactions "+
-			"WHERE service_id = ? AND state IN ('active', 'degraded'))",
+			"WHERE service_id = ? AND state IN ('active', 'degraded', 'health_degraded'))",
 		identifier[:],
 		lease.serviceID[:],
 		intent.Kind,
@@ -120,7 +120,7 @@ func (lock *ServiceLock) SetTransactionState(
 		result, execErr := transaction.ExecContext(
 			ctx,
 			"UPDATE journal_transactions SET state = ? "+
-				"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded', ?) "+
+				"WHERE transaction_id = ? AND service_id = ? AND state IN ('active', 'degraded', 'health_degraded', ?) "+
 				"AND NOT EXISTS (SELECT 1 FROM journal_actions "+
 				"WHERE transaction_id = ? AND state != 'completed') "+
 				"AND EXISTS (SELECT 1 FROM writer_leases "+
@@ -247,12 +247,12 @@ func nullableDigest(digest domain.Digest, present bool) any {
 }
 
 func validTransactionState(state TransactionState) bool {
-	return state == TransactionActive || state == TransactionDegraded ||
+	return state == TransactionActive || state == TransactionDegraded || state == TransactionHealthDegraded ||
 		state == TransactionFailed || state == TransactionSucceeded
 }
 
 func validTransactionTargetState(state TransactionState) bool {
-	return state == TransactionDegraded || state == TransactionFailed
+	return state == TransactionDegraded || state == TransactionHealthDegraded || state == TransactionFailed
 }
 
 func validateTransactionBaseline(

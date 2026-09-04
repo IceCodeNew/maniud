@@ -449,9 +449,11 @@ func TestAppliedServiceScannersRejectMalformedAndUnavailableRows(t *testing.T) {
 		digest,
 		digest,
 		digest,
+		0,
 	}
 
 	rows := [][]any{
+		append([]any(nil), valid...),
 		append([]any(nil), valid...),
 		append([]any(nil), valid...),
 		append([]any(nil), valid...),
@@ -461,6 +463,7 @@ func TestAppliedServiceScannersRejectMalformedAndUnavailableRows(t *testing.T) {
 	rows[1][1] = testUnknownValue
 	rows[2][2] = testUnknownValue
 	rows[3][6] = ""
+	rows[4][12] = 2
 
 	for _, values := range rows {
 		_, err := scanAppliedService(context.Background(), queryValues(t, database, values...))
