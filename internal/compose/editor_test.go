@@ -87,6 +87,37 @@ func TestPatchServiceFieldsRejectsInvalidContract(t *testing.T) {
 	}
 }
 
+func TestPatchServiceFieldsDoesNotDiscardSecurityOptions(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{`name: example
+services:
+  api:
+    container_name: example-api
+    image: busybox:stable
+    network_mode: bridge
+    security_opt:
+      - label=disable
+`, `name: example
+services:
+  api:
+    container_name: example-api
+    image: busybox:stable
+    network_mode: bridge
+    security_opt:
+      - label=disable
+      - no-new-privileges
+`} {
+		source := testSource(t, content)
+		expected := containerconfig.Spec{ServiceName: apiService, NoNewPrivileges: true}
+		if _, err := source.PatchServiceFields(
+			t.Context(), apiService, expected, []string{"no_new_privileges"},
+		); !errors.Is(err, ErrInvalidSource) {
+			t.Fatalf("PatchServiceFields(security_opt) error = %v", err)
+		}
+	}
+}
+
 //nolint:funlen // One fixture proves every closed field through the Compose-owned adapter.
 func TestPatchServiceFieldsSetsAndUnsetsClosedFieldSet(t *testing.T) {
 	t.Parallel()
@@ -246,6 +277,26 @@ func TestDeploymentEditorRejectsUnsafeYAMLShapes(t *testing.T) {
 		}
 		if _, err := entryLocalServiceNode(&document, apiService); !errors.Is(err, ErrInvalidSource) {
 			t.Fatalf("entryLocalServiceNode(%q) error = %v", content, err)
+		}
+	}
+	for _, content := range []string{
+		"&root\nservices:\n  api:\n    image: busybox:stable\n",
+		"!!map\nservices:\n  api:\n    image: busybox:stable\n",
+		"services: &services\n  api:\n    image: busybox:stable\n",
+		"services: !!map\n  api:\n    image: busybox:stable\n",
+		"services:\n  api: &api\n    image: busybox:stable\n",
+		"services:\n  api: !!map\n    image: busybox:stable\n",
+	} {
+		source := testSource(t, content)
+		original := bytes.Clone(source.Content)
+		candidate, err := source.PatchServiceFields(
+			t.Context(), apiService,
+			containerconfig.Spec{ServiceName: apiService, CPUs: "2"},
+			[]string{"cpus"},
+		)
+		if !errors.Is(err, ErrInvalidSource) || len(candidate.Content) != 0 ||
+			!bytes.Equal(source.Content, original) {
+			t.Fatalf("PatchServiceFields(unsafe mapping %q) = %q, %v", content, candidate.Content, err)
 		}
 	}
 

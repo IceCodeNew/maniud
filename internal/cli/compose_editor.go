@@ -10,11 +10,17 @@ import (
 	"github.com/IceCodeNew/maniud/internal/compose"
 )
 
-var errDeploymentEditInvalid = errors.New("deployment edit is invalid")
+var (
+	errDeploymentEditInvalid     = errors.New("deployment edit is invalid")
+	errDeploymentPublishFailed   = errors.New("deployment edit publication failed after restore")
+	errDeploymentWorktreeUnknown = errors.New("deployment edit worktree outcome is unknown")
+)
 
 type deploymentEditCandidate struct {
-	source compose.Source
-	fields []application.DeploymentField
+	source   compose.Source
+	fields   []application.DeploymentField
+	current  containerconfig.Spec
+	proposed containerconfig.Spec
 }
 
 //nolint:cyclop // Each branch preserves a separate source or patch proof.
@@ -56,7 +62,9 @@ func prepareDeploymentEdit(
 		return deploymentEditCandidate{}, errDeploymentEditInvalid
 	}
 
-	return deploymentEditCandidate{source: candidateSource, fields: changed}, nil
+	return deploymentEditCandidate{
+		source: candidateSource, fields: changed, current: original, proposed: expected,
+	}, nil
 }
 
 func applyDeploymentPatches(
