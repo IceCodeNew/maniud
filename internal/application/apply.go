@@ -21,6 +21,9 @@ var (
 	// ErrArchiveImageMissing reports a generated archive image that the operator
 	// has not imported into the selected runtime.
 	ErrArchiveImageMissing = errors.New("docker archive image is not imported")
+	// ErrRepositoryInventoryOverflow reports more unresolved repository
+	// transactions than one daemon cycle may safely correlate.
+	ErrRepositoryInventoryOverflow = errors.New("repository transaction inventory exceeds limit")
 )
 
 // ImageResolver proves an immutable image identity for one runtime platform.
@@ -76,8 +79,9 @@ func newService(
 
 // Request selects one service from an already bounded in-memory Compose source.
 type Request struct {
-	Source  compose.Source
-	Service string
+	Source     compose.Source
+	Service    string
+	Repository compose.RepositoryProvenance
 }
 
 // Prepare validates and classifies one apply without a runtime effect or
@@ -125,10 +129,11 @@ func (service *service) publishPlan(preparation Preparation) {
 }
 
 type desiredApply struct {
-	project   string
-	image     domain.ImageIdentity
-	workload  domain.DesiredWorkload
-	execution RuntimeEvidence
+	project    string
+	image      domain.ImageIdentity
+	workload   domain.DesiredWorkload
+	execution  RuntimeEvidence
+	repository compose.RepositoryProvenance
 }
 
 func (service *service) prepareDesired(ctx context.Context, request Request) (desiredApply, error) {
@@ -162,6 +167,10 @@ func (service *service) prepareDesired(ctx context.Context, request Request) (de
 	if err != nil {
 		return empty, fmt.Errorf("prepare apply workload: %w", err)
 	}
+	if request.Repository != (compose.RepositoryProvenance{}) &&
+		!request.Repository.ValidFor(workload.SourceDigest) {
+		return empty, ErrInvalidRequest
+	}
 
 	err = service.runtime.CheckWorkload(workload)
 	if err != nil {
@@ -169,10 +178,11 @@ func (service *service) prepareDesired(ctx context.Context, request Request) (de
 	}
 
 	return desiredApply{
-		project:   project.Name(),
-		image:     image,
-		workload:  workload,
-		execution: execution,
+		project:    project.Name(),
+		image:      image,
+		workload:   workload,
+		execution:  execution,
+		repository: request.Repository,
 	}, nil
 }
 
@@ -314,6 +324,7 @@ func prepareApplyEvidence(
 		},
 		Workload:       desired.workload,
 		Execution:      desired.execution,
+		repository:     desired.repository,
 		Transaction:    transaction,
 		HasTransaction: hasTransaction,
 		Applied:        applied,
@@ -340,7 +351,12 @@ func classifyPreparedApply(preparation Preparation) (Preparation, error) {
 
 	if preparation.HasTransaction {
 		transaction := preparation.Transaction
-		if !transactionMatches(transaction, preparation.Workload, preparation.Execution) ||
+		if !transactionMatches(
+			transaction,
+			preparation.Workload,
+			preparation.Execution,
+			preparation.repository,
+		) ||
 			!transactionMatchesApplied(transaction, preparation.Applied, preparation.HasApplied) {
 			return Preparation{}, ErrConflictingState
 		}
@@ -400,10 +416,28 @@ func transactionMatches(
 	transaction store.Transaction,
 	workload domain.DesiredWorkload,
 	execution RuntimeEvidence,
+	repository compose.RepositoryProvenance,
 ) bool {
 	return transaction.Runtime == execution.Kind && transaction.SourceDigest == workload.SourceDigest &&
 		transaction.EffectiveDigest == workload.EffectiveDigest &&
-		transaction.ExecutionDigest == execution.Digest
+		transaction.ExecutionDigest == execution.Digest &&
+		transactionMatchesRepository(transaction, repository)
+}
+
+func transactionMatchesRepository(
+	transaction store.Transaction,
+	repository compose.RepositoryProvenance,
+) bool {
+	if repository == (compose.RepositoryProvenance{}) {
+		return !transaction.HasRepository && transaction.RepositoryVersion == 0 &&
+			transaction.RepositoryScopeDigest == (domain.Digest{}) &&
+			transaction.RepositoryLocationDigest == (domain.Digest{})
+	}
+
+	return repository.ValidFor(transaction.SourceDigest) && transaction.HasRepository &&
+		transaction.RepositoryVersion == repository.Version &&
+		transaction.RepositoryScopeDigest == repository.Scope &&
+		transaction.RepositoryLocationDigest == repository.Location
 }
 
 func transactionMatchesApplied(
