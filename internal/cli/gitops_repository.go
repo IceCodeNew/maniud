@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+
+	"github.com/IceCodeNew/maniud/internal/compose"
 )
 
 func proveGitOpsCheckout(ctx context.Context, path, branch string) (string, string, error) {
@@ -38,7 +40,16 @@ func proveGitOpsCheckoutWithFinalCheck(
 }
 
 func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
-	root, state, err := inspectLocalGitOpsCheckout(ctx, path, branch)
+	return inspectGitOpsCheckoutWithState(ctx, path, branch, cleanGitTree)
+}
+
+func inspectGitOpsCheckoutWithState(
+	ctx context.Context,
+	path string,
+	branch string,
+	stateFor func(context.Context, string) (gitTreeState, error),
+) (string, gitTreeState, error) {
+	root, state, err := inspectLocalGitOpsCheckoutWithState(ctx, path, branch, stateFor)
 	if err != nil {
 		return "", gitTreeState{}, err
 	}
@@ -52,13 +63,22 @@ func inspectGitOpsCheckout(ctx context.Context, path, branch string) (string, gi
 }
 
 func inspectLocalGitOpsCheckout(ctx context.Context, path, branch string) (string, gitTreeState, error) {
+	return inspectLocalGitOpsCheckoutWithState(ctx, path, branch, cleanGitTree)
+}
+
+func inspectLocalGitOpsCheckoutWithState(
+	ctx context.Context,
+	path string,
+	branch string,
+	stateFor func(context.Context, string) (gitTreeState, error),
+) (string, gitTreeState, error) {
 	var empty gitTreeState
 	root, err := resolveGitOpsRepository(ctx, path)
 	if err != nil {
 		return "", empty, err
 	}
 
-	state, err := cleanGitTree(ctx, root)
+	state, err := stateFor(ctx, root)
 	if err != nil {
 		return "", empty, errGitOpsRepositoryInvalid
 	}
@@ -120,6 +140,23 @@ func gitRemoteURL(ctx context.Context, root, remote string) (string, error) {
 	}
 
 	return value, nil
+}
+
+func gitOpsRepositoryScope(
+	ctx context.Context,
+	registration gitOpsRegistration,
+	root string,
+) (compose.RepositoryScope, error) {
+	remote, err := gitRemoteURL(ctx, root, registration.Remote)
+	if err != nil {
+		return compose.RepositoryScope{}, errGitOpsRepositoryInvalid
+	}
+	scope, err := compose.NewRepositoryScope(root, remote, registration.Branch)
+	if err != nil {
+		return compose.RepositoryScope{}, errGitOpsRepositoryInvalid
+	}
+
+	return scope, nil
 }
 
 func requireFastForward(ctx context.Context, root, ancestor, descendant string) error {

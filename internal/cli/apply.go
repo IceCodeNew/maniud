@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/IceCodeNew/maniud/internal/application"
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 )
 
@@ -84,7 +86,42 @@ func loadApplyRequest(
 		return application.Request{}, fmt.Errorf("load apply source: %w", err)
 	}
 
-	return application.Request{Source: source, Service: arguments.service}, nil
+	request := application.Request{Source: source, Service: arguments.service}
+	if dependencies.repository.Valid() {
+		request.Repository, err = bindApplyRepositorySource(
+			dependencies.repositoryRoot,
+			arguments.compose,
+			dependencies.repository,
+			source,
+		)
+		if err != nil {
+			return application.Request{}, err
+		}
+	}
+
+	return request, nil
+}
+
+func bindApplyRepositorySource(
+	root string,
+	path string,
+	scope compose.RepositoryScope,
+	source compose.Source,
+) (compose.RepositoryProvenance, error) {
+	if !scope.Valid() || source.Repository == nil || source.Repository.Root != root {
+		return compose.RepositoryProvenance{}, compose.ErrInvalidSource
+	}
+	entry, err := filepath.Rel(root, path)
+	if err != nil || filepath.ToSlash(entry) != source.Repository.Entry {
+		return compose.RepositoryProvenance{}, compose.ErrInvalidSource
+	}
+
+	provenance, err := scope.Bind(source.Repository.Entry, source.Repository.Digest)
+	if err != nil {
+		return compose.RepositoryProvenance{}, fmt.Errorf("bind apply repository source: %w", err)
+	}
+
+	return provenance, nil
 }
 
 type applyPlan struct {
