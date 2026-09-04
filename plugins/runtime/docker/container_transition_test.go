@@ -1,3 +1,4 @@
+//nolint:goconst // Wire-state values stay explicit in transition fixtures.
 package docker
 
 import (

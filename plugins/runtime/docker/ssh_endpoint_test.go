@@ -1,3 +1,4 @@
+//nolint:goconst // Endpoint health values stay explicit in protocol fixtures.
 package docker
 
 import (

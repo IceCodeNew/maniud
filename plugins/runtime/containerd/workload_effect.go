@@ -208,6 +208,7 @@ func emptyWorkloadEvidence() application.WorkloadEffectEvidence {
 		ID: "", Name: "", ConfigurationDigest: domain.Digest{}, StorageDigest: domain.Digest{},
 		RuntimeMounts: nil, ConfigurationMatches: false,
 		Lifecycle: application.WorkloadLifecycleUnknown,
+		Health:    application.WorkloadHealth{},
 		Ownership: domain.WorkloadOwnership{Status: domain.OwnershipConflicting},
 	}
 }
@@ -417,6 +418,7 @@ func existingWorkloadProbe(workload *nativeWorkload) application.WorkloadTransit
 			ID: workload.ID, Name: workload.Name, ConfigurationDigest: workload.ConfigurationDigest,
 			Lifecycle: workload.Lifecycle, Ownership: workload.Ownership,
 		},
+		Health: application.WorkloadHealth{Status: application.WorkloadHealthAbsent},
 	}
 }
 

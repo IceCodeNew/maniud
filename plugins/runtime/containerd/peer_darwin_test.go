@@ -22,7 +22,7 @@ func TestDarwinSocketAndPeerIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	path := filepath.Join(directory, "containerd.sock")
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}

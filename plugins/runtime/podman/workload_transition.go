@@ -129,6 +129,7 @@ func existingPodmanWorkloadProbe(probe ContainerProbe) application.WorkloadTrans
 			Lifecycle:           podmanWorkloadLifecycle(container.State),
 			Ownership:           container.Ownership,
 		},
+		Health: container.Health,
 	}
 }
 
