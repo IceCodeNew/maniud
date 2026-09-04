@@ -458,7 +458,7 @@ func TestCommittedGitPathContracts(t *testing.T) {
 	if err != nil || !directory.Directory || !directory.Files["directory/child"].Executable {
 		t.Fatalf("readCommittedGitPath(directory) = %#v, %v", directory, err)
 	}
-	for _, name := range []string{"missing", "link"} {
+	for _, name := range []string{testMissingName, "link"} {
 		if _, err := readCommittedGitPath(t.Context(), root, tree, name); !errors.Is(err, compose.ErrInvalidSource) {
 			t.Fatalf("readCommittedGitPath(%s) error = %v", name, err)
 		}
@@ -491,7 +491,7 @@ func TestCommittedGitObjectFailures(t *testing.T) {
 	if _, err := readGitBlob(t.Context(), root, invalidObject); !errors.Is(err, compose.ErrInvalidSource) {
 		t.Fatalf("readGitBlob(invalid object) error = %v", err)
 	}
-	if _, err := resolveGitObject(t.Context(), root, "missing"); !errors.Is(err, compose.ErrInvalidSource) {
+	if _, err := resolveGitObject(t.Context(), root, testMissingName); !errors.Is(err, compose.ErrInvalidSource) {
 		t.Fatalf("resolveGitObject(missing) error = %v", err)
 	}
 }
