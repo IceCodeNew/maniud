@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,9 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mattn/go-shellwords"
-
-	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/runtimeargv"
 	"github.com/IceCodeNew/maniud/internal/tui"
@@ -102,177 +98,6 @@ func (workspace *tuiServiceWorkspace) Preview(ctx context.Context, input string)
 	workspace.instructions = nil
 
 	return publicServiceDraft(draft), nil
-}
-
-//nolint:cyclop // Preview keeps repository proof, generation, and draft recovery in one ordered transaction.
-func prepareTUIServiceDraft(
-	ctx context.Context,
-	input string,
-	workspace *tuiServiceWorkspace,
-) (tuiServiceDraft, error) {
-	registration, repository, base, err := registeredTUIWorkspace(ctx, workspace.registrationPath)
-	if err != nil {
-		return tuiServiceDraft{}, err
-	}
-	repositoryScope, err := gitOpsRepositoryScope(ctx, registration, repository)
-	if err != nil {
-		return tuiServiceDraft{}, err
-	}
-	arguments, err := tuiGenInvocation(input, repository)
-	if err != nil {
-		return tuiServiceDraft{}, err
-	}
-	dependencies, err := workspace.dependencies(
-		workspace.environment,
-		io.Discard,
-		func() (string, error) { return repository, nil },
-		workspace.runtimes,
-	)
-	if err != nil {
-		return tuiServiceDraft{}, err
-	}
-	generated, err := workspace.render(ctx, arguments, dependencies)
-	if err != nil || !validGeneratedTUIService(generated) {
-		return tuiServiceDraft{}, errors.Join(err, runtimeargv.ErrInvalid)
-	}
-	draft := tuiServiceDraft{
-		generated: generated, repository: repository, repositoryScope: repositoryScope,
-		branch: registration.Branch, base: base,
-	}
-	if err = recoverPartialTUIDraftPublication(ctx, repository, generated); err != nil {
-		return tuiServiceDraft{}, err
-	}
-	state, err := gitTreeAllowingTUIDrafts(ctx, repository)
-	if err != nil || state != base {
-		return tuiServiceDraft{}, compose.ErrInvalidSource
-	}
-	if verifyTUIDraftState(ctx, draft) {
-		draft.recovered = true
-
-		return draft, nil
-	}
-	if err = writeTUIDraftFiles(generated); err != nil {
-		return tuiServiceDraft{}, err
-	}
-	if !verifyTUIDraftState(context.WithoutCancel(ctx), draft) {
-		return tuiServiceDraft{}, compose.ErrInvalidSource
-	}
-
-	return draft, nil
-}
-
-func registeredTUIWorkspace(
-	ctx context.Context,
-	registrationPath string,
-) (gitOpsRegistration, string, gitTreeState, error) {
-	registration, err := readGitOpsRegistration(registrationPath)
-	if err != nil {
-		return gitOpsRegistration{}, "", gitTreeState{}, compose.ErrInvalidSource
-	}
-	repository, err := resolveGitOpsRepository(ctx, registration.Repository)
-	if err != nil {
-		return gitOpsRegistration{}, "", gitTreeState{}, err
-	}
-	branch, err := currentGitBranch(ctx, repository)
-	if err != nil || branch != registration.Branch {
-		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
-	}
-	head, err := resolveGitObject(ctx, repository, "HEAD^{commit}")
-	if err != nil {
-		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
-	}
-	tree, err := resolveGitObject(ctx, repository, "HEAD^{tree}")
-	if err != nil {
-		return gitOpsRegistration{}, "", gitTreeState{}, errGitOpsRepositoryInvalid
-	}
-
-	return registration, repository, gitTreeState{head: head, tree: tree}, nil
-}
-
-func validGeneratedTUIService(generated generatedCompose) bool {
-	return generated.service != "" && generated.image != "" && generated.runtime != "" &&
-		validTUIArtifactPath(generated.path, generated.service) &&
-		(generated.preparationPath == "" || validTUIPreparationPath(generated))
-}
-
-func tuiGenInvocation(input, workingDirectory string) (genInvocation, error) {
-	invocation, err := parseTUIServiceInput(input)
-	if err != nil {
-		return genInvocation{}, err
-	}
-	projection, err := parseGenProjection(invocation, workingDirectory)
-	if err != nil {
-		return genInvocation{}, err
-	}
-	invocation.output = filepath.Join(gitOpsServicesDirectory, projection.Name()+".yaml")
-
-	return invocation, nil
-}
-
-func parseTUIServiceInput(input string) (genInvocation, error) {
-	arguments, err := tokenizeTUIServiceInput(input)
-	if err != nil {
-		return genInvocation{}, err
-	}
-
-	invocation := genInvocation{}
-	switch {
-	case len(arguments) == 1 && strings.Contains(arguments[0], "://"):
-		invocation.source = arguments[0]
-	case tuiRuntimeCommand(arguments):
-		invocation.runtimeArgs = arguments
-	default:
-		return genInvocation{}, runtimeargv.ErrInvalid
-	}
-
-	return invocation, nil
-}
-
-func tokenizeTUIServiceInput(input string) ([]string, error) {
-	if input == "" || len(input) > maximumTUIServiceInput || strings.ContainsAny(input, "\x00\r\n") {
-		return nil, runtimeargv.ErrInvalid
-	}
-	parser := shellwords.NewParser()
-	arguments, err := parser.Parse(input)
-	if err != nil || len(arguments) == 0 || parser.Position >= 0 {
-		return nil, runtimeargv.ErrInvalid
-	}
-
-	return arguments, nil
-}
-
-func tuiRuntimeCommand(arguments []string) bool {
-	if len(arguments) < minimumRuntimeArguments {
-		return false
-	}
-	switch arguments[0] {
-	case "docker", "podman", nerdctlRuntimeCommand:
-		return arguments[1] == "create" || arguments[1] == "run"
-	default:
-		return false
-	}
-}
-
-func validTUIArtifactPath(path, service string) bool {
-	return path == filepath.Join(gitOpsServicesDirectory, service+".yaml")
-}
-
-func validTUIPreparationPath(generated generatedCompose) bool {
-	want := strings.TrimSuffix(generated.path, filepath.Ext(generated.path)) + ".prepare.sh"
-
-	return generated.preparationPath == want
-}
-
-func publicServiceDraft(draft tuiServiceDraft) tui.ServiceDraft {
-	return tui.ServiceDraft{
-		Runtime:      draft.generated.runtime.String(),
-		Image:        draft.generated.image,
-		Service:      draft.generated.service,
-		ComposePath:  filepath.ToSlash(draft.generated.path),
-		Preparation:  filepath.ToSlash(draft.generated.preparationPath),
-		WarningCount: len(draft.generated.warnings),
-		Recovered:    draft.recovered,
-	}
 }
 
 func (workspace *tuiServiceWorkspace) Stage(ctx context.Context) (tui.StagedService, error) {
@@ -488,10 +313,10 @@ func gitStatusMatchesWithTUIDrafts(ctx context.Context, repository string, expec
 	}
 	remaining := make(map[string]struct{}, len(expected))
 	for _, entry := range expected {
-		if _, duplicate := remaining[entry]; duplicate {
-			return false
-		}
 		remaining[entry] = struct{}{}
+	}
+	if len(remaining) != len(expected) {
+		return false
 	}
 	for _, raw := range entries {
 		entry := string(raw)
@@ -505,7 +330,28 @@ func gitStatusMatchesWithTUIDrafts(ctx context.Context, repository string, expec
 		}
 	}
 
-	return len(remaining) == 0
+	return missingTUIStatusEntriesAreIgnored(ctx, repository, remaining)
+}
+
+func missingTUIStatusEntriesAreIgnored(
+	ctx context.Context,
+	repository string,
+	remaining map[string]struct{},
+) bool {
+	for entry := range remaining {
+		path, found := strings.CutPrefix(entry, "?? ")
+		if !found || !gitPathIgnored(ctx, repository, path) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func gitPathIgnored(ctx context.Context, repository, path string) bool {
+	_, err := runGit(ctx, repository, "check-ignore", "--quiet", "--", filepath.FromSlash(path))
+
+	return err == nil
 }
 
 func validTUIDraftStatusEntry(repository, entry string) bool {
@@ -541,255 +387,6 @@ func validTUIDraftName(name string) bool {
 	return service != "" && service != final && !strings.ContainsAny(service, "\x00\r\n")
 }
 
-func generatedTUIArtifacts(generated generatedCompose) []generatedArtifact {
-	artifacts := []generatedArtifact{{path: generated.absolutePath, content: generated.content}}
-	if generated.preparationAbsolute != "" {
-		artifacts = append(artifacts, generatedArtifact{
-			path: generated.preparationAbsolute, content: generated.preparation,
-		})
-	}
-
-	return artifacts
-}
-
-func generatedTUIDraftArtifacts(generated generatedCompose) []generatedArtifact {
-	artifacts := generatedTUIArtifacts(generated)
-	for index := range artifacts {
-		artifacts[index].path = tuiDraftPath(artifacts[index].path)
-	}
-
-	return artifacts
-}
-
-func generatedTUIDraftRelativePaths(generated generatedCompose) []string {
-	paths := generatedRelativePaths(generated)
-	for index := range paths {
-		paths[index] = tuiDraftPath(paths[index])
-	}
-	slices.Sort(paths)
-
-	return paths
-}
-
-func tuiDraftPath(path string) string {
-	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+tuiDraftSuffix)
-}
-
-func writeTUIDraftFiles(generated generatedCompose) error {
-	return writeGeneratedArtifacts(generatedTUIDraftArtifacts(generated), generatedComposeDefaultOperations())
-}
-
-func generatedTUIDraftFilesMatch(generated generatedCompose) bool {
-	artifacts := generatedTUIDraftArtifacts(generated)
-	for _, artifact := range artifacts {
-		if !generatedArtifactMatches(artifact) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func promoteTUIDraftFiles(generated generatedCompose) error {
-	for _, artifact := range generatedTUIArtifacts(generated) {
-		if !generatedArtifactMatches(generatedArtifact{
-			path: tuiDraftPath(artifact.path), content: artifact.content,
-		}) {
-			return compose.ErrInvalidSource
-		}
-		if err := moveTUIArtifact(tuiDraftPath(artifact.path), artifact.path); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func restoreTUIDraftFiles(generated generatedCompose) error {
-	var result error
-	for _, artifact := range generatedTUIArtifacts(generated) {
-		draft := generatedArtifact{path: tuiDraftPath(artifact.path), content: artifact.content}
-		finalMatches := generatedArtifactMatches(artifact)
-		draftMatches := generatedArtifactMatches(draft)
-		switch {
-		case draftMatches && !finalMatches:
-			continue
-		case !draftMatches && finalMatches:
-			result = errors.Join(result, moveTUIArtifact(artifact.path, draft.path))
-		case draftMatches && finalMatches:
-			if !tuiArtifactsShareIdentity(artifact.path, draft.path) {
-				result = errors.Join(result, compose.ErrInvalidSource)
-
-				continue
-			}
-			result = errors.Join(result, removeMatchingTUIArtifact(artifact))
-		default:
-			result = errors.Join(result, compose.ErrInvalidSource)
-		}
-	}
-
-	return result
-}
-
-func recoverPartialTUIDraftPublication(
-	ctx context.Context,
-	repository string,
-	generated generatedCompose,
-) error {
-	status, err := runGit(
-		ctx,
-		repository,
-		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none",
-	)
-	if err != nil {
-		return compose.ErrInvalidSource
-	}
-	entries, valid := splitNullTerminated(status)
-	if !valid {
-		return compose.ErrInvalidSource
-	}
-	untracked := untrackedTUIPaths(entries)
-	for _, artifact := range generatedTUIArtifacts(generated) {
-		final, _ := filepath.Rel(repository, artifact.path)
-		final = filepath.ToSlash(final)
-		draft := filepath.ToSlash(tuiDraftPath(final))
-		_, finalUntracked := untracked[final]
-		_, draftUntracked := untracked[draft]
-		if !finalUntracked || !draftUntracked {
-			continue
-		}
-		if !generatedArtifactMatches(artifact) ||
-			!generatedArtifactMatches(generatedArtifact{path: tuiDraftPath(artifact.path), content: artifact.content}) ||
-			!tuiArtifactsShareIdentity(artifact.path, tuiDraftPath(artifact.path)) {
-			return compose.ErrInvalidSource
-		}
-		if err = removeMatchingTUIArtifact(artifact); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func untrackedTUIPaths(entries [][]byte) map[string]struct{} {
-	const untrackedPrefix = "?? "
-
-	untracked := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		if path, found := strings.CutPrefix(string(entry), untrackedPrefix); found {
-			untracked[path] = struct{}{}
-		}
-	}
-
-	return untracked
-}
-
-func moveTUIArtifact(from, to string) (returnErr error) {
-	return moveTUIArtifactWithOperations(from, to, generatedComposeDefaultOperations())
-}
-
-func moveTUIArtifactWithOperations(
-	from string,
-	to string,
-	operations generatedComposeOperations,
-) (returnErr error) {
-	if filepath.Dir(from) != filepath.Dir(to) {
-		return compose.ErrInvalidSource
-	}
-	root, err := operations.openRoot(filepath.Dir(from))
-	if err != nil {
-		return compose.ErrInvalidSource
-	}
-	defer func() { returnErr = errors.Join(returnErr, operations.closeRoot(root)) }()
-	directory, err := operations.openDirectory(root)
-	if err != nil {
-		return compose.ErrInvalidSource
-	}
-	defer func() { returnErr = errors.Join(returnErr, operations.closeFile(directory)) }()
-	fromName := filepath.Base(from)
-	toName := filepath.Base(to)
-	if err = operations.link(root, fromName, toName); err != nil {
-		return compose.ErrInvalidSource
-	}
-	if err = operations.syncDirectory(directory); err != nil {
-		return errors.Join(compose.ErrInvalidSource, err)
-	}
-	if err = operations.remove(root, fromName); err != nil {
-		removeErr := operations.remove(root, toName)
-		syncErr := operations.syncDirectory(directory)
-
-		return errors.Join(compose.ErrInvalidSource, err, removeErr, syncErr)
-	}
-	if err = operations.syncDirectory(directory); err != nil {
-		return errors.Join(compose.ErrInvalidSource, err)
-	}
-
-	return nil
-}
-
-func removeMatchingTUIArtifact(artifact generatedArtifact) (returnErr error) {
-	return removeMatchingTUIArtifactWithOperations(artifact, generatedComposeDefaultOperations())
-}
-
-func removeMatchingTUIArtifactWithOperations(
-	artifact generatedArtifact,
-	operations generatedComposeOperations,
-) (returnErr error) {
-	if !generatedArtifactMatches(artifact) {
-		return compose.ErrInvalidSource
-	}
-	root, err := operations.openRoot(filepath.Dir(artifact.path))
-	if err != nil {
-		return compose.ErrInvalidSource
-	}
-	defer func() { returnErr = errors.Join(returnErr, operations.closeRoot(root)) }()
-	directory, err := operations.openDirectory(root)
-	if err != nil {
-		return compose.ErrInvalidSource
-	}
-	defer func() { returnErr = errors.Join(returnErr, operations.closeFile(directory)) }()
-	if err := operations.remove(root, filepath.Base(artifact.path)); err != nil {
-		return compose.ErrInvalidSource
-	}
-	if err := operations.syncDirectory(directory); err != nil {
-		return errors.Join(compose.ErrInvalidSource, err)
-	}
-
-	return nil
-}
-
-func tuiArtifactsShareIdentity(first, second string) bool {
-	if filepath.Dir(first) != filepath.Dir(second) {
-		return false
-	}
-	root, err := os.OpenRoot(filepath.Dir(first))
-	if err != nil {
-		return false
-	}
-	defer func() { _ = root.Close() }()
-	firstInfo, firstErr := root.Lstat(filepath.Base(first))
-	secondInfo, secondErr := root.Lstat(filepath.Base(second))
-
-	return firstErr == nil && secondErr == nil && firstInfo != nil && secondInfo != nil && firstInfo.Mode().IsRegular() &&
-		secondInfo.Mode().IsRegular() && os.SameFile(firstInfo, secondInfo)
-}
-
-func generatedArtifactMatches(artifact generatedArtifact) bool {
-	root, err := os.OpenRoot(filepath.Dir(artifact.path))
-	if err != nil {
-		return false
-	}
-	defer func() { _ = root.Close() }()
-	name := filepath.Base(artifact.path)
-	info, err := root.Lstat(name)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	matched, err := generatedFileMatches(root, name, info, artifact.content)
-
-	return err == nil && matched
-}
-
 func writeGitTree(ctx context.Context, repository string) (string, error) {
 	output, err := runGit(ctx, repository, "write-tree")
 	value := strings.TrimSpace(string(output))
@@ -804,8 +401,8 @@ func (workspace *tuiServiceWorkspace) Commit(
 	ctx context.Context,
 	message string,
 	unsigned bool,
-) (tui.ServiceCommitResult, error) {
-	return workspace.commitWith(ctx, message, unsigned, commitTUIStaged)
+) (tui.CommitResult, error) {
+	return workspace.commitWith(ctx, message, unsigned, commitTUIStagedProof)
 }
 
 //nolint:funcorder // Commit delegates to this injected command boundary while retaining the transaction lock.
@@ -813,25 +410,25 @@ func (workspace *tuiServiceWorkspace) commitWith(
 	ctx context.Context,
 	message string,
 	unsigned bool,
-	commit func(context.Context, tuiStagedService, string, bool) error,
-) (tui.ServiceCommitResult, error) {
+	commit func(context.Context, tuiStagedProof, string, bool) error,
+) (tui.CommitResult, error) {
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 
 	if workspace.staged == nil || !validTUICommitMessage(message) {
-		return tui.ServiceCommitResult{}, runtimeargv.ErrInvalid
+		return tui.CommitResult{}, runtimeargv.ErrInvalid
 	}
 	staged := *workspace.staged
 	if !verifyTUIStagedState(ctx, staged) {
-		return tui.ServiceCommitResult{}, compose.ErrInvalidSource
+		return tui.CommitResult{}, compose.ErrInvalidSource
 	}
 	if !unsigned {
 		if err := validateGitProcessConfiguration(ctx, staged.draft.repository); err != nil {
-			return tui.ServiceCommitResult{}, err
+			return tui.CommitResult{}, err
 		}
 	}
 
-	commitErr := commit(ctx, staged, message, unsigned)
+	commitErr := commit(ctx, staged.proof(), message, unsigned)
 
 	return workspace.settleCommit(ctx, staged, message, unsigned, commitErr)
 }
@@ -843,290 +440,40 @@ func (workspace *tuiServiceWorkspace) settleCommit(
 	message string,
 	unsigned bool,
 	commitErr error,
-) (tui.ServiceCommitResult, error) {
-	proofCtx := context.WithoutCancel(ctx)
+) (tui.CommitResult, error) {
+	proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
+	defer cancel()
 	committedHead, unchanged := proveTUICommit(proofCtx, staged, message, !unsigned)
 	if committedHead != "" {
 		workspace.staged = nil
 		workspace.draft = nil
 		workspace.instructions = commitInstructions(staged.draft)
 		if staged.draft.generated.preparationAbsolute != "" {
-			return tui.ServiceCommitResult{Committed: true, PreparationRequired: true}, nil
+			return tui.CommitResult{Outcome: tui.CommitPreparationRequired}, nil
 		}
 		request, requestErr := committedTUIRequest(
 			proofCtx, staged, committedHead, workspace.environment, workspace.runtimeBase,
 		)
 		if requestErr != nil {
-			//nolint:nilerr // Commit proof succeeded; only immutable validation is unavailable.
-			return tui.ServiceCommitResult{Committed: true, ValidationUnavailable: true}, nil
+			return tui.CommitResult{Outcome: tui.CommitValidationUnavailable}, nil
 		}
 
-		return tui.ServiceCommitResult{Request: request, Committed: true}, nil
+		return tui.CommitResult{Request: request, Outcome: tui.CommitSucceeded}, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return tui.ServiceCommitResult{}, fmt.Errorf("commit cancelled: %w", err)
+	cancelErr := ctx.Err()
+	needsUnsigned, outcomeErr := resolveUnsettledTUICommit(cancelErr, commitErr, unsigned, unchanged)
+	if outcomeErr != nil {
+		if cancelErr != nil {
+			return tui.CommitResult{}, fmt.Errorf("commit cancelled: %w", outcomeErr)
+		}
+
+		return tui.CommitResult{}, outcomeErr
 	}
-	if !unsigned && unchanged {
-		return tui.ServiceCommitResult{NeedsUnsignedApproval: true}, nil
-	}
-	if commitErr != nil {
-		return tui.ServiceCommitResult{}, commitErr
-	}
-
-	return tui.ServiceCommitResult{}, compose.ErrInvalidSource
-}
-
-func commitTUIStaged(ctx context.Context, staged tuiStagedService, message string, unsigned bool) error {
-	return commitTUIStagedProof(ctx, staged.proof(), message, unsigned)
-}
-
-func commitTUIStagedProof(
-	ctx context.Context,
-	staged tuiStagedProof,
-	message string,
-	unsigned bool,
-) error {
-	if unsigned {
-		_, err := runGit(
-			ctx,
-			staged.repository,
-			"-c", "user.name=maniud",
-			"-c", "user.email=maniud@localhost",
-			"-c", "commit.gpgsign=false",
-			"commit", "--quiet", "--no-gpg-sign", "--no-verify", "-m", message,
-		)
-
-		return err
-	}
-	if err := validateGitProcessConfiguration(ctx, staged.repository); err != nil {
-		return err
-	}
-	_, err := runGitWithUserConfig(
-		ctx, staged.repository, "commit", "--quiet", "-S", "--no-verify", "-m", message,
-	)
-
-	return err
-}
-
-func validTUICommitMessage(message string) bool {
-	return message != "" && len(message) <= maximumTUICommitMessage &&
-		strings.TrimSpace(message) == message && !strings.ContainsAny(message, "\x00\r\n")
-}
-
-func verifyTUIStagedState(ctx context.Context, staged tuiStagedService) bool {
-	if !verifyTUIBaseState(ctx, staged.draft) ||
-		!exactStagedPaths(ctx, staged.draft.repository, staged.paths) {
-		return false
-	}
-	tree, err := writeGitTree(ctx, staged.draft.repository)
-
-	return err == nil && tree == staged.expectedTree
-}
-
-func (staged tuiStagedService) proof() tuiStagedProof {
-	return tuiStagedProof{
-		repository: staged.draft.repository, base: staged.draft.base, paths: staged.paths,
-		indexStatus: "A", expectedTree: staged.expectedTree,
-	}
-}
-
-func verifyTUIStagedProof(ctx context.Context, staged tuiStagedProof) bool {
-	head, err := resolveGitObject(ctx, staged.repository, "HEAD^{commit}")
-	if err != nil || head != staged.base.head ||
-		!exactStagedPathStatusWithAttributes(
-			ctx, staged.repository, staged.paths, staged.indexStatus, staged.attributeSource,
-		) {
-		return false
-	}
-	tree, err := writeGitTree(ctx, staged.repository)
-
-	return err == nil && tree == staged.expectedTree
-}
-
-func proveTUICommit(
-	ctx context.Context,
-	staged tuiStagedService,
-	message string,
-	requireSignature bool,
-) (string, bool) {
-	head, err := resolveGitObject(ctx, staged.draft.repository, "HEAD^{commit}")
-	if err != nil {
-		return "", false
-	}
-	if head == staged.draft.base.head {
-		return "", verifyTUIStagedState(ctx, staged)
-	}
-	if !proveNewTUICommit(ctx, staged, head, message, requireSignature) {
-		return "", false
+	if needsUnsigned {
+		return tui.CommitResult{Outcome: tui.CommitNeedsUnsignedApproval}, nil
 	}
 
-	return head, false
-}
-
-func proveTUIStagedCommit(
-	ctx context.Context,
-	staged tuiStagedProof,
-	message string,
-	requireSignature bool,
-) (string, bool) {
-	head, err := resolveGitObject(ctx, staged.repository, "HEAD^{commit}")
-	if err != nil {
-		return "", false
-	}
-	if head == staged.base.head {
-		return "", verifyTUIStagedProof(ctx, staged)
-	}
-	if !proveNewTUIStagedCommit(ctx, staged, head, message, requireSignature) {
-		return "", false
-	}
-
-	return head, false
-}
-
-func proveNewTUICommit(
-	ctx context.Context,
-	staged tuiStagedService,
-	head string,
-	message string,
-	requireSignature bool,
-) bool {
-	if !matchesTUICommit(ctx, staged, head, message, requireSignature) {
-		return false
-	}
-	branch, err := currentGitBranch(ctx, staged.draft.repository)
-	if err != nil || branch != staged.draft.branch {
-		return false
-	}
-	state, err := gitTreeAllowingTUIDrafts(ctx, staged.draft.repository)
-
-	return err == nil && state.head == head && state.tree == staged.expectedTree
-}
-
-func proveNewTUIStagedCommit(
-	ctx context.Context,
-	staged tuiStagedProof,
-	head string,
-	message string,
-	requireSignature bool,
-) bool {
-	if !matchesTUIStagedCommit(ctx, staged, head, message, requireSignature) {
-		return false
-	}
-	state, err := cleanGitTreeWithAttributeSource(ctx, staged.repository, staged.attributeSource)
-
-	return err == nil && state.head == head && state.tree == staged.expectedTree
-}
-
-func matchesTUICommit(
-	ctx context.Context,
-	staged tuiStagedService,
-	head string,
-	message string,
-	requireSignature bool,
-) bool {
-	return matchesTUIStagedCommit(ctx, staged.proof(), head, message, requireSignature)
-}
-
-func matchesTUIStagedCommit(
-	ctx context.Context,
-	staged tuiStagedProof,
-	head string,
-	message string,
-	requireSignature bool,
-) bool {
-	parents, err := runGit(ctx, staged.repository, "rev-list", "--parents", "-n", "1", head)
-	fields := strings.Fields(string(parents))
-	if err != nil || len(fields) != 2 || fields[0] != head || fields[1] != staged.base.head {
-		return false
-	}
-	tree, err := resolveGitObject(ctx, staged.repository, head+"^{tree}")
-	if err != nil || tree != staged.expectedTree {
-		return false
-	}
-	if !gitCommitMatches(ctx, staged.repository, head, message, requireSignature) {
-		return false
-	}
-
-	return true
-}
-
-func gitCommitMatches(ctx context.Context, repository, head, message string, requireSignature bool) bool {
-	commit, err := runGit(ctx, repository, "cat-file", "commit", head)
-	header, body, found := bytes.Cut(commit, []byte("\n\n"))
-	if err != nil || !found || string(body) != message+"\n" {
-		return false
-	}
-
-	return !requireSignature || bytes.Contains(header, []byte("\ngpgsig "))
-}
-
-func gitCommitHasSignature(ctx context.Context, repository, head string) bool {
-	present, err := gitCommitSignaturePresent(ctx, repository, head)
-
-	return err == nil && present
-}
-
-func gitCommitSignaturePresent(ctx context.Context, repository, head string) (bool, error) {
-	commit, err := runGit(ctx, repository, "cat-file", "commit", head)
-
-	return bytes.Contains(commit, []byte("\ngpgsig ")), err
-}
-
-//nolint:cyclop // Readback keeps immutable source, checkout, runtime, and provenance proofs ordered.
-func committedTUIRequest(
-	ctx context.Context,
-	staged tuiStagedService,
-	head string,
-	environment map[string]string,
-	runtimeBase string,
-) (application.Request, error) {
-	entry := filepath.ToSlash(staged.draft.generated.path)
-	if !validGitObjectID(head) || !validGitObjectID(staged.expectedTree) ||
-		!staged.draft.repositoryScope.Valid() || !onTUIBranch(ctx, staged.draft) {
-		return application.Request{}, compose.ErrInvalidSource
-	}
-	source, err := compose.CaptureRepositorySource(
-		staged.draft.repository,
-		entry,
-		environment,
-		func(name string) (compose.RepositoryFile, bool, error) {
-			return readCommittedGitFile(ctx, staged.draft.repository, staged.expectedTree, name)
-		},
-		func(name string) (compose.RepositoryPathSnapshot, error) {
-			return readCommittedGitPath(ctx, staged.draft.repository, staged.expectedTree, name)
-		},
-	)
-	if err != nil {
-		return application.Request{}, compose.ErrInvalidSource
-	}
-	after, err := gitTreeAllowingTUIDrafts(ctx, staged.draft.repository)
-	if err != nil || after != (gitTreeState{head: head, tree: staged.expectedTree}) ||
-		!onTUIBranch(ctx, staged.draft) {
-		return application.Request{}, compose.ErrInvalidSource
-	}
-	source, err = compose.PinRepositoryRuntime(source, runtimeBase)
-	if err != nil {
-		return application.Request{}, compose.ErrInvalidSource
-	}
-	provenance, err := bindApplyRepositorySource(
-		staged.draft.repository,
-		staged.draft.generated.absolutePath,
-		staged.draft.repositoryScope,
-		source,
-	)
-	if err != nil {
-		return application.Request{}, compose.ErrInvalidSource
-	}
-
-	return application.Request{
-		Source: source, Service: staged.draft.generated.service, Repository: provenance,
-	}, nil
-}
-
-func onTUIBranch(ctx context.Context, draft tuiServiceDraft) bool {
-	branch, err := currentGitBranch(ctx, draft.repository)
-
-	return err == nil && branch == draft.branch
+	return tui.CommitResult{}, compose.ErrInvalidSource
 }
 
 func (workspace *tuiServiceWorkspace) Suspend(ctx context.Context) error {
@@ -1176,41 +523,6 @@ func suspendTUIStaged(
 	}
 
 	return nil
-}
-
-func generatedFileMatches(root *os.Root, name string, info os.FileInfo, expected []byte) (bool, error) {
-	file, err := root.Open(name)
-	if err != nil {
-		return false, fmt.Errorf("open generated file: %w", err)
-	}
-	content, readErr := io.ReadAll(io.LimitReader(file, int64(len(expected)+1)))
-	current, statErr := file.Stat()
-	closeErr := file.Close()
-	after, lstatErr := root.Lstat(name)
-	if readErr != nil || statErr != nil || closeErr != nil || lstatErr != nil ||
-		!os.SameFile(info, current) || !os.SameFile(info, after) {
-		return false, errors.Join(readErr, statErr, closeErr, lstatErr)
-	}
-
-	return bytes.Equal(content, expected), nil
-}
-
-func commitInstructions(draft tuiServiceDraft) []string {
-	var instructions []string
-	if draft.generated.preparationAbsolute != "" {
-		instructions = append(instructions, "sudo sh "+shellArgument(draft.generated.preparationAbsolute))
-	}
-	instructions = append(
-		instructions,
-		"git -C "+shellArgument(draft.repository)+" push origin "+shellArgument(draft.branch),
-		"maniud tui",
-	)
-
-	return instructions
-}
-
-func shellArgument(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (workspace *tuiServiceWorkspace) Instructions() []string {
