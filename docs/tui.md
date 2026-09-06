@@ -38,7 +38,7 @@ Choose **Add service** from the home page. Enter either:
 
 `maniud` parses runtime commands as configuration input. It does not execute the pasted command. The selected image must resolve to the same identity in the registry and the local runtime.
 
-The preview shows the runtime, exact image identity, service name, Compose path, and any preparation script. Press Enter to open the write confirmation. After you select the effect, `maniud` writes only the generated files and stages their exact paths.
+Preparing the preview saves same-directory `.swp` drafts without publishing or staging the final files. The preview shows the runtime, exact image identity, service name, Compose path, and any preparation script. Press Enter to open the write confirmation. After confirmation, `maniud` publishes the generated files and stages their exact paths.
 
 ## Review and commit generated files
 
@@ -110,6 +110,6 @@ maniud apply --dry-run --json path/to/compose.yaml
 
 Press Ctrl+C to cancel the session. If an operation is already crossing an external boundary, `maniud` waits for it to reach a stable result before exiting. Pressing `q` during work follows the same rule.
 
-An uncatchable process exit, power loss, or concurrent Git edit can leave a published file or staged change without a result that `maniud` can prove. The next TUI session blocks editing and apply while the checkout is in that state. Inspect `git status --short`, `git diff`, and `git diff --staged`, then finish or restore the repository manually. Keep a generated `.name.yaml.swp` file: when that draft is the only checkout change and still matches the requested service, the Add service flow offers to continue it.
+An uncatchable process exit, power loss, or concurrent Git edit can leave a published file or staged change without a result that `maniud` can prove. The next TUI session blocks editing and apply while the checkout is in that state. Inspect `git status --short`, `git diff`, and `git diff --staged`, then finish or restore the repository manually. Keep generated `.name.yaml.swp` files: the Add service flow offers to continue a draft that matches the requested service and input. Independent valid service drafts may remain in the checkout; unrelated dirty files still block the operation.
 
 The daemon recovers durable apply transactions from the local journal before fetching Git. A failed or invalid Compose source blocks only that service; the daemon continues processing other registered services. See [Recovery and boundaries](recovery.md) for transaction states and operator actions.

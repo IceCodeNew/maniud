@@ -111,7 +111,7 @@ type RegistrationResult struct {
 	Blocker  SourceBlocker
 }
 
-// ServiceDraft is one generated, effect-free service candidate.
+// ServiceDraft describes a saved service draft awaiting publication confirmation.
 type ServiceDraft struct {
 	Runtime      string
 	Image        string

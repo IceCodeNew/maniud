@@ -38,7 +38,7 @@ maniud tui
 
 `maniud` 把 runtime 命令作为配置输入解析，不会执行你粘贴的命令。目标镜像在仓库和本地 runtime 中需要解析为同一身份。
 
-预览页会显示 runtime、精确镜像身份、服务名、Compose 路径，以及可能生成的准备脚本。按 Enter 进入写文件确认页。选择执行后，`maniud` 只写入本次生成的文件，并暂存这些文件的精确路径。
+`maniud` 在准备预览时保存同目录的 `.swp` 草稿，不发布或暂存正式文件。预览页会显示 runtime、精确镜像身份、服务名、Compose 路径，以及可能生成的准备脚本。按 Enter 进入写文件确认页。确认后，`maniud` 发布本次生成的文件，并暂存这些文件的精确路径。
 
 ## 检查并提交生成文件
 
@@ -110,6 +110,6 @@ maniud apply --dry-run --json path/to/compose.yaml
 
 按 Ctrl+C 可以取消 session。如果操作已经跨过外部效果边界，`maniud` 会等待操作进入稳定状态再退出。操作进行中按 `q` 也采用相同处理。
 
-SIGKILL、断电或并发 Git 修改可能留下已经发布的文件或暂存改动，此时 `maniud` 无法证明它们属于哪次操作。下次进入 TUI 时，程序会阻止编辑和 apply。请检查 `git status --short`、`git diff` 和 `git diff --staged`，再手动完成或恢复仓库。请保留生成的 `.name.yaml.swp` 文件：当该草稿是 checkout 中唯一的改动，并且仍与目标服务匹配时，Add service 流程会询问是否继续。
+SIGKILL、断电或并发 Git 修改可能留下已经发布的文件或暂存改动，此时 `maniud` 无法证明它们属于哪次操作。下次进入 TUI 时，程序会阻止编辑和 apply。请检查 `git status --short`、`git diff` 和 `git diff --staged`，再手动完成或恢复仓库。请保留生成的 `.name.yaml.swp` 文件：当草稿与目标服务和输入匹配时，Add service 流程会询问是否继续。你可以在 checkout 中保留其他有效的独立服务草稿；无关的 dirty 文件仍会阻塞操作。
 
 Daemon 会先从本地 journal 恢复持久化 apply transaction，再 fetch Git。失败或无效的 Compose source 只阻塞对应服务，daemon 会继续处理其他已注册服务。[恢复与边界](recovery.zh-CN.md)记录了 transaction 状态和操作方式。
