@@ -84,6 +84,28 @@ func (runtime *healthRollbackRuntimeFixture) ApplyWorkloadTransition(
 	return runtime.upgradeRuntimeFixture.ApplyWorkloadTransition(ctx, transition)
 }
 
+func TestBootstrapHealthRollbackResumesRecordedStop(t *testing.T) {
+	t.Parallel()
+
+	state, mutation, runtime := newDegradedBootstrapHealthMutation(t)
+	defer closeBootstrapMutation(t, state, mutation)
+	if err := settleHealthRollbackStop(t.Context(), mutation, state, runtime); err != nil {
+		t.Fatalf("initial stop = %v", err)
+	}
+	if err := rollbackHealthCandidate(t.Context(), mutation, state, runtime); err != nil {
+		t.Fatalf("resume after recorded stop = %v", err)
+	}
+	if mutation.preparation.Transaction.State != store.TransactionFailed || runtime.discards != 1 {
+		t.Fatalf("resumed rollback = state %s, discards %d", mutation.preparation.Transaction.State, runtime.discards)
+	}
+	assertBootstrapActions(t, state, mutation.preparation.Transaction.ID, []string{
+		workloadCreateActionKind,
+		workloadStartActionKind,
+		workloadHealthStopActionKind,
+		workloadDiscardActionKind,
+	})
+}
+
 func TestRollbackBootstrapHealthStopsDiscardsAndFailsTransaction(t *testing.T) {
 	t.Parallel()
 

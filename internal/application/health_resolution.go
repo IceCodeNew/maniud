@@ -330,6 +330,9 @@ func prepareHealthRollbackStop(
 	switch preparation.Transaction.Kind {
 	case store.TransactionBootstrap:
 		journey, err := bootstrapHealthRollbackJourney(preparation)
+		if journey.stop != (store.Action{}) {
+			return journey.stop, journey.stop.Sequence, err
+		}
 
 		return journey.stop, journey.nextSequence, err
 	case store.TransactionUpgrade:
