@@ -73,16 +73,20 @@ func TestSessionTimelineStopsAtEntryAndByteBounds(t *testing.T) {
 
 	event := application.Event{Kind: application.EventDaemonUnavailable}
 	timeline := newSessionTimeline()
-	for range maximumTimelineEntries {
+	for index := range maximumTimelineEntries {
 		timeline.observe(event, 0, eventCorrelation{})
+		if timeline.entries[index].sequence != uint64(index+1) {
+			t.Fatalf("entry %d sequence = %d", index, timeline.entries[index].sequence)
+		}
 	}
 	timeline.observe(event, 0, eventCorrelation{})
-	if len(timeline.entries) != maximumTimelineEntries || !timeline.truncated ||
-		timeline.sequence != maximumTimelineEntries+1 {
+	if len(timeline.entries) != maximumTimelineEntries || !timeline.truncated {
 		t.Fatalf("entry-bounded timeline = %#v", timeline)
 	}
+	entries := slices.Clone(timeline.entries)
+	bytes := timeline.bytes
 	timeline.observe(event, 0, eventCorrelation{})
-	if timeline.sequence != maximumTimelineEntries+1 {
+	if !slices.Equal(timeline.entries, entries) || timeline.bytes != bytes {
 		t.Fatal("truncated timeline accepted another event")
 	}
 

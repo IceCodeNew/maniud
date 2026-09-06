@@ -409,7 +409,7 @@ func TestReviewAndDetailsRenderBoundedObservationSummary(t *testing.T) {
 	}}
 	state.timeline.entries = []timelineEntry{{
 		sequence: 1, generation: 7, stage: string(application.EventActionCompleted),
-		code: string(application.EventActionCompleted), attempt: 1, outcome: observationCorrelated,
+		code: string(application.EventActionCompleted), outcome: observationCorrelated,
 	}}
 	state.timeline.truncated = true
 	review.correlation.sequence = 7

@@ -41,7 +41,6 @@ type timelineEntry struct {
 	elapsed            time.Duration
 	stage              string
 	code               string
-	attempt            int
 	outcome            observationOutcome
 	plan               application.PlanKind
 	runtime            domain.RuntimeKind
@@ -57,7 +56,6 @@ type sessionTimeline struct {
 	now       func() time.Time
 	entries   []timelineEntry
 	bytes     int
-	sequence  uint64
 	truncated bool
 }
 
@@ -76,8 +74,9 @@ func (timeline *sessionTimeline) observe(
 		return
 	}
 
-	timeline.sequence++
-	entry := timelineEntryForEvent(timeline.sequence, timeline.elapsed(), event, operationSequence, correlation)
+	entry := timelineEntryForEvent(
+		uint64(len(timeline.entries)+1), timeline.elapsed(), event, operationSequence, correlation,
+	)
 	line := entry.line()
 	if len(timeline.entries) == maximumTimelineEntries || timeline.bytes+len(line)+1 > maximumTimelineBytes {
 		timeline.truncated = true
@@ -110,7 +109,7 @@ func timelineEntryForEvent(
 	entry := timelineEntry{
 		sequence: sequence, generation: operationSequence,
 		elapsed: elapsed, stage: string(event.Kind), code: string(event.Kind),
-		attempt: 1, outcome: observationStale,
+		outcome: observationStale,
 	}
 	if !validEventKind(event.Kind) || !validEventPlan(event.Plan) || !validEventRuntime(event.Runtime) {
 		entry.stage = "application_event"
@@ -267,12 +266,11 @@ func eventIdentityCorrelates(event application.Event, correlation eventCorrelati
 
 func (entry timelineEntry) line() string {
 	line := fmt.Sprintf(
-		"#%d +%dms flow=application stage=%s code=%s attempt=%d outcome=%s",
+		"#%d +%dms flow=application stage=%s code=%s attempt=1 outcome=%s",
 		entry.sequence,
 		entry.elapsed.Milliseconds(),
 		entry.stage,
 		entry.code,
-		entry.attempt,
 		entry.outcome,
 	)
 	if entry.plan != "" {
