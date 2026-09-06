@@ -1,7 +1,7 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/IceCodeNew/notify v0.0.0-20260904181137-39e4e26bcbde h1:B7RGKZv/cv7p7QNnv5g1hB5XO68ecreiZL7toahfffU=
-github.com/IceCodeNew/notify v0.0.0-20260904181137-39e4e26bcbde/go.mod h1:GBrx8S2GI0ZtXdobxNmXJjPJN4P6qXbjPW78zlLSg6s=
+github.com/IceCodeNew/notify v0.0.0-20260906164018-598ed3b518fb h1:NRSIggebxLYjSb5NKUSb4J2+hjUEw+3YHGCDXEPnOZY=
+github.com/IceCodeNew/notify v0.0.0-20260906164018-598ed3b518fb/go.mod h1:GBrx8S2GI0ZtXdobxNmXJjPJN4P6qXbjPW78zlLSg6s=
 github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29 h1:0kQAzHq8vLs7Pptv+7TxjdETLf/nIqJpIB4oC6Ba4vY=
 github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29/go.mod h1:ZWa7ssZJT30CCDGJ7fk/2SBTq9BIQrrVjrcss0UW2s0=
 github.com/Microsoft/hcsshim v0.15.0-rc.1 h1:FbbwtQmiD+BVHynGkx5S65JkLyhkEiiTP8nrpmg2SZw=
