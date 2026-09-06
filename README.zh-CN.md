@@ -13,6 +13,8 @@ maniud 可以把容器镜像或项目提供的 `docker run` 命令转换成便�
 
 你需要先[安装 maniud](docs/release-verification.zh-CN.md#使用-github-cli-安装已验证的-release)，准备 Git，并启动 Docker Engine。示例镜像来自公共仓库，固定的多平台 digest 同时支持 Linux AMD64 和 ARM64。
 
+请确认镜像仓库可访问；使用私有镜像前，先配置凭据。两分钟是正常网络条件下看到已验证计划、尚未执行 Apply 的设计估算，不是实测承诺。即使本地已有镜像，离线或仓库限流仍可能阻止验证。
+
 ```sh
 image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
 docker pull "$image"

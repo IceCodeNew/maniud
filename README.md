@@ -13,6 +13,8 @@ maniud turns a container image or a published `docker run` command into a review
 
 You need [maniud installed](docs/release-verification.md#install-a-verified-release-with-github-cli), Git, and a running Docker Engine. The example uses a public image pinned to a multi-platform digest, so the image identity stays fixed on Linux AMD64 and ARM64 hosts.
 
+Keep the image registry reachable; for a private image, configure its credentials first. Two minutes is a design estimate for reaching a validated plan before Apply under normal network conditions, not a measured guarantee. Offline access or registry rate limits can prevent validation even when the image is already local.
+
 ```sh
 image='registry.access.redhat.com/ubi9/ubi-micro@sha256:990002083442f6a93cd3249da32ecb7c3f6be778a1bec3a73a9c17fbc40edc15'
 docker pull "$image"
