@@ -13,7 +13,7 @@ require (
 	github.com/IceCodeNew/maniud/containerconfig/runtimeargv v0.2.0
 	github.com/IceCodeNew/maniud/imageref v0.2.0
 	github.com/alecthomas/kong v1.16.1
-	github.com/compose-spec/compose-go/v2 v2.14.0
+	github.com/compose-spec/compose-go/v2 v2.15.0
 	github.com/containerd/containerd/api v1.11.1
 	github.com/containerd/containerd/v2 v2.3.4
 	github.com/containerd/continuity v0.5.0
@@ -35,7 +35,7 @@ require (
 	golang.org/x/text v0.41.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.58.0
 	oras.land/oras-go/v2 v2.6.2
 )
 
@@ -71,9 +71,9 @@ require (
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
 
 replace (
