@@ -900,15 +900,14 @@ func (state *model) handleLLMPreviewResult(result llmPreviewResultMsg) tea.Cmd {
 		return command
 	}
 	if result.err != nil {
+		state.page = result.page
 		action, actionError := errors.AsType[*llm.ActionError](result.err)
 		if actionError {
-			state.page = result.page
 			state.status = llmRecommendationErrorStatus(llmActionErrorCode(action))
 			if action.Code == llm.ErrorConversationLimit {
 				state.page = result.page.question
 			}
-		} else {
-			state.page = result.page
+		} else if !errors.Is(result.err, context.Canceled) {
 			state.status = "Recommended edit did not pass fresh Compose validation"
 		}
 

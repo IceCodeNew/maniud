@@ -900,7 +900,7 @@ func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 		t.Fatalf("accept failure deployment calls = %q", calls)
 	}
 	assistant.acceptErr = nil
-	deployments.previewHook = state.requestCancellation
+	deployments.previewHook = func() { state.handleKey(key(keyEscape)) }
 	state.page = choices
 	acceptCalls := len(assistant.calls)
 	deploymentCalls = len(deployments.calls)
@@ -910,6 +910,9 @@ func TestLLMErrorsChoicesAndCompletionBoundaries(t *testing.T) {
 	}
 	if len(assistant.calls) != acceptCalls {
 		t.Fatal("pre-accept cancellation consumed the choice token")
+	}
+	if state.status != testLLMCancelled {
+		t.Fatalf("cancelled recommendation status = %q", state.status)
 	}
 	deployments.previewHook = nil
 	assistant.acceptHook = state.requestCancellation
