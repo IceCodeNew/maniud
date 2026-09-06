@@ -93,6 +93,7 @@ type serviceSuspendResultMsg struct {
 
 type snapshotResultMsg struct {
 	sequence uint64
+	request  application.Request
 	snapshot application.OperationSnapshot
 	evidence application.EvidenceBundle
 	dryRun   *application.Plan
@@ -281,7 +282,6 @@ type model struct {
 	width              int
 	height             int
 	page               page
-	activeRequest      application.Request
 	status             string
 	mutationOutcome    string
 	busy               bool
@@ -1303,13 +1303,11 @@ func (state *model) startServiceSuspend(preview servicePreviewPage) tea.Cmd {
 }
 
 func (state *model) startSnapshot(request application.Request) tea.Cmd {
-	state.activeRequest = request
-
 	return state.begin(statusRefreshing, func(ctx context.Context, sequence uint64) tea.Cmd {
 		operations := state.operations
 
 		return func() tea.Msg {
-			result := snapshotResultMsg{sequence: sequence}
+			result := snapshotResultMsg{sequence: sequence, request: request}
 			result.snapshot, result.err = operations.Snapshot(ctx, request)
 			if result.err == nil {
 				result.evidence, result.err = operations.Evidence(result.snapshot)
@@ -1321,13 +1319,11 @@ func (state *model) startSnapshot(request application.Request) tea.Cmd {
 }
 
 func (state *model) startCommittedSnapshot(request application.Request) tea.Cmd {
-	state.activeRequest = request
-
 	return state.begin("Validating committed service", func(ctx context.Context, sequence uint64) tea.Cmd {
 		operations := state.operations
 
 		return func() tea.Msg {
-			result := snapshotResultMsg{sequence: sequence}
+			result := snapshotResultMsg{sequence: sequence, request: request}
 			plan, err := operations.DryRun(ctx, request)
 			result.err = err
 			if result.err == nil {
@@ -1573,7 +1569,7 @@ func (state *model) handleSnapshotResult(result snapshotResultMsg) tea.Cmd {
 		return command
 	}
 	state.page = reviewPage{
-		request: state.activeRequest, plan: view,
+		request: result.request, plan: view,
 		correlation: eventCorrelationForSnapshot(result.sequence, result.snapshot),
 	}
 	state.status = view.status

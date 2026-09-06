@@ -711,6 +711,27 @@ func TestModelContainsOperationFailuresAndStaleResults(t *testing.T) {
 	}
 }
 
+func TestSnapshotKeepsRequestWhenAnotherRefreshIsRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, committed := range []bool{false, true} {
+		state, _, _ := newTestModel(t)
+		request := application.Request{Service: testAPI}
+		start := state.startSnapshot
+		if committed {
+			start = state.startCommittedSnapshot
+		}
+		command := start(request)
+		if rejected := start(application.Request{Service: testWorker}); rejected != nil {
+			t.Fatal("busy snapshot accepted a second request")
+		}
+		deliver(t, state, command)
+		if got := reviewPageValue(t, state).request.Service; got != request.Service {
+			t.Fatalf("review service = %q, want %q", got, request.Service)
+		}
+	}
+}
+
 func TestModelRequiresEvidenceAndSafePlanProjection(t *testing.T) {
 	t.Parallel()
 
