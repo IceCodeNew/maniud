@@ -67,22 +67,27 @@ replace example.test/lib => "../lib"
 }
 
 func TestReplacementDependentsCloseAcrossBothGraphs(t *testing.T) {
-	selected := selection{
-		modules:    map[string]bool{"a": true},
-		moduleWide: map[string]bool{},
-	}
-	selected.selectReplacementDependents([]*side{
-		{replaces: map[string][]string{"c": {"d"}}},
-		{replaces: map[string][]string{"a": {"c"}}},
-	})
-	for _, module := range []string{"a", "c", "d"} {
-		if !selected.modules[module] {
-			t.Fatalf("module %q not selected in cross-revision closure", module)
+	for _, narrow := range [][]string{{"a"}, {"a", "c"}, {"a", "d"}, {"a", "c", "d"}} {
+		selected := selection{
+			modules:    map[string]bool{},
+			moduleWide: map[string]bool{},
 		}
-	}
-	for _, module := range []string{"c", "d"} {
-		if !selected.moduleWide[module] {
-			t.Fatalf("dependent module %q not expanded module-wide", module)
+		for _, module := range narrow {
+			selected.modules[module] = true
+		}
+		selected.selectReplacementDependents([]*side{
+			{replaces: map[string][]string{"c": {"d"}}},
+			{replaces: map[string][]string{"a": {"c"}}},
+		})
+		for _, module := range []string{"a", "c", "d"} {
+			if !selected.modules[module] {
+				t.Fatalf("module %q not selected in cross-revision closure", module)
+			}
+		}
+		for _, module := range []string{"c", "d"} {
+			if !selected.moduleWide[module] {
+				t.Fatalf("narrow %v: dependent module %q not expanded module-wide", narrow, module)
+			}
 		}
 	}
 }

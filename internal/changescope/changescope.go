@@ -171,9 +171,9 @@ func (selected *selection) selectReplacementDependents(graphs []*side) {
 		module := queue[0]
 		queue = queue[1:]
 		for _, dependent := range allReplacements[module] {
+			selected.moduleWide[dependent] = true
 			if !selected.modules[dependent] {
 				selected.modules[dependent] = true
-				selected.moduleWide[dependent] = true
 				queue = append(queue, dependent)
 			}
 		}

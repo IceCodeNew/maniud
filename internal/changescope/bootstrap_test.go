@@ -80,6 +80,65 @@ func TestBootstrapGuardAllowsClassifiedChangeAndRejectsShallowHistory(t *testing
 	invokeBootstrap(t, clone, base, "HEAD", testFullMode)
 }
 
+func TestBootstrapBroadensAlreadySelectedReplacementDependents(t *testing.T) {
+	repository := bootstrapRepository(t)
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if !strings.HasSuffix(file, "_test.go") {
+			copyFile(t, file, filepath.Join(repository, "internal/changescope", file))
+		}
+	}
+	copyFile(t, "cmd/changescope/main.go", filepath.Join(repository, "internal/changescope/cmd/changescope/main.go"))
+	copyFile(t, "../../go.sum", filepath.Join(repository, "go.sum"))
+	modVersion := strings.TrimSpace(run(t, ".", "go", "list", "-m", "-f", "{{.Version}}", "golang.org/x/mod"))
+	appendFile(t, repository, "go.mod", "\nrequire golang.org/x/mod "+modVersion+"\n")
+	appendFile(t, repository, "go.mod", `
+require (
+ example.test/lib v0.0.0
+ example.test/bridge v0.0.0
+)
+replace example.test/lib => ./lib
+replace example.test/bridge => ./bridge
+`)
+	write(t, repository, "lib/go.mod", "module example.test/lib\n\ngo 1.27\n")
+	write(t, repository, "lib/lib.go", "package lib\n")
+	write(t, repository, "lib/assets/data.json", "{}\n")
+	write(t, repository, "bridge/go.mod", `module example.test/bridge
+
+go 1.27
+require example.test/lib v0.0.0
+replace example.test/lib => ../lib
+`)
+	write(t, repository, "bridge/changed/changed.go", "package changed\n")
+	write(t, repository, "bridge/other/other.go", "package other\nimport _ \"example.test/lib\"\n")
+	write(t, repository, "changed/changed.go", "package changed\n")
+	write(t, repository, "other/other.go", "package other\nimport _ \"example.test/lib\"\n")
+	base := commit(t, repository, "resource baseline")
+	write(t, repository, "lib/assets/data.json", "{\"changed\":true}\n")
+	appendFile(t, repository, "changed/changed.go", "const Changed = true\n")
+	appendFile(t, repository, "bridge/changed/changed.go", "const Changed = true\n")
+	head := commit(t, repository, "resource and narrow packages")
+	manifest := filepath.Join(t.TempDir(), "manifest.tsv")
+	run(t, repository, "bash", "scripts/select-affected-gates", "--base", base, "--head", head, "--output", manifest)
+	contents, err := os.ReadFile(manifest) //nolint:gosec // Test-owned output.
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"mode\taffected\n",
+		"package\t.\tgithub.com/IceCodeNew/maniud/other\n",
+		"package\tbridge\texample.test/bridge/other\n",
+		"package\tlib\texample.test/lib\n",
+	} {
+		if !strings.Contains(string(contents), expected) {
+			t.Errorf("manifest missing %q:\n%s", expected, contents)
+		}
+	}
+}
+
 func TestFullManifestUsesHeadSnapshot(t *testing.T) {
 	repository := bootstrapRepository(t)
 	write(t, repository, "internal/dirty/dirty.go", "package dirty\n")
