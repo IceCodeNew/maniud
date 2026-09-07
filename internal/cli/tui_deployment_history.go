@@ -143,13 +143,13 @@ func (workspace *tuiDeploymentWorkspace) PreviewRestore(
 	if _, err = project.ServiceSpec(request.Service); err != nil {
 		return tui.DeploymentEditPreview{}, errDeploymentEditInvalid
 	}
-	scope, err := workspace.requestScope(ctx, request, source)
+	scope, branch, err := workspace.requestScope(ctx, request, source)
 	if err != nil {
 		return tui.DeploymentEditPreview{}, err
 	}
 	draft := tuiDeploymentDraft{
 		request: request, source: source, candidate: candidate, repository: repository,
-		entry: entry, base: base, restore: revision, scope: scope,
+		entry: entry, base: base, restore: revision, scope: scope, branch: branch,
 	}
 	workspace.draft = &draft
 

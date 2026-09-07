@@ -376,7 +376,7 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	}
 	request.Repository = provenance
 	workspace.registrationPath = filepath.Join(t.TempDir(), gitOpsRegistrationName)
-	if _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
+	if _, _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
 		err, errDeploymentEditInvalid,
 	) {
 		t.Fatalf("requestScope(missing registration) error = %v", err)
@@ -395,13 +395,13 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	if err = writeGitOpsRegistration(workspace.registrationPath, registration); err != nil {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)
 	}
-	actual, scopeErr := workspace.requestScope(t.Context(), request, request.Source)
-	if scopeErr != nil || !actual.Valid() {
+	actual, actualBranch, scopeErr := workspace.requestScope(t.Context(), request, request.Source)
+	if scopeErr != nil || !actual.Valid() || actualBranch != branch {
 		t.Fatalf("requestScope(valid) = %#v, %v", actual, scopeErr)
 	}
 	request.Repository = compose.RepositoryProvenance{}
-	actual, scopeErr = workspace.requestScope(t.Context(), request, request.Source)
-	if scopeErr != nil || actual.Valid() {
+	actual, actualBranch, scopeErr = workspace.requestScope(t.Context(), request, request.Source)
+	if scopeErr != nil || actual.Valid() || actualBranch != "" {
 		t.Fatalf("requestScope(unbound) = %#v, %v", actual, scopeErr)
 	}
 
@@ -412,7 +412,7 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	if err = writeGitOpsRegistration(workspace.registrationPath, wrong); err != nil {
 		t.Fatalf("write mismatched registration error = %v", err)
 	}
-	if _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
+	if _, _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
 		err, errDeploymentEditInvalid,
 	) {
 		t.Fatalf("requestScope(repository mismatch) error = %v", err)
@@ -425,7 +425,7 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	if _, err = runGit(t.Context(), repository, "remote", "remove", gitOpsRemoteName); err != nil {
 		t.Fatalf("git remote remove error = %v", err)
 	}
-	if _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
+	if _, _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
 		err, errDeploymentEditInvalid,
 	) {
 		t.Fatalf("requestScope(remote mismatch) error = %v", err)
@@ -446,7 +446,7 @@ func TestDeploymentWorkspaceValidatesComposeAndRequestScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bind(other) error = %v", err)
 	}
-	if _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
+	if _, _, err = workspace.requestScope(t.Context(), request, request.Source); !errors.Is(
 		err, errDeploymentEditInvalid,
 	) {
 		t.Fatalf("requestScope(provenance mismatch) error = %v", err)

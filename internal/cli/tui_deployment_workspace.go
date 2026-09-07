@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ type tuiDeploymentDraft struct {
 	fields     []application.DeploymentField
 	restore    string
 	scope      compose.RepositoryScope
+	branch     string
 }
 
 type tuiStagedDeployment struct {
@@ -45,6 +47,7 @@ type tuiDeploymentWorkspace struct {
 	runtimeBase      string
 	draft            *tuiDeploymentDraft
 	staged           *tuiStagedDeployment
+	instructions     []string
 }
 
 func defaultTUIDeploymentWorkspace(environment map[string]string) *tuiDeploymentWorkspace {
@@ -117,13 +120,13 @@ func (workspace *tuiDeploymentWorkspace) Preview(
 	if err != nil || len(candidate.fields) == 0 {
 		return tui.DeploymentEditPreview{}, errors.Join(err, errDeploymentEditInvalid)
 	}
-	scope, err := workspace.requestScope(ctx, request, source)
+	scope, branch, err := workspace.requestScope(ctx, request, source)
 	if err != nil {
 		return tui.DeploymentEditPreview{}, err
 	}
 	draft := tuiDeploymentDraft{
 		request: request, source: source, candidate: candidate.source, repository: repository,
-		entry: entry, base: base, fields: candidate.fields, scope: scope,
+		entry: entry, base: base, fields: candidate.fields, scope: scope, branch: branch,
 	}
 	workspace.draft = &draft
 
@@ -349,24 +352,24 @@ func (workspace *tuiDeploymentWorkspace) requestScope(
 	ctx context.Context,
 	request application.Request,
 	source compose.Source,
-) (compose.RepositoryScope, error) {
+) (compose.RepositoryScope, string, error) {
 	if request.Repository == (compose.RepositoryProvenance{}) {
-		return compose.RepositoryScope{}, nil
+		return compose.RepositoryScope{}, "", nil
 	}
 	registration, err := readGitOpsRegistration(workspace.registrationPath)
 	if err != nil || source.Repository == nil || registration.Repository != source.Repository.Root {
-		return compose.RepositoryScope{}, errDeploymentEditInvalid
+		return compose.RepositoryScope{}, "", errDeploymentEditInvalid
 	}
 	scope, err := gitOpsRepositoryScope(ctx, registration, source.Repository.Root)
 	if err != nil {
-		return compose.RepositoryScope{}, errDeploymentEditInvalid
+		return compose.RepositoryScope{}, "", errDeploymentEditInvalid
 	}
 	provenance, err := scope.Bind(source.Repository.Entry, source.Repository.Digest)
 	if err != nil || provenance != request.Repository {
-		return compose.RepositoryScope{}, errDeploymentEditInvalid
+		return compose.RepositoryScope{}, "", errDeploymentEditInvalid
 	}
 
-	return scope, nil
+	return scope, registration.Branch, nil
 }
 
 func (workspace *tuiDeploymentWorkspace) Stage(
@@ -702,6 +705,9 @@ func (workspace *tuiDeploymentWorkspace) settleCommit(
 	if committedHead != "" && deploymentTreeContains(
 		proofCtx, staged.proof, staged.draft.entry, staged.content,
 	) {
+		if staged.draft.branch != "" {
+			workspace.instructions = repositoryCommitInstructions(staged.draft.repository, staged.draft.branch)
+		}
 		workspace.staged = nil
 		workspace.draft = nil
 		request, requestErr := workspace.committedRequest(proofCtx, staged, committedHead)
@@ -767,6 +773,13 @@ func (workspace *tuiDeploymentWorkspace) committedRequest(
 	}
 
 	return request, errors.Join(err)
+}
+
+func (workspace *tuiDeploymentWorkspace) Instructions() []string {
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+
+	return slices.Clone(workspace.instructions)
 }
 
 func (workspace *tuiDeploymentWorkspace) Discard(ctx context.Context) error {

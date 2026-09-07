@@ -1200,13 +1200,15 @@ func commitInstructions(draft tuiServiceDraft) []string {
 	if draft.generated.preparationAbsolute != "" {
 		instructions = append(instructions, "sudo sh "+shellArgument(draft.generated.preparationAbsolute))
 	}
-	instructions = append(
-		instructions,
-		"git -C "+shellArgument(draft.repository)+" push origin "+shellArgument(draft.branch),
-		"maniud tui",
-	)
 
-	return instructions
+	return append(instructions, repositoryCommitInstructions(draft.repository, draft.branch)...)
+}
+
+func repositoryCommitInstructions(repository, branch string) []string {
+	return []string{
+		"git -C " + shellArgument(repository) + " push origin " + shellArgument(branch),
+		"maniud tui",
+	}
 }
 
 func shellArgument(value string) string {

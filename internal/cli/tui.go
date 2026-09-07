@@ -84,7 +84,7 @@ func executeProductionTUIWith(
 	)
 	runErr = runtimes.Classify(runErr)
 	exportErr := writeTUIExport(output, stderr, result.Export)
-	instructionErr := writeTUIInstructions(output, workspace.Instructions())
+	instructionErr := writeTUIInstructions(output, append(workspace.Instructions(), deployments.Instructions()...))
 
 	return errors.Join(runErr, exportErr, instructionErr)
 }
