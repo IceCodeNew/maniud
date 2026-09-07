@@ -143,10 +143,16 @@ func deploymentGitConfiguration(ctx context.Context, repository string) ([]strin
 	arguments := make([]string, 0, len(records)*deploymentGitConfigurationFields)
 	for _, record := range records {
 		key, value, found := bytes.Cut(record, []byte{'\n'})
-		if !found || !deploymentGitConfigurationKey(string(key)) {
+		if !deploymentGitConfigurationKey(string(key)) {
 			continue
 		}
-		arguments = append(arguments, "-c", strings.ToLower(string(key))+"="+string(value))
+		argument := strings.ToLower(string(key))
+		if found {
+			argument += "=" + string(value)
+		} else if argument == "core.autocrlf" || argument == "core.safecrlf" {
+			argument += "=true"
+		}
+		arguments = append(arguments, "-c", argument)
 	}
 
 	return arguments, nil

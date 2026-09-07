@@ -22,15 +22,15 @@ const (
 )
 
 const (
-	statusReviewLLMConfig      = "Review LLM configuration"
-	statusLLMConfigSaved       = "LLM configuration saved"
-	labelAskLLMDeployment      = "Ask LLM about deployment"
-	displayUnavailable         = "Unavailable"
-	keyEditLLMConfiguration    = "ctrl+e"
-	llmModelWarningPrefixWidth = 16
-	llmChoiceIndentWidth       = 2
-	maximumLLMMessageBytes     = 1024
-	maximumLLMMessageLines     = 8
+	statusReviewLLMConfig   = "Review LLM configuration"
+	statusLLMConfigSaved    = "LLM configuration saved"
+	labelAskLLMDeployment   = "Ask LLM about deployment"
+	displayUnavailable      = "Unavailable"
+	keyEditLLMConfiguration = "ctrl+e"
+	llmModelLabelWidth      = 16
+	llmChoiceIndentWidth    = 2
+	maximumLLMMessageBytes  = 1024
+	maximumLLMMessageLines  = 8
 )
 
 func llmProviderValues() []string {
@@ -799,6 +799,9 @@ func (state *model) handleLLMChoicesKey(current llmChoicesPage, key string) tea.
 	case keyDown, "j", keyTab:
 		current.cursor = (current.cursor + 1) % len(current.result.Choices)
 	case keyEnter:
+		if layoutFor(state.width, state.height) < layoutCompact {
+			return nil
+		}
 		if current.result.Choices[current.cursor].Kind == llm.ChoiceRecommendation {
 			return state.startLLMChoicePreview(current)
 		}

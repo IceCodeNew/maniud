@@ -276,20 +276,22 @@ func (state *model) llmNetworkConfirmationBody(
 }
 
 func (state *model) llmChoicesBody(current llmChoicesPage, width int) []string {
+	reported := current.result.ReportedModel
+	if reported == "" {
+		reported = "not reported"
+	}
+	modelWidth := max(width-llmModelLabelWidth, 1)
 	lines := []string{
 		state.title("Choose a response"),
-		"Maniud checks each provider response and leaves the choice to you.",
-		"",
+		"Requested model " + terminaltext.Middle(current.result.RequestedModel, modelWidth, state.symbol("…", "...")),
+		"Reported model  " + terminaltext.Middle(reported, modelWidth, state.symbol("…", "...")),
 	}
-	if current.result.ModelWarning {
-		reported := current.result.ReportedModel
-		if reported == "" {
-			reported = "not reported"
-		}
-		lines = append(lines, state.failure("Provider model: "+terminaltext.Middle(
-			reported, max(width-llmModelWarningPrefixWidth, 1), "…",
-		)), "")
+	if current.result.ReportedModel == "" {
+		lines = append(lines, state.failure("Provider model is missing; review before using."))
+	} else if current.result.RequestedModel != current.result.ReportedModel {
+		lines = append(lines, state.failure("Models differ; review before using."))
 	}
+	lines = append(lines, "")
 	for index, choice := range current.result.Choices {
 		label := llmChoiceKindLabel(choice.Kind) + ": " + strings.ReplaceAll(choice.Message, "\n", " ")
 		if len(choice.Changes) > 1 {

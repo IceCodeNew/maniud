@@ -228,10 +228,11 @@ func TestModelConfiguresLLMAndPreviewsExplicitChoice(t *testing.T) {
 	state.handleKey(key(keyTab))
 	deliver(t, state, state.handleKey(key(keyEnter)))
 	choices, valid := state.page.(llmChoicesPage)
-	if !valid || choices.cursor != 0 || len(choices.result.Choices) != 2 ||
-		!strings.Contains(state.View().Content, "Provider model: gpt-5.1") {
+	if !valid || choices.cursor != 0 || len(choices.result.Choices) != 2 {
 		t.Fatalf("recommendation choices = %#v", state.page)
 	}
+	assertViewContains(t, state.View().Content, "model disclosure",
+		"Requested model gpt-5", "Reported model  gpt-5.1", "Models differ")
 	state.handleKey(key(keyDown))
 	deliver(t, state, state.handleKey(key(keyEnter)))
 	preview, valid := state.page.(deploymentPreviewPage)

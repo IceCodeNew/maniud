@@ -21,7 +21,7 @@ const (
 
 func TestDeploymentCommitEmitsPostTerminalHandoff(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"edit", "restore", handoffReloadFailure, handoffUnregistered} {
+	for _, mode := range []string{"edit", "restore", "llm", handoffReloadFailure, handoffUnregistered} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			assertDeploymentPostTerminalHandoff(t, mode)
@@ -63,7 +63,8 @@ func assertDeploymentPostTerminalHandoff(t *testing.T, mode string) {
 		func() (string, error) { return working, nil }, testRuntimePlugins(t), &notifications,
 		func(uintptr) bool { return true },
 		func(ctx context.Context, _ io.Reader, screen io.Writer, _ tui.Catalog, _ tui.ServiceWorkspace,
-			deployments tui.DeploymentWorkspace, _ tui.Operations, _ *tui.EventStream, _ tui.Options,
+			deployments tui.DeploymentWorkspace, _ tui.Assistant, _ applyDependencies,
+			_ *tui.EventStream, _ tui.Options,
 		) (tui.Result, error) {
 			workspace, ok := deployments.(*tuiDeploymentWorkspace)
 			if !ok {
@@ -73,6 +74,9 @@ func assertDeploymentPostTerminalHandoff(t *testing.T, mode string) {
 			workspace.runtimeBase = fixture.runtimeBase
 			if _, previewErr := workspace.Preview(ctx, request, application.DeploymentCPUs.ID(), "2", false); previewErr != nil {
 				t.Fatal(previewErr)
+			}
+			if mode == "llm" {
+				previewDeploymentHandoffPatch(ctx, t, workspace, request)
 			}
 			staged, stageErr := workspace.Stage(ctx)
 			if stageErr != nil {
@@ -120,7 +124,7 @@ func registerDeploymentHandoff(
 	t.Helper()
 	if err := writeGitOpsRegistration(path, gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: repository, Branch: handoffBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: head,
+		Remote: gitOpsRemoteName, RemoteURL: repository, BaselineCommit: head,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -150,5 +154,18 @@ func commitDeploymentHandoffRestore(
 	result, err := workspace.Commit(ctx, staged.CommitMessage, true)
 	if err != nil || result.Outcome != tui.CommitSucceeded {
 		t.Fatalf("restore commit = %#v, %v", result, err)
+	}
+}
+
+func previewDeploymentHandoffPatch(
+	ctx context.Context, t *testing.T, workspace *tuiDeploymentWorkspace, request application.Request,
+) {
+	t.Helper()
+	patch, err := parseDeploymentPatch(application.DeploymentCPUs, "2", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = workspace.PreviewPatches(ctx, request, []application.DeploymentPatch{patch}); err != nil {
+		t.Fatal(err)
 	}
 }
