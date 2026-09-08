@@ -316,6 +316,12 @@ func TestResponseValidationAndErrorClassificationBoundaries(t *testing.T) {
 			t.Fatalf("validateChoice(%#v) succeeded", choice)
 		}
 	}
+	unavailableProjection := testProjection()
+	unavailableProjection.Fields[0].Available = false
+	_, _, unavailableErr := validateChoice(anyLLMTestChoice(completionContent()), unavailableProjection)
+	if !isActionError(unavailableErr, ErrorInvalidResponse) {
+		t.Fatalf("validateChoice(unavailable field) = %v", unavailableErr)
+	}
 	for cause, code := range map[error]ErrorCode{
 		context.Canceled: ErrorCancelled, context.DeadlineExceeded: ErrorTimeout,
 		anyllm.ErrAuthentication: ErrorAuthentication, anyllm.ErrMissingAPIKey: ErrorAuthentication,
@@ -402,9 +408,6 @@ func invalidChoices() []anyllm.Choice {
 	duplicate := anyLLMTestChoice(`{"kind":"recommendation","message":"duplicate","changes":[` +
 		`{"field":"cpus","value":"2","unset":false,"citation":"cpus"},` +
 		`{"field":"cpus","value":"3","unset":false,"citation":"cpus"}]}`)
-	unavailableProjection := testProjection()
-	unavailableProjection.Fields[0].Available = false
-	_ = unavailableProjection
 
 	return []anyllm.Choice{
 		{FinishReason: "unexpected"}, toolChoice,

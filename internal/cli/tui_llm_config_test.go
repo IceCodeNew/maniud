@@ -212,6 +212,79 @@ func TestLLMConfigurationSaveRejectsStaleBaselineAndUnsafeLock(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // Each case proves the real save outcome and preservation of the file or parsed values.
+func TestLLMConfigurationSavePreservesMultilineValues(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, unrelated string
+		reject          bool
+	}{
+		{"double quoted continuation", "KEEP=\"first\nMANIUD_LLM_MODEL=embedded\nlast\"\n", true},
+		{"single quoted continuation", "KEEP='first\nMANIUD_LLM_MODEL=embedded\nlast'\n", true},
+		{"closing quote removed", "KEEP=\"first\nMANIUD_LLM_MODEL=last\"\n", true},
+		{"interpolated model", "KEEP=${MANIUD_LLM_MODEL}\n", true},
+		{"double quoted multiline", "KEEP=\"first\nlast\"\n", false},
+		{"single quoted multiline", "KEEP='first\nlast'\n", false},
+		{"ordinary values", "KEEP=value\nEMPTY=\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			environment := map[string]string{
+				homeEnvironment: home, xdgConfigHomeEnvironment: filepath.Join(home, "config"),
+				openAIKeyEnvironment: "test-key",
+			}
+			root := filepath.Join(environment[xdgConfigHomeEnvironment], llmConfigDirectory)
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, llmConfigName)
+			raw := "MANIUD_LLM_PROVIDER=openai\nMANIUD_LLM_MODEL=old\n" + test.unrelated
+			if err := os.WriteFile(path, []byte(raw), llmFileMode); err != nil {
+				t.Fatal(err)
+			}
+			before, err := parseLLMEnv([]byte(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assistant := defaultTUIAssistant(environment, t.TempDir(), &tuiDeploymentWorkspace{}, nil)
+			saved, saveErr := assistant.Save(t.Context(), tui.LLMSettings{
+				Provider: string(llm.ProviderOpenAI), Model: testLLMModelValue, Timeout: "60",
+			})
+			actual, err := os.ReadFile(path) //nolint:gosec // The path belongs to this test's private configuration directory.
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.reject {
+				if saveErr == nil || string(actual) != raw {
+					t.Fatalf("unsafe save: error=%v original=%q actual=%q", saveErr, raw, actual)
+				}
+
+				return
+			}
+			if saveErr != nil || saved.Model != testLLMModelValue || !saved.Complete {
+				t.Fatalf("valid Save() = %#v, %v", saved, saveErr)
+			}
+			assertUnrelatedLLMValues(t, before, actual)
+		})
+	}
+}
+
+func assertUnrelatedLLMValues(t *testing.T, before map[string]string, actual []byte) {
+	t.Helper()
+	after, err := parseLLMEnv(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"KEEP", "EMPTY"} {
+		oldValue, existed := before[name]
+		value, found := after[name]
+		if existed != found || oldValue != value {
+			t.Fatalf("unrelated %s changed: before=%#v after=%#v", name, before, after)
+		}
+	}
+}
+
 func TestRewriteLLMEnvUsesComposeDotenvSemantics(t *testing.T) {
 	t.Parallel()
 	model := "next $model"

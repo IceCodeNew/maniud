@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -267,27 +268,27 @@ func llmSettingsUpdates(settings tui.LLMSettings) (map[string]*string, error) {
 
 //nolint:cyclop // Parsing, targeted replacement, and full reparse form one fail-closed dotenv rewrite boundary.
 func rewriteLLMEnv(raw []byte, updates map[string]*string) ([]byte, error) {
+	original, err := parseLLMEnv(raw)
+	if err != nil {
+		return nil, err
+	}
 	lines := strings.SplitAfter(string(raw), "\n")
-	output := make([]string, 0, len(lines)+len(updates))
+	var candidate strings.Builder
 	for _, line := range lines {
 		name, value, assignment := dotenvAssignment(line)
 		if !assignment {
-			output = append(output, line)
+			candidate.WriteString(line)
 
 			continue
 		}
 		if _, targeted := updates[name]; !targeted {
-			output = append(output, line)
+			candidate.WriteString(line)
 
 			continue
 		}
 		if !singleLineDotenvValue(value) {
 			return nil, errLLMConfigInvalid
 		}
-	}
-	var candidate strings.Builder
-	for _, line := range output {
-		candidate.WriteString(line)
 	}
 	if candidate.Len() != 0 && !strings.HasSuffix(candidate.String(), "\n") {
 		candidate.WriteByte('\n')
@@ -318,6 +319,11 @@ func rewriteLLMEnv(raw []byte, updates map[string]*string) ([]byte, error) {
 		if value == nil && found || value != nil && (!found || actual != *value) {
 			return nil, errLLMConfigInvalid
 		}
+		delete(original, name)
+		delete(parsed, name)
+	}
+	if !maps.Equal(original, parsed) {
+		return nil, errLLMConfigInvalid
 	}
 
 	return candidateBytes, nil
