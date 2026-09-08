@@ -223,9 +223,11 @@ func TestLLMConfigurationSavePreservesMultilineValues(t *testing.T) {
 		{"single quoted continuation", "KEEP='first\nMANIUD_LLM_MODEL=embedded\nlast'\n", true},
 		{"closing quote removed", "KEEP=\"first\nMANIUD_LLM_MODEL=last\"\n", true},
 		{"interpolated model", "KEEP=${MANIUD_LLM_MODEL}\n", true},
+		{"required interpolated model", "KEEP=${MANIUD_LLM_MODEL:?required}\n", true},
 		{"double quoted multiline", "KEEP=\"first\nlast\"\n", false},
 		{"single quoted multiline", "KEEP='first\nlast'\n", false},
 		{"ordinary values", "KEEP=value\nEMPTY=\n", false},
+		{"missing final newline", "KEEP=value", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -405,6 +407,11 @@ func TestLLMConfigurationPureHelperBoundaries(t *testing.T) {
 		[]byte(strings.Repeat("x", maximumLLMEnvBytes+1)), nil,
 	); !errors.Is(err, errLLMConfigInvalid) {
 		t.Fatalf("oversized rewrite error = %v", err)
+	}
+	if _, err := rewriteLLMEnv(
+		[]byte("KEEP="+strings.Repeat("x", maximumLLMEnvBytes-len("KEEP="))), nil,
+	); !errors.Is(err, errLLMConfigInvalid) {
+		t.Fatalf("oversized candidate error = %v", err)
 	}
 	if _, err := rewriteLLMEnv(nil, map[string]*string{"UNKNOWN": &value}); !errors.Is(err, errLLMConfigInvalid) {
 		t.Fatalf("unknown rewrite error = %v", err)
