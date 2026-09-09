@@ -553,6 +553,7 @@ func TestNativeTaskStartRollsBackOnlyUnownedNewNetwork(t *testing.T) {
 		probe  error
 	}{
 		{name: "observed running task", status: tasktypes.Status_RUNNING},
+		{name: "task exited after starting", status: tasktypes.Status_STOPPED},
 		{name: "ambiguous task probe", status: tasktypes.Status_CREATED, probe: errContainerdTest},
 	} {
 		t.Run(test.name, func(t *testing.T) {

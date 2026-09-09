@@ -166,6 +166,7 @@ func TestGitOpsSourceBlockerEventsPublishOnlyTransitions(t *testing.T) {
 	web := gitOpsSkippedSource{Path: "services/web.yaml", Code: gitOpsSkippedInvalidComposeSource}
 
 	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
+	events.observe(gitOpsCycleFailed, gitOpsCycleCounts{})
 	events.observe(gitOpsCyclePartial, observedGitOpsSources(api, worker))
 	events.observe(gitOpsCyclePartial, observedGitOpsSources(worker, web))
 	events.observe(gitOpsCycleConverged, gitOpsCycleCounts{sourceBlockersObserved: true})
