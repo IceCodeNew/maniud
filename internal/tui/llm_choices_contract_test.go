@@ -40,7 +40,8 @@ func TestLLMChoicesDiscloseModelsBeforeAcceptance(t *testing.T) {
 						t.Fatalf("wrong model warning: %s", view)
 					}
 					if test.name != "long" {
-						assertViewContains(t, view, test.name, test.requested, test.reported)
+						assertViewContains(t, view, test.name,
+							"Requested model "+test.requested, "Reported model  "+test.reported)
 					} else {
 						assertViewContains(t, view, test.name, "requested-", "reported-")
 					}
