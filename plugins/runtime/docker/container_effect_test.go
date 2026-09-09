@@ -383,6 +383,20 @@ func TestStartWorkloadStartsProvenOwnedContainerAndProbesRunning(t *testing.T) {
 	}
 }
 
+func TestStartWorkloadRejectsDroppedOOMKillDisable(t *testing.T) {
+	t.Parallel()
+
+	workload := validApplicationWorkload(t)
+	workload.OOMKillDisable = new(true)
+	workload.EffectiveDigest = domain.ComputeEffectiveDigest(workload)
+	var started atomic.Bool
+	client := connectedTestClient(t, startWorkloadHandler(t, workload, &started))
+	err := client.StartWorkload(t.Context(), workload, testTransaction)
+	if !errors.Is(err, ErrProtocol) || started.Load() {
+		t.Fatalf("dropped OOM protection: error=%v started=%t", err, started.Load())
+	}
+}
+
 func startWorkloadHandler(
 	t *testing.T,
 	workload domain.DesiredWorkload,
