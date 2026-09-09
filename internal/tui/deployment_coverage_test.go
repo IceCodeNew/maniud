@@ -286,11 +286,17 @@ func TestDeploymentResultProjectionErrorsRemainContained(t *testing.T) {
 		t.Fatalf("invalid stage result = %v, %q", state.err, state.status)
 	}
 
+	state.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	state.sequence++
-	state.handleDeploymentHistoryResult(deploymentHistoryResultMsg{sequence: state.sequence, review: review})
+	state.Update(deploymentHistoryResultMsg{
+		sequence: state.sequence, review: review,
+		history: []DeploymentHistoryEntry{{Revision: "abc123", Subject: "Short revision"}},
+	})
+	content := state.View().Content
 	if !errors.Is(state.err, errInvalidInput) || state.status != "Deployment history could not be displayed safely" {
 		t.Fatalf("invalid history result = %v, %q", state.err, state.status)
 	}
+	assertViewContains(t, content, state.status)
 }
 
 //nolint:funlen,gocognit,cyclop,gocyclo,maintidx // This table drives every bounded deployment keyboard transition.
