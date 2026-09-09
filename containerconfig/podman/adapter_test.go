@@ -119,6 +119,9 @@ func TestEncodeRichConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode() error = %v", err)
 	}
+	if !bytes.Contains(encoded, []byte(`"blockIO":{"weight":500}`)) {
+		t.Fatalf("Encode() missing OCI blockIO weight: %s", encoded)
+	}
 	var create createDocument
 	if json.Unmarshal(encoded, &create) != nil || create.Image != testImage || create.RawImageName != testImage ||
 		create.ResourceLimits.CPU == nil || create.ResourceLimits.Memory == nil ||
