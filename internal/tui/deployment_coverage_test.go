@@ -829,26 +829,32 @@ func TestDeploymentPreviewScrollStopsAtTheLastComparisonWindow(t *testing.T) {
 	t.Parallel()
 
 	state, _, _ := newTestModel(t)
-	state.resize(compactMinimum, compactMinHeight)
+	state.Update(tea.WindowSizeMsg{Width: 56, Height: 16})
 	changes := make([]DeploymentFieldChange, 0, len(application.DeploymentFields()))
 	for _, field := range application.DeploymentFields() {
-		changes = append(changes, deploymentChange(field, testCurrentImage, testProposedImage))
+		change := deploymentChange(field, testCurrentImage, testProposedImage)
+		if field == application.DeploymentHealthStartInterval {
+			change = deploymentChange(field, "last-before", "last-after")
+		}
+		changes = append(changes, change)
 	}
 	state.page = deploymentPreviewPage{preview: DeploymentEditPreview{
 		ComposePath: testServicePath,
 		Changes:     changes,
 	}}
 	for range len(changes) * 3 {
-		current := mustLLMPage[deploymentPreviewPage](state.page)
-		state.handleDeploymentPreviewKey(current, keyDown)
+		state.Update(key(keyDown))
 	}
 	current := mustLLMPage[deploymentPreviewPage](state.page)
 	lastScroll := current.scroll
-	state.handleDeploymentPreviewKey(current, keyDown)
+	state.Update(key(keyDown))
 	current = mustLLMPage[deploymentPreviewPage](state.page)
 	if lastScroll == 0 || current.scroll != lastScroll {
 		t.Fatalf("deployment preview scroll advanced past its final window: %d to %d", lastScroll, current.scroll)
 	}
+	assertViewContains(t, state.View().Content, "last Compact comparison", "last-before", "last-after")
+	state.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	assertViewContains(t, state.View().Content, "last enlarged comparison", "last-before", "last-after")
 }
 
 func TestDeploymentDetailsPreserveFullCanonicalValues(t *testing.T) {
