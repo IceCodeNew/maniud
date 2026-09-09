@@ -32,7 +32,7 @@ func testCompactSaveAndStage(t *testing.T, unicode, staging bool) {
 	configuration := newLLMConfigurationPage(review, completeLLMConfiguration())
 	configuration.draft.Model = strings.Repeat("long-model-", 30)
 	preview := deploymentPreviewPage{review: review, preview: deployments.preview}
-	preview.preview.Diff = strings.Repeat("+long changed line\n", 40)
+	preview.preview.Diff = "+first staged change\n" + strings.Repeat("+long changed line\n", 40) + "+last staged change\n"
 	state.page = llmSaveConfirmationPage{configuration: configuration}
 	action := "Save configuration"
 	if staging {
@@ -43,9 +43,11 @@ func testCompactSaveAndStage(t *testing.T, unicode, staging bool) {
 	assertConfirmationResizeFocus(t, state, action)
 	if staging {
 		state.Update(key("d"))
-		if _, ok := state.page.(deploymentDiffPage); !ok {
-			t.Fatal("Stage lost exact-diff access")
+		assertViewContains(t, state.View().Content, "first exact diff line", "+first staged change")
+		for range 50 {
+			state.Update(key(keyDown))
 		}
+		assertViewContains(t, state.View().Content, "last exact diff line", "+last staged change")
 		state.Update(key(keyEscape))
 	}
 	state.Update(key(keyTab))
@@ -88,7 +90,11 @@ func assertConfirmationResizeFocus(t *testing.T, state *model, action string) {
 func TestReviewHealthMarkersAndOperationPrecedence(t *testing.T) {
 	t.Parallel()
 
-	for _, unicode := range []bool{false, true} {
+	markers := map[application.HealthConvergence][2]string{
+		application.HealthConvergencePending:  {"[.] ", "· "},
+		application.HealthConvergenceDegraded: {"[!] ", "! "},
+	}
+	for mode, unicode := range []bool{false, true} {
 		for _, size := range [][2]int{{80, 24}, {56, 16}} {
 			state, _, _ := newTestModel(t)
 			state.options.Unicode = unicode
@@ -103,6 +109,7 @@ func TestReviewHealthMarkersAndOperationPrecedence(t *testing.T) {
 				if strings.Contains(content, "[OK]") || strings.Contains(content, "No runtime change has started") {
 					t.Fatalf("health %s: %s", health, content)
 				}
+				assertViewContains(t, content, "health marker", markers[health][mode]+review.plan.status)
 				state.startApply(review)
 				state.Update(key(keyEscape))
 				content = state.View().Content
