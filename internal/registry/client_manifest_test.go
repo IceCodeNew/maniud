@@ -33,8 +33,10 @@ func TestResolverAcceptsLengthlessManifestAndVerifiesContent(t *testing.T) {
 		{name: "HEAD fallback control", lengthless: true, headMetadata: true, body: manifest},
 		{name: "neither response has length", lengthless: true, digest: descriptor.Digest.String(), body: manifest},
 		{name: "neither response has metadata", lengthless: true, body: manifest},
+		{name: "lengthless exact limit", lengthless: true,
+			body: []byte(string(manifest) + strings.Repeat(" ", int(maximumManifestBytes)-len(manifest)))},
 		{name: "lengthless oversized", lengthless: true, wantError: true,
-			body: []byte(strings.Repeat(" ", int(maximumManifestBytes)+1))},
+			body: []byte(string(manifest) + strings.Repeat(" ", int(maximumManifestBytes)-len(manifest)+1))},
 		{name: "lengthless digest mismatch", lengthless: true, wantError: true,
 			digest: domain.Hash([]byte("different manifest")).String(), body: manifest},
 	} {
@@ -74,7 +76,7 @@ func TestResolverAcceptsLengthlessManifestAndVerifiesContent(t *testing.T) {
 
 				return
 			}
-			if err != nil || result.ReferenceDigest.String() != descriptor.Digest.String() {
+			if err != nil || result.ReferenceDigest != domain.Hash(test.body) {
 				t.Fatalf("Resolve = %v; digest = %s", err, result.ReferenceDigest.String())
 			}
 		})
