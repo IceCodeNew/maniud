@@ -74,8 +74,8 @@ func TestViewsMatchFullCompactHardAndResizeContracts(t *testing.T) {
 	state.mutationOutcome = ""
 	content = state.View().Content
 	assertViewContains(t, content, "compact constrained review", testCurrentLabel, testCurrentImage,
-		testProposedLabel, testProposedImage, statusReady, testContinueAction, "Operation failed.")
-	if strings.Contains(content, "Review image change") || strings.Contains(content, errTestSecret.Error()) {
+		testProposedLabel, testProposedImage, statusOperationFailed, testContinueAction, "Operation failed.")
+	if strings.Contains(content, statusReady) || strings.Contains(content, errTestSecret.Error()) {
 		t.Fatalf("compact constrained review kept expendable or unsafe copy: %q", content)
 	}
 }
@@ -112,13 +112,13 @@ func TestViewUsesColorUnicodeAndASCIICapabilities(t *testing.T) {
 	state.err = errTestSecret
 	state.options = Options{Color: true, Unicode: true}
 	colored := state.View().Content
-	assertViewContains(t, colored, "colored Unicode view", "\x1b[", "⬟", "│", "× Operation failed.")
+	assertViewContains(t, colored, "colored Unicode view", "\x1b[", "! Operation failed", "│", "× Operation failed.")
 	state.options = Options{}
 	plain := state.View().Content
 	if strings.Contains(plain, "\x1b[") || strings.ContainsAny(plain, "⬟✓●○›│─…▌") {
 		t.Fatalf("plain ASCII view = %q", plain)
 	}
-	assertViewContains(t, plain, "plain ASCII view", "[OK] ", "[*] Review", "[ ] Confirm", "[FAIL] Operation failed.")
+	assertViewContains(t, plain, "plain ASCII view", "[!] ", "[*] Review", "[ ] Confirm", "[FAIL] Operation failed.")
 }
 
 func TestStatusCardUsesBoundedUnicodeAndASCIIChrome(t *testing.T) {
@@ -780,7 +780,7 @@ func TestHealthReviewRendersOnlyBoundedStateAndExplicitDecision(t *testing.T) {
 	}
 	confirmation := strings.Join(state.healthConfirmationBody(healthConfirmationPage{
 		review: review, focus: confirmationBack,
-	}, defaultWidth), "\n")
+	}, defaultWidth), "")
 	if !strings.Contains(confirmation, "restore the previous workload") ||
 		!strings.Contains(confirmation, "> Back") {
 		t.Fatalf("health confirmation = %q", confirmation)
@@ -788,7 +788,7 @@ func TestHealthReviewRendersOnlyBoundedStateAndExplicitDecision(t *testing.T) {
 	review.plan.restoresPrevious = false
 	confirmation = strings.Join(state.healthConfirmationBody(healthConfirmationPage{
 		review: review, focus: confirmationBack,
-	}, defaultWidth), "\n")
+	}, defaultWidth), "")
 	if strings.Contains(confirmation, "restore the previous workload") {
 		t.Fatalf("bootstrap rollback confirmation describes an upgrade restore: %q", confirmation)
 	}
@@ -811,7 +811,7 @@ func TestHealthPresentationCoversPendingHealthyAndAdoptionStates(t *testing.T) {
 	}
 	body := strings.Join(state.healthConfirmationBody(healthConfirmationPage{
 		review: reviewPage{plan: plan}, focus: confirmationBack,
-	}, defaultWidth), "\n")
+	}, defaultWidth), "")
 	if !strings.Contains(body, "unmanaged workload will remain unchanged") {
 		t.Fatalf("adoption confirmation = %q", body)
 	}
@@ -821,7 +821,7 @@ func TestHealthPresentationCoversPendingHealthyAndAdoptionStates(t *testing.T) {
 	}
 	retry := strings.Join(state.healthConfirmationBody(healthConfirmationPage{
 		review: reviewPage{plan: plan}, focus: confirmationBack,
-	}, defaultWidth), "\n")
+	}, defaultWidth), "")
 	if !strings.Contains(retry, "exact stopped predecessor") ||
 		!strings.Contains(retry, "rolled-back candidate will remain discarded") {
 		t.Fatalf("restore retry confirmation = %q", retry)

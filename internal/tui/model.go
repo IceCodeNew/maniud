@@ -17,6 +17,7 @@ const (
 	statusRefreshing          = "Refreshing review"
 	statusReviewLarger        = "Review again at a larger terminal"
 	statusOperationFailed     = "Operation failed"
+	statusCancelled           = "Cancelled"
 	statusHealthDetails       = "Workload health details"
 	keyEscape                 = "esc"
 	keyEnter                  = "enter"
@@ -943,7 +944,7 @@ func (state *model) completeOperation(sequence uint64, err error) (bool, tea.Cmd
 
 	state.finishOperation()
 	if errors.Is(err, context.Canceled) {
-		state.status = "Cancelled"
+		state.status = statusCancelled
 	} else if err != nil {
 		state.err = err
 		state.status = statusOperationFailed

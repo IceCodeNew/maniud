@@ -17,6 +17,7 @@ const (
 	deploymentComparisonParts    = 3
 	deploymentComposeDefault     = "Compose default"
 	deploymentDiffLeadRows       = 4
+	deploymentConfirmationRows   = 8
 	deploymentReviewAction       = "Review file mutation"
 	deploymentReviewEmpty        = "No deployment parameters differ in this revision."
 	deploymentReviewReady        = "Ready for file review"
@@ -291,22 +292,21 @@ func (state *model) stageDeploymentConfirmationBody(
 	width int,
 ) []string {
 	diff := deploymentPreviewDiffLines(current.preview, width)
-	diff = diff[:min(len(diff), diffSummaryRows)]
+	rows := min(diffSummaryRows, max(state.height-compactFrameRows-deploymentConfirmationRows, 0))
+	diff = diff[:min(len(diff), rows)]
 	lines := make([]string, 0, len(diff))
 	lines = append(lines,
 		state.title("Confirm file mutation"),
 		state.muted("Unsaved"),
-		"Replace the selected Compose file and stage the reviewed Git blob?",
+		"Replace Compose and stage the reviewed Git blob?",
 		"No commit or runtime operation will run on this page.",
-		"",
 		"Compose   "+terminaltext.Middle(
 			current.preview.preview.ComposePath, max(width-serviceFieldWidth, 1), "…",
 		),
-		"",
 		state.muted("EXACT COMMIT DIFF"),
 	)
 	lines = append(lines, diff...)
-	lines = append(lines, "", state.choice(current.focus == confirmationBack, "Back", width),
+	lines = append(lines, state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, "Write and stage edit", width))
 
 	return lines

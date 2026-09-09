@@ -661,13 +661,15 @@ func (state *model) reviewStatusBody(review reviewPage, width int, compact bool)
 		return append(lines, state.muted("Esc Cancel   q Cancel and quit"))
 	}
 	primary, secondary := "Continue to confirmation", "Explore options"
-	if state.configReloadNeeded {
+	switch {
+	case state.configReloadNeeded:
 		primary = "Reload LLM configuration"
-	} else if plan.health != application.HealthConvergenceNone {
+	case plan.health != application.HealthConvergenceNone:
 		primary = healthActionLabel(plan)
 		secondary = "View details"
-	} else if plan.settled {
+	case plan.settled:
 		primary = "Refresh"
+		secondary = "View details"
 	}
 	lines = append(lines,
 		state.choice(review.focus == reviewContinue, primary, width),
@@ -784,7 +786,6 @@ func (state *model) confirmationBody(current confirmationPage, width int) []stri
 		plan.warningText,
 		state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, "Apply", width),
-		state.muted("d Details   Esc Back"),
 	}
 }
 
@@ -809,14 +810,16 @@ func (state *model) healthConfirmationBody(current healthConfirmationPage, width
 			"The rolled-back candidate will remain discarded."
 	}
 
-	return []string{
+	lines := []string{
 		state.title(title),
-		fmt.Sprintf("Resolve health for %s / %s?", plan.project, plan.service),
-		detail,
-		"",
+		"Service  " + terminaltext.Middle(plan.project+" / "+plan.service, max(width-serviceFieldWidth, 1), "…"),
+	}
+	lines = append(lines, terminaltext.Wrap(detail, width)...)
+
+	return append(lines, plan.warningText,
 		state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, action, width),
-	}
+	)
 }
 
 func healthActionLabel(plan planView) string {
@@ -847,7 +850,7 @@ func healthSummary(plan planView) string {
 func (state *model) footer(width int) string {
 	keys := state.footerKeys()
 	if _, help := state.page.(contextualHelpPage); !help && !pageAcceptsText(state.page) &&
-		!strings.Contains(keys, "? Help") {
+		!state.busy && !strings.Contains(keys, "? Help") {
 		keys = "? Help   " + keys
 	}
 
@@ -883,7 +886,7 @@ func (state *model) pageFooterKeys() string {
 	case detailsPage:
 		keys = "↑/↓ Scroll   x Export   d/Esc Back   q Quit"
 	case confirmationPage, healthConfirmationPage:
-		keys = confirmationKeys
+		keys = "Tab Focus   Enter Choose   d Details   Esc Back"
 	case openPathPage:
 		keys = "Type path   Enter Open   Esc Back"
 	case sourceDiagnosticPage:

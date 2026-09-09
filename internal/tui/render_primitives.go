@@ -8,25 +8,34 @@ import (
 )
 
 func (state *model) statusTitle(status string) string {
-	if status == statusApplyCompleted {
+	switch status {
+	case statusApplyCompleted:
 		return state.success(state.symbol("✓ ", "[x] ") + status)
+	case statusOperationFailed, "Workload health requires a decision":
+		return state.failure(state.symbol("! ", "[!] ") + status)
+	case statusReady, deploymentReviewReady, "No runtime change needed":
+		return state.accent(state.symbol("⬟ ", "[OK] ") + status)
+	default:
+		return state.accent(state.symbol("· ", "[.] ") + status)
 	}
-
-	return state.accent(state.symbol("⬟ ", "[OK] ") + status)
 }
 
 func (state *model) statusCard(status string, width int) []string {
-	pending := "No runtime change has started."
-	if status == statusApplyCompleted {
-		pending = ""
+	if status == statusReady {
+		return state.statusCardWith(status,
+			"Compose validation and read-only runtime checks passed.",
+			"No runtime change has started.", width)
 	}
 
 	return state.statusCardWith(
-		status, "Compose validation and read-only runtime checks passed.", pending, width,
+		status, "Application observations appear in the session timeline.", "", width,
 	)
 }
 
 func (state *model) healthStatusCard(plan planView, width int) []string {
+	if status := state.reviewStatus(plan); status != plan.status {
+		return state.statusCard(status, width)
+	}
 	detail := healthStatusDetail(plan.health)
 
 	return state.statusCardWith(plan.status, detail, "", width)

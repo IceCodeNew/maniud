@@ -130,14 +130,12 @@ func (state *model) llmSaveConfirmationBody(current llmSaveConfirmationPage, wid
 	return []string{
 		state.title("Save LLM configuration"),
 		state.muted("Unsaved"),
-		"Saving changes the protected XDG .env. It does not contact the provider.",
-		"",
+		"Save protected XDG .env; no provider request.",
 		"Provider  " + llmProviderLabel(draft.Provider),
 		"Model     " + terminaltext.Middle(draft.Model, max(width-serviceFieldWidth, 1), "…"),
 		"Endpoint  " + terminaltext.Middle(endpoint, max(width-serviceFieldWidth, 1), "…"),
 		"Timeout   " + draft.Timeout + " seconds per attempt",
 		"API key   " + keyAction,
-		"",
 		state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, "Save configuration", width),
 	}

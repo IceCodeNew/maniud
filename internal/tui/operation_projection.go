@@ -143,24 +143,31 @@ func projectPlan(snapshot application.OperationSnapshot) (planView, error) {
 	view.resolution = snapshot.AvailableHealthResolution
 	view.restoresPrevious = snapshot.HealthResolutionRestoresPrevious
 	projectHealthPlan(snapshot, &view)
-	if plan.Kind == application.PlanUnchanged {
+	if view.settled {
 		view.status = "No runtime change needed"
 	}
 	if len(plan.Warnings) > 0 {
 		view.warningText = fmt.Sprintf("%d warning(s) require review", len(plan.Warnings))
 	}
-	for _, warning := range plan.Warnings {
+	view.warnings = projectWarnings(plan.Warnings)
+
+	return view, nil
+}
+
+func projectWarnings(warnings []application.Warning) []string {
+	var summaries []string
+	for _, warning := range warnings {
 		summary := "Warning details unavailable for an unrecognized warning type."
 		if warning.Code == application.WarningDaemonMountProbeUnavailable {
 			summary = "Storage: daemon-side capacity and filesystem identity were not verified; " +
 				"persistent restore relies on host backup capacity checks only."
 		}
-		if !slices.Contains(view.warnings, summary) {
-			view.warnings = append(view.warnings, summary)
+		if !slices.Contains(summaries, summary) {
+			summaries = append(summaries, summary)
 		}
 	}
 
-	return view, nil
+	return summaries
 }
 
 func projectHealthPlan(snapshot application.OperationSnapshot, view *planView) {

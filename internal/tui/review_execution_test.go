@@ -52,6 +52,18 @@ func TestSettledUnchangedRefreshesInsteadOfConfirming(t *testing.T) {
 	if !strings.Contains(content, "Refresh") || strings.Contains(content, "Continue to confirmation") {
 		t.Errorf("settled no-op actions:\n%s", content)
 	}
+	state.Update(key(keyTab))
+	state.Update(key(keyEnter))
+	if _, valid := state.page.(detailsPage); !valid {
+		t.Fatal("the settled secondary action did not open Details")
+	}
+	state.Update(key(keyEscape))
+	state.Update(key("o"))
+	if _, valid := state.page.(reviewOptionsPage); !valid {
+		t.Fatal("settled review lost deployment editing and LLM access")
+	}
+	state.Update(key(keyEscape))
+	state.Update(key(keyTab))
 	operations.snapshot.Plan.Kind = application.PlanUpgrade
 	_, command := state.Update(key("enter"))
 	deliver(t, state, command)
@@ -100,7 +112,7 @@ func TestRepeatedWarningDetailsRemainBounded(t *testing.T) {
 	t.Parallel()
 
 	_, _, operations := newTestModel(t)
-	operations.snapshot.Plan.Warnings = []application.Warning{{Code: "unknown"}}
+	operations.snapshot.Plan.Warnings = []application.Warning{{Code: testDeploymentUnknownField}}
 	for range 100 {
 		operations.snapshot.Plan.Warnings = append(operations.snapshot.Plan.Warnings,
 			application.Warning{Code: application.WarningDaemonMountProbeUnavailable})

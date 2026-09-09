@@ -240,7 +240,7 @@ func (state *model) handleReviewKey(current reviewPage, key string) tea.Cmd {
 
 func (state *model) activateReview(current reviewPage) tea.Cmd {
 	if current.focus == reviewExplore {
-		if current.plan.health != "" {
+		if current.plan.health != "" || current.plan.settled {
 			state.page = detailsPage{review: current}
 			state.status = statusHealthDetails
 
@@ -411,6 +411,11 @@ func (state *model) handleHealthConfirmationKey(
 		}
 
 		return state.startHealthResolution(current)
+	case "d":
+		state.page = detailsPage{review: current.review}
+		state.status = statusHealthDetails
+
+		return nil
 	case keyEscape:
 		state.page = current.review
 		state.status = current.review.plan.status
