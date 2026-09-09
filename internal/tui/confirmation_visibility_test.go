@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,6 +32,7 @@ func testCompactSaveAndStage(t *testing.T, unicode, staging bool) {
 	review := deploymentReviewPage()
 	configuration := newLLMConfigurationPage(review, completeLLMConfiguration())
 	configuration.draft.Model = strings.Repeat("long-model-", 30)
+	configuration.step = llmAPIKeyStep
 	preview := deploymentPreviewPage{review: review, preview: deployments.preview}
 	preview.preview.Diff = "+first staged change\n" + strings.Repeat("+long changed line\n", 40) + "+last staged change\n"
 	state.page = llmSaveConfirmationPage{configuration: configuration}
@@ -39,37 +41,49 @@ func testCompactSaveAndStage(t *testing.T, unicode, staging bool) {
 		state.page = stageDeploymentConfirmationPage{preview: preview}
 		action = "Write and stage edit"
 	}
-	confirmation := state.page
 	assertConfirmationResizeFocus(t, state, action)
 	if staging {
-		state.Update(key("d"))
-		assertViewContains(t, state.View().Content, "first exact diff line", "+first staged change")
-		for range 50 {
-			state.Update(key(keyDown))
-		}
-		assertViewContains(t, state.View().Content, "last exact diff line", "+last staged change")
-		state.Update(key(keyEscape))
+		assertStageConfirmationDiffNavigation(t, state)
 	}
 	state.Update(key(keyTab))
 	state.Update(tea.WindowSizeMsg{Width: 32, Height: 8})
 	_, command := state.Update(key(keyEnter))
 	deliver(t, state, command)
-	if len(assistant.calls) != 0 || len(deployments.calls) != 0 {
+	if len(assistant.calls)+len(deployments.calls) != 0 {
 		t.Fatalf("hidden effect: %q / %q", assistant.calls, deployments.calls)
 	}
 	state.Update(tea.WindowSizeMsg{Width: 56, Height: 16})
-	state.page = confirmation
+	_, command = state.Update(key(keyEnter))
+	deliver(t, state, command)
+	if !staging {
+		state.Update(key(keyEnter))
+	}
+	if len(assistant.calls)+len(deployments.calls) != 0 {
+		t.Fatalf("returning to confirmation ran an effect: %q / %q", assistant.calls, deployments.calls)
+	}
 	state.Update(key(keyTab))
 	assertViewContains(t, state.View().Content, "visible effect", action)
 	_, command = state.Update(key(keyEnter))
 	deliver(t, state, command)
 	if staging {
-		if len(deployments.calls) != 1 || deployments.calls[0] != stageCall {
+		if !slices.Equal(deployments.calls, []string{stageCall}) {
 			t.Fatalf("Stage calls: %q", deployments.calls)
 		}
 	} else if len(assistant.settings) != 1 {
 		t.Fatalf("Save calls: %q", assistant.calls)
 	}
+}
+
+func assertStageConfirmationDiffNavigation(t *testing.T, state *model) {
+	t.Helper()
+
+	state.Update(key("d"))
+	assertViewContains(t, state.View().Content, "first exact diff line", "+first staged change")
+	for range 50 {
+		state.Update(key(keyDown))
+	}
+	assertViewContains(t, state.View().Content, "last exact diff line", "+last staged change")
+	state.Update(key(keyEscape))
 }
 
 func assertConfirmationResizeFocus(t *testing.T, state *model, action string) {
