@@ -70,10 +70,11 @@ func TestWarningDetailsDoNotTrustMessageOrCode(t *testing.T) {
 	t.Parallel()
 
 	state, _, operations := newTestModel(t)
-	secret := "/private/customer/token\x1b[2J"
+	secret := "/private/customer/token"
+	untrusted := secret + "\x1b[2J"
 	operations.snapshot.Plan.Warnings = []application.Warning{
-		{Code: application.WarningDaemonMountProbeUnavailable, Message: secret},
-		{Code: application.WarningCode(secret), Message: secret},
+		{Code: application.WarningDaemonMountProbeUnavailable, Message: untrusted},
+		{Code: application.WarningCode(untrusted), Message: untrusted},
 	}
 	deliver(t, state, state.startSnapshot(application.Request{}))
 	review := reviewPageValue(t, state)
