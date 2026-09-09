@@ -179,13 +179,19 @@ func TestCompactCommitKeyboardRequiresVisibleConfirmation(t *testing.T) {
 
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
+	workspace.staged.Diff = "+first changed line\n" + strings.Repeat("+changed line\n", 20) + "+last changed line"
 	commit := commitServicePage{staged: workspace.staged, message: workspace.staged.CommitMessage}
 	state.resize(56, 16)
 	state.page = commit
 	state.Update(key("d"))
-	if !strings.Contains(strings.Join(state.stagedDiffLines(commit, 56), "\n"), "+image: example") {
-		t.Fatal("full diff is unavailable")
+	assertViewContains(t, state.View().Content, "opened full diff", "Staged diff", "+first changed line")
+	if strings.Contains(state.View().Content, "+last changed line") {
+		t.Fatal("fixture does not require scrolling to read the full diff")
 	}
+	for range 20 {
+		state.Update(key(keyDown))
+	}
+	assertViewContains(t, state.View().Content, "scrolled full diff", "+last changed line")
 	state.Update(key("esc"))
 	state.Update(key("tab"))
 	state.Update(tea.WindowSizeMsg{Width: 32, Height: 8})
