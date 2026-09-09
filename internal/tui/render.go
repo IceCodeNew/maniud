@@ -987,14 +987,12 @@ func (state *model) footer(width int) string {
 		}
 	case detailsPage:
 		keys = "↑/↓ Scroll   x Export   d/Esc Back   q Quit"
-	case confirmationPage:
+	case confirmationPage, registrationConfirmationPage:
 		keys = confirmationKeys
 	case openPathPage:
 		keys = "Type path   Enter Open   Esc Back"
 	case registrationPage:
 		keys = "Edit path   Enter Review   Esc Skip"
-	case registrationConfirmationPage:
-		keys = confirmationKeys
 	}
 
 	return state.muted(terminaltext.Clip(keys, width))
