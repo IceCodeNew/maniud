@@ -98,6 +98,48 @@ func TestAnalyzeInventoryAndSemanticIdentity(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDetectsRestorableMetadataChanges(t *testing.T) {
+	t.Parallel()
+
+	members := [2]tarMember{
+		{header: tar.Header{
+			Name: "data/", Typeflag: tar.TypeDir, Mode: 0o711,
+			Uid: 321, Gid: 654, ModTime: time.Unix(100, 0),
+		}},
+		regular("data/file", "unchanged payload"),
+	}
+	baseline, err := analyzeBytes(t, makeTar(t, members[:]...))
+	if err != nil {
+		t.Fatalf("Analyze baseline: %v", err)
+	}
+	changes := []struct {
+		name   string
+		change func(*tar.Header)
+	}{
+		{"mode", func(header *tar.Header) { header.Mode ^= 0o100 }},
+		{"uid", func(header *tar.Header) { header.Uid++ }},
+		{"gid", func(header *tar.Header) { header.Gid++ }},
+		{"mtime", func(header *tar.Header) { header.ModTime = header.ModTime.Add(time.Second) }},
+	}
+	for index, member := range members {
+		for _, change := range changes {
+			t.Run(member.header.Name+"/"+change.name, func(t *testing.T) {
+				t.Parallel()
+
+				candidate := members
+				change.change(&candidate[index].header)
+				observed, analyzeErr := analyzeBytes(t, makeTar(t, candidate[:]...))
+				if analyzeErr != nil {
+					t.Fatalf("Analyze valid metadata change: %v", analyzeErr)
+				}
+				if SameContent(baseline, observed) {
+					t.Fatal("changed restorable metadata matched the original archive")
+				}
+			})
+		}
+	}
+}
+
 func TestAnalyzeAcceptsTypeRegA(t *testing.T) {
 	t.Parallel()
 
