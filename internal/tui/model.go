@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -19,6 +20,8 @@ const (
 	statusApplyCompleted      = "Apply completed"
 	statusRefreshing          = "Refreshing review"
 	statusReviewLarger        = "Review again at a larger terminal"
+	statusCancelled           = "Cancelled"
+	statusOperationFailed     = "Operation failed"
 	keyEscape                 = "esc"
 	keyEnter                  = "enter"
 	keyDown                   = "down"
@@ -240,6 +243,8 @@ type planView struct {
 	proposed    string
 	status      string
 	warningText string
+	warnings    []string
+	settled     bool
 }
 
 type reviewPage struct {
@@ -928,6 +933,12 @@ func toggledConfirmationFocus(focus confirmationFocus) confirmationFocus {
 }
 
 func (state *model) handleCommitServiceKey(current commitServicePage, message tea.KeyPressMsg) tea.Cmd {
+	if layoutFor(state.width, state.height) < layoutCompact &&
+		message.String() != keyEscape && message.String() != keyQuit {
+		state.status = statusReviewLarger
+
+		return nil
+	}
 	if current.editing {
 		return state.handleCommitMessageKey(current, message)
 	}
@@ -1121,6 +1132,9 @@ func (state *model) handleServiceChoiceKey(current selectServicePage, key string
 func (state *model) handleReviewKey(current reviewPage, key string) tea.Cmd {
 	switch key {
 	case keyEnter:
+		if current.plan.settled {
+			return state.startSnapshot(current.request)
+		}
 		if layoutFor(state.width, state.height) < layoutCompact {
 			state.status = "Resize to continue to confirmation"
 
@@ -1182,6 +1196,11 @@ func (state *model) handleConfirmationKey(current confirmationPage, key string) 
 		}
 
 		return state.startApply(current.review)
+	case "d":
+		state.page = detailsPage{review: current.review}
+		state.status = "Session details"
+
+		return nil
 	case keyEscape:
 		state.page = current.review
 		state.status = current.review.plan.status
@@ -1607,10 +1626,10 @@ func (state *model) completeOperation(sequence uint64, err error) (bool, tea.Cmd
 
 	state.finishOperation()
 	if errors.Is(err, context.Canceled) {
-		state.status = "Cancelled"
+		state.status = statusCancelled
 	} else if err != nil {
 		state.err = err
-		state.status = "Operation failed"
+		state.status = statusOperationFailed
 	}
 
 	if state.quitAfterOperation {
@@ -1813,13 +1832,24 @@ func projectPlan(snapshot application.OperationSnapshot) (planView, error) {
 	view := planView{
 		kind: values[6], project: values[0], service: values[1], runtime: values[2],
 		platform: values[3], current: values[4], proposed: values[5],
-		status: statusReady,
+		status:  statusReady,
+		settled: plan.Kind == application.PlanUnchanged && !snapshot.HasTransaction,
 	}
 	if plan.Kind == application.PlanUnchanged {
 		view.status = "No runtime change needed"
 	}
 	if len(plan.Warnings) > 0 {
 		view.warningText = fmt.Sprintf("%d warning(s) require review", len(plan.Warnings))
+	}
+	for _, warning := range plan.Warnings {
+		summary := "Warning details unavailable for an unrecognized warning type."
+		if warning.Code == application.WarningDaemonMountProbeUnavailable {
+			summary = "Storage: daemon-side capacity and filesystem identity were not verified; " +
+				"persistent restore relies on host backup capacity checks only."
+		}
+		if !slices.Contains(view.warnings, summary) {
+			view.warnings = append(view.warnings, summary)
+		}
 	}
 
 	return view, nil

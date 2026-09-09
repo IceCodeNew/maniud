@@ -343,6 +343,7 @@ func exportableReview(current page) (reviewPage, bool) {
 type detailProjection struct {
 	current   string
 	proposed  string
+	warnings  []string
 	timeline  []string
 	dropped   uint64
 	truncated bool
@@ -360,7 +361,8 @@ func (state *model) detailProjection(review reviewPage) detailProjection {
 
 	return detailProjection{
 		current: review.plan.current, proposed: review.plan.proposed, timeline: lines,
-		dropped: dropped, truncated: state.timeline.truncated,
+		warnings: review.plan.warnings,
+		dropped:  dropped, truncated: state.timeline.truncated,
 	}
 }
 
@@ -370,6 +372,10 @@ func (projection detailProjection) plain() string {
 	result.WriteString(projection.current)
 	result.WriteString("\n\nPROPOSED\n")
 	result.WriteString(projection.proposed)
+	if len(projection.warnings) > 0 {
+		result.WriteString("\n\nWARNINGS\n")
+		result.WriteString(strings.Join(projection.warnings, "\n"))
+	}
 	result.WriteString("\n\nSESSION TIMELINE\n")
 	if len(projection.timeline) == 0 {
 		result.WriteString("No application observations.\n")

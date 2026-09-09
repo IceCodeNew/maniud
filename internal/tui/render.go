@@ -285,7 +285,11 @@ func (state *model) flowRail(label string, steps []string, current int) []string
 			lines = append(lines, state.muted(state.symbol("│", " |")))
 		}
 	}
-	lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
+	if state.busy {
+		lines = append(lines, "", state.muted("OPERATION"), "Esc  Cancel", "q    Cancel and quit")
+	} else {
+		lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
+	}
 
 	return lines
 }
@@ -576,7 +580,8 @@ func (state *model) commitServiceBody(current commitServicePage, width int) []st
 		message += state.symbol("▌", "_")
 	}
 	diff := stagedServiceDiffLines(current, width)
-	diff = diff[current.scroll:min(current.scroll+diffSummaryRows, len(diff))]
+	rows := min(diffSummaryRows, max(state.height-compactFrameRows-commitBaseRows, 0))
+	diff = diff[current.scroll:min(current.scroll+rows, len(diff))]
 	lines := make([]string, 0, commitBaseRows+len(diff))
 	lines = append(lines,
 		state.title("Review and commit"),
@@ -588,7 +593,7 @@ func (state *model) commitServiceBody(current commitServicePage, width int) []st
 	lines = append(lines, diff...)
 	lines = append(lines, "", state.choice(current.focus == confirmationBack, "Back and save draft", width),
 		state.choice(current.focus == confirmationApply, "Create signed commit", width), "",
-		state.muted("e Edit message   d Full diff   Up/Down Scroll   Tab Focus   Enter Select"))
+		state.muted("e Message   d Full diff   Tab Focus   Enter Select"))
 
 	return lines
 }
@@ -769,12 +774,26 @@ func (state *model) reviewBody(current reviewPage, width int) []string {
 	return lines
 }
 
+func (state *model) reviewStatus(plan planView) string {
+	switch {
+	case state.busy && state.applying:
+		return state.status
+	case state.mutationOutcome == statusApplyCompleted:
+		return statusApplyCompleted
+	case state.busy:
+		return state.status
+	case state.err != nil:
+		return statusOperationFailed
+	case state.status == statusCancelled:
+		return state.status
+	default:
+		return plan.status
+	}
+}
+
 func (state *model) reviewStatusBody(review reviewPage, width int, compact bool) []string {
 	plan := review.plan
-	status := plan.status
-	if state.mutationOutcome == statusApplyCompleted {
-		status = statusApplyCompleted
-	}
+	status := state.reviewStatus(plan)
 	lines := make([]string, 0, reviewStatusRows)
 	if !compact {
 		lines = append(lines, "")
@@ -789,13 +808,20 @@ func (state *model) reviewStatusBody(review reviewPage, width int, compact bool)
 	if latest := state.timeline.latestCorrelated(review.correlation); latest != "" {
 		lines = append(lines, state.muted("Latest observation: "+latest))
 	}
-	if state.mutationOutcome != statusApplyCompleted {
+	if status == statusReady {
 		lines = append(lines, "No runtime change has started.")
 	}
 	if !compact {
 		lines = append(lines, "")
 	}
-	lines = append(lines, state.choice(true, "Continue to confirmation", width))
+	if state.busy {
+		return append(lines, state.muted("Esc Cancel   q Cancel and quit"))
+	}
+	primary := "Continue to confirmation"
+	if plan.settled {
+		primary = "Refresh"
+	}
+	lines = append(lines, state.choice(true, primary, width))
 	if !compact {
 		lines = append(lines, state.muted("d Details   x Export   r Refresh   Esc Back"))
 	}
@@ -833,6 +859,12 @@ func (state *model) detailsLines(review reviewPage, width int) []string {
 	lines = append(lines, terminaltext.Wrap(projection.current, available)...)
 	lines = append(lines, "", state.muted("PROPOSED"))
 	lines = append(lines, terminaltext.Wrap(projection.proposed, available)...)
+	if len(projection.warnings) > 0 {
+		lines = append(lines, "", state.muted("WARNINGS"))
+		for _, warning := range projection.warnings {
+			lines = append(lines, terminaltext.Wrap(warning, available)...)
+		}
+	}
 	lines = append(lines, "", state.muted("SESSION TIMELINE"))
 	if len(projection.timeline) == 0 {
 		lines = append(lines, "No application observations.")
@@ -857,22 +889,28 @@ func (state *model) confirmationBody(current confirmationPage, width int) []stri
 		state.title("Confirm apply"),
 		fmt.Sprintf("Apply %s to %s / %s?", plan.kind, plan.project, plan.service),
 		"The runtime may pull an image and replace the managed workload.",
-		"",
+		plan.warningText,
 		state.choice(current.focus == confirmationBack, "Back", width),
 		state.choice(current.focus == confirmationApply, "Apply", width),
 		"",
-		state.muted("Tab Change focus   Enter Choose   Esc Back"),
+		state.muted("Tab Focus   Enter Choose   d Details   Esc Back"),
 	}
 }
 
 func (state *model) footer(width int) string {
+	if state.busy {
+		return state.muted(terminaltext.Clip("Esc Cancel   q Cancel and quit", width))
+	}
 	if keys, valid := state.serviceWorkspaceFooter(); valid {
 		return state.muted(terminaltext.Clip(keys, width))
 	}
 	keys := "↑/↓ Navigate   Enter Select   q Quit"
-	switch state.page.(type) {
+	switch current := state.page.(type) {
 	case reviewPage:
 		keys = "Enter Continue   d Details   x Export   r Refresh   Esc Back   q Quit"
+		if current.plan.settled {
+			keys = "Enter/r Refresh   d Details   Esc Back   q Quit"
+		}
 	case detailsPage:
 		keys = "↑/↓ Scroll   x Export   d/Esc Back   q Quit"
 	case confirmationPage:
@@ -910,6 +948,12 @@ func (state *model) serviceWorkspaceFooter() (string, bool) {
 func (state *model) statusCard(status string) string {
 	if status == statusApplyCompleted {
 		return state.success(state.symbol("✓ ", "[x] ") + status)
+	}
+	if state.err != nil {
+		return state.failure(state.symbol("! ", "[!] ") + status)
+	}
+	if state.busy || status == statusCancelled {
+		return state.accent(state.symbol("· ", "[.] ") + status)
 	}
 
 	return state.accent(state.symbol("⬟ ", "[OK] ") + status)
