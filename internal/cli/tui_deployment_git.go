@@ -558,6 +558,11 @@ func stageConfirmedDeploymentWith(
 	if err = publishDeploymentIndex(
 		ctx, draft, indexPath, lockPath, originalDigest, operations,
 	); err != nil {
+		if errors.Is(err, errDeploymentWorktreeUnknown) {
+			worktreePublished = false
+			lockOwned = false
+		}
+
 		return err
 	}
 	lockOwned = false
@@ -565,6 +570,7 @@ func stageConfirmedDeploymentWith(
 	return nil
 }
 
+//nolint:cyclop // Publication reproof keeps index ownership, HEAD, and worktree evidence together.
 func publishDeploymentIndex(
 	ctx context.Context,
 	draft tuiDeploymentDraft,
@@ -578,11 +584,33 @@ func publishDeploymentIndex(
 	if digestErr != nil || currentDigest != originalDigest || headErr != nil || head != draft.base.head {
 		return errors.Join(errDeploymentEditInvalid, digestErr, headErr)
 	}
-	if err := operations.rename(lockPath, indexPath); err != nil {
-		return fmt.Errorf("publish deployment index: %w", err)
+	lockInfo, err := operations.lstat(lockPath)
+	if err != nil {
+		return err
+	}
+	renameErr := operations.rename(lockPath, indexPath)
+	if renameErr == nil {
+		return nil
+	}
+	rescueCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCommandTimeout)
+	defer cancel()
+	head, headErr = resolveGitObject(rescueCtx, draft.repository, "HEAD^{commit}")
+	currentDigest, digestErr = deploymentIndexDigestWithOperations(indexPath, operations)
+	remainingLock, lockErr := operations.lstat(lockPath)
+	if lockErr == nil && os.SameFile(lockInfo, remainingLock) && digestErr == nil &&
+		currentDigest == originalDigest && headErr == nil && head == draft.base.head {
+		return fmt.Errorf("publish deployment index: %w", renameErr)
+	}
+	indexInfo, indexErr := operations.lstat(indexPath)
+	indexTree, treeErr := deploymentIndexTree(rescueCtx, draft.repository, indexPath)
+	content, _, present, contentErr := readOptionalGitFile(filepath.Join(draft.repository, draft.entry))
+	if errors.Is(lockErr, os.ErrNotExist) && indexErr == nil && os.SameFile(lockInfo, indexInfo) &&
+		headErr == nil && head == draft.base.head && treeErr == nil && indexTree == draft.confirmation.expectedTree &&
+		contentErr == nil && present && bytes.Equal(content, draft.candidate.Content) {
+		return nil
 	}
 
-	return nil
+	return errors.Join(errDeploymentWorktreeUnknown, renameErr)
 }
 
 func validateDeploymentContent(
