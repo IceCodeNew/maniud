@@ -100,6 +100,29 @@ func TestEndpointSelection(t *testing.T) {
 	}
 }
 
+func TestEndpointNeverDowngradesRequestedTLS(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"1", "0", "false", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			warnings := 0
+			selected, err := endpoint(testEnvironment(map[string]string{
+				dockerHostEnvironment:      testPlainHost,
+				dockerTLSVerifyEnvironment: value,
+			}), func(runtimeplugin.Warning) error {
+				warnings++
+
+				return nil
+			})
+			if !errors.Is(err, ErrInvalidEndpoint) || !reflect.ValueOf(selected).IsZero() || warnings != 0 {
+				t.Fatalf("endpoint(TLS %q) = %#v, %v, warnings %d", value, selected, err, warnings)
+			}
+		})
+	}
+}
+
 func TestPluginClassifiesDockerAvailability(t *testing.T) {
 	t.Parallel()
 
