@@ -78,7 +78,7 @@ func assertConfirmationResizeFocus(t *testing.T, state *model, action string) {
 		for range 2 {
 			content := state.View().Content
 			t.Logf("CAPTURE %v unicode=%t %s\n%s\nEND CAPTURE", size, state.options.Unicode, action, content)
-			assertViewContains(t, content, action, "Back", action)
+			assertViewContains(t, content, action, "Back", action, "Esc Back")
 			assertBoundedView(t, content, size[0], size[1])
 			state.Update(key(keyTab))
 		}

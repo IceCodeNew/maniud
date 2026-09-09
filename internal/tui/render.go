@@ -591,10 +591,10 @@ func (state *model) reviewBody(current reviewPage, width int) []string {
 	plan := current.plan
 	lines := make([]string, 0, reviewBodyBaseRows)
 	title := "Review image change"
-	description := "Compare the current and proposed image identities before continuing."
+	description := "Compare current and proposed image identities."
 	if plan.health != application.HealthConvergenceNone {
 		title = "Review workload health"
-		description = "Review the bounded health state before choosing the next action."
+		description = "Review workload health before choosing an action."
 	}
 	lines = append(lines,
 		state.title(title),
@@ -930,7 +930,7 @@ func (state *model) deploymentWorkspaceFooter() (string, bool) {
 	case deploymentHistoryPage:
 		return "Up/Down Navigate   Enter Review restore   Esc Back", true
 	case stageDeploymentConfirmationPage:
-		return "Tab Focus   Enter Choose   d Full diff   Esc Back   q Quit", true
+		return "Tab Focus  Enter Choose  d Diff  Esc Back", true
 	case restoreDeploymentConfirmationPage:
 		return confirmationKeys, true
 	}

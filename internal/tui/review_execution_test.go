@@ -34,7 +34,7 @@ func TestReviewDisclosesActiveEffect(t *testing.T) {
 			t.Logf("CAPTURE %dx%d %s\n%s\nEND CAPTURE", size[0], size[1], status, content)
 			if !strings.Contains(content, status) || strings.Contains(content, statusReady) ||
 				strings.Contains(content, "No runtime change has started") ||
-				strings.Contains(content, "Continue to confirmation") {
+				strings.Contains(content, "Continue to confirmation") || strings.Contains(content, "? Help") {
 				t.Errorf("%dx%d %s has misleading review:\n%s", size[0], size[1], status, content)
 			}
 		}
