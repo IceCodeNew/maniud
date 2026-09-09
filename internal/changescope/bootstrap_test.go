@@ -250,6 +250,52 @@ exit 23
 	}
 }
 
+func TestReleaseInstallGateRequiresExecutableAttestationBinding(t *testing.T) {
+	verification := "gh attestation verify artifact"
+	binding := ` --source-digest "$release_sha"`
+	for _, test := range []struct {
+		name   string
+		script string
+		valid  bool
+	}{
+		{name: "bound command", script: verification + binding, valid: true},
+		{name: "continued command", script: verification + " \\\n" + binding, valid: true},
+		{name: "comment only", script: verification + " #" + binding},
+		{name: "unrelated command", script: verification + "\necho '" + binding + "'"},
+		{name: "missing binding", script: verification},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := t.TempDir()
+			copyFile(t, "../../scripts/check-release-install-docs",
+				filepath.Join(repository, "scripts/check-release-install-docs"))
+			for document, heading := range map[string]string{
+				"docs/release-verification.md": "## Install a verified release with GitHub CLI",
+				//nolint:gosmopolitan // Match the Chinese heading required by the release gate.
+				"docs/release-verification.zh-CN.md": "## 使用 GitHub CLI 安装已验证的 Release",
+			} {
+				write(t, repository, document, heading+"\n\n```sh\n"+test.script+"\n```\n")
+			}
+			bin := t.TempDir()
+			// Stop at the installation boundary without executing the extracted commands.
+			writeExecutable(t, filepath.Join(bin, "bash"), "#!/bin/sh\nprintf 'installation reached\\n'\nexit 23\n")
+			command := exec.CommandContext(t.Context(), "bash", "scripts/check-release-install-docs")
+			command.Dir = repository
+			command.Env = append(os.Environ(),
+				"GH_TOKEN=fixture", "TMPDIR="+t.TempDir(),
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			)
+			output, err := command.CombinedOutput()
+			if err == nil || strings.Contains(string(output), "installation reached") != test.valid {
+				t.Fatalf("release gate accepted=%t, want %t: %v\n%s",
+					strings.Contains(string(output), "installation reached"), test.valid, err, output)
+			}
+			if !test.valid && !strings.Contains(string(output), "must include --source-digest") {
+				t.Fatalf("release gate failed before checking the binding: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestRunGoModulesExpandsOnlyAffectedPackagePatterns(t *testing.T) {
 	manifest := filepath.Join(t.TempDir(), "manifest.tsv")
 	tests := []struct {
