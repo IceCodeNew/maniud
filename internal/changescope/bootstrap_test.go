@@ -380,6 +380,68 @@ func appendFile(t *testing.T, repository, name, contents string) {
 	}
 }
 
+func TestReleaseModuleSynchronizationPreservesUnrelatedDependencies(t *testing.T) {
+	repository := newRepository(t)
+	for _, script := range []string{"list-go-modules", "set-release-module-version", "check-release-module-version"} {
+		copyFile(t, "../../scripts/"+script, filepath.Join(repository, "scripts", script))
+	}
+	const dependencies = `module example.test/release
+
+go 1.27.0
+
+require (
+	github.com/IceCodeNew/maniud/argv v0.1.0
+	example.test/external v0.1.0
+)
+
+replace github.com/IceCodeNew/maniud/argv => ../argv
+`
+	manifests := []string{"go.mod", "nested/go.mod"}
+	for _, manifest := range manifests {
+		write(t, repository, manifest, dependencies)
+	}
+	run(t, repository, "git", "add", ".")
+	//nolint:gosec // The command executes the repository-owned script in an isolated fixture.
+	check := exec.CommandContext(
+		t.Context(), "bash", filepath.Join(repository, "scripts/check-release-module-version"), "0.2.0",
+	)
+	output, err := check.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "requires v0.1.0, want v0.2.0") {
+		t.Fatalf("unsynchronized manifests accepted: %v\n%s", err, output)
+	}
+	run(t, repository, "bash", "scripts/set-release-module-version", "0.2.0")
+	run(t, repository, "bash", "scripts/check-release-module-version", "0.2.0")
+	const synchronized = `module example.test/release
+
+go 1.27.0
+
+require (
+	example.test/external v0.1.0
+	github.com/IceCodeNew/maniud/argv v0.2.0
+)
+
+replace github.com/IceCodeNew/maniud/argv => ../argv
+`
+	for _, manifest := range manifests {
+		contents := run(t, repository, "cat", manifest)
+		if contents != synchronized {
+			t.Fatalf("synchronized %s manifest:\n%s", manifest, contents)
+		}
+	}
+	run(t, repository, "git", "add", ".")
+	//nolint:gosec // The command executes the repository-owned script in an isolated fixture.
+	major := exec.CommandContext(
+		t.Context(), "bash", filepath.Join(repository, "scripts/set-release-module-version"), "2.0.0",
+	)
+	output, err = major.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "requires /v2 module paths") {
+		t.Fatalf("unsupported major accepted: %v\n%s", err, output)
+	}
+	if diff := run(t, repository, "git", "diff", "--"); diff != "" {
+		t.Fatalf("rejected synchronization changed files:\n%s", diff)
+	}
+}
+
 func copyFile(t *testing.T, source, destination string) {
 	t.Helper()
 	contents, err := os.ReadFile(source) //nolint:gosec // The caller supplies a repository-owned fixture path.
