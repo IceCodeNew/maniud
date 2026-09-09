@@ -286,7 +286,7 @@ func (state *model) flowRail(label string, steps []string, current int) []string
 		}
 	}
 	if state.busy {
-		lines = append(lines, "", state.muted("OPERATION"), "Esc  Cancel", "q    Cancel and quit")
+		lines = append(lines, "", state.muted("OPERATION"), "Esc  Cancel", "q Cancel and quit")
 	} else {
 		lines = append(lines, "", state.muted("RETURN"), "Esc  Back", "q    Quit")
 	}
