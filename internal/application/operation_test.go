@@ -209,7 +209,7 @@ func TestApplyFacadeContainsRepositoryInventoryFailures(t *testing.T) {
 	}
 	reader.closeErr = nil
 
-	invalidRecords := make([]store.Transaction, 1, 7)
+	invalidRecords := make([]store.Transaction, 1, 8)
 	record := validRecord
 	record.SourceDigest = domain.Digest{}
 	invalidRecords = append(invalidRecords, record)
@@ -226,11 +226,18 @@ func TestApplyFacadeContainsRepositoryInventoryFailures(t *testing.T) {
 	record.RepositoryScopeDigest = domain.Digest{}
 	invalidRecords = append(invalidRecords, record)
 	record = validRecord
+	record.RepositoryScopeDigest = domain.Hash([]byte("another repository scope"))
+	invalidRecords = append(invalidRecords, record)
+	record = validRecord
 	record.State = store.TransactionFailed
 	invalidRecords = append(invalidRecords, record)
 	for _, record := range invalidRecords {
-		if _, err = repositoryInventory([]store.Transaction{record}, scope); !errors.Is(err, ErrConflictingState) {
-			t.Fatalf("repositoryInventory(%#v) error = %v", record, err)
+		operation.transactions.repository = func(context.Context, domain.Digest) ([]store.Transaction, error) {
+			return []store.Transaction{record}, nil
+		}
+		inventory, inventoryErr := facade.RepositoryInventory(t.Context(), scope)
+		if !errors.Is(inventoryErr, ErrConflictingState) || len(inventory) != 0 {
+			t.Fatalf("RepositoryInventory(%#v) = %#v, %v", record, inventory, inventoryErr)
 		}
 	}
 }
