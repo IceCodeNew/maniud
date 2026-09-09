@@ -3,7 +3,6 @@ package backup
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -79,9 +78,6 @@ type boundedArchiveReader struct {
 	count      int64
 	exceeded   bool
 	readingTar bool
-	tail       [tarTerminatorBytes]byte
-	tailSize   int
-	tailNext   int
 }
 
 // Analyze consumes exactly one uncompressed tar stream and returns its byte
@@ -104,7 +100,7 @@ func Analyze(ctx context.Context, source io.Reader, maximumBytes int64) (Invento
 	if err = consumeZeroPadding(reader); err != nil {
 		return Inventory{}, err
 	}
-	if !reader.completeTar() {
+	if reader.count%tarBlockBytes != 0 {
 		return Inventory{}, ErrInvalidArchive
 	}
 
@@ -407,7 +403,6 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	read, err := reader.source.Read(request)
 	if read > 0 {
 		_, _ = reader.hasher.Write(request[:read])
-		reader.recordTail(request[:read])
 		if int64(read) > remaining {
 			reader.exceeded = true
 
@@ -430,21 +425,6 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	}
 
 	return read, nil
-}
-
-func (reader *boundedArchiveReader) recordTail(value []byte) {
-	for _, current := range value {
-		reader.tail[reader.tailNext] = current
-		reader.tailNext = (reader.tailNext + 1) % len(reader.tail)
-		if reader.tailSize < len(reader.tail) {
-			reader.tailSize++
-		}
-	}
-}
-
-func (reader *boundedArchiveReader) completeTar() bool {
-	return !reader.exceeded && reader.count >= tarTerminatorBytes && reader.count%tarBlockBytes == 0 &&
-		reader.tailSize == len(reader.tail) && bytes.Equal(reader.tail[:], make([]byte, len(reader.tail)))
 }
 
 func classifyArchiveRead(err error) error {

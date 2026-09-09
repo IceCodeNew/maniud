@@ -248,6 +248,13 @@ func TestAnalyzeInputAndResourceLimits(t *testing.T) {
 func TestAnalyzeRequiresStrictTerminatorAndPadding(t *testing.T) {
 	t.Parallel()
 
+	empty := make([]byte, 1024)
+	inventory, err := Analyze(t.Context(), bytes.NewReader(empty), int64(len(empty)))
+	if err != nil || inventory.EntryCount != 0 || inventory.PayloadBytes != 0 ||
+		inventory.ArchiveBytes != 1024 || inventory.ArchiveDigest != domain.Hash(empty) {
+		t.Fatalf("empty terminated archive = %+v, %v", inventory, err)
+	}
+
 	valid := makeTar(t, regular(testFileName, "x"))
 	tests := []struct {
 		name  string
@@ -533,15 +540,6 @@ func TestWhiteBoxInventoryMetadataAndReaderStates(t *testing.T) {
 	changed.EntryCount++
 	if SameContent(inventory, changed) {
 		t.Error("different entry counts matched")
-	}
-
-	complete := &boundedArchiveReader{count: tarTerminatorBytes, tailSize: tarTerminatorBytes}
-	if !complete.completeTar() {
-		t.Error("two zero terminator blocks not recognized")
-	}
-	complete.tail[0] = 1
-	if complete.completeTar() {
-		t.Error("nonzero terminator recognized")
 	}
 
 	overLimit := &boundedArchiveReader{
