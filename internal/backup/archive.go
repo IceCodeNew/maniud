@@ -72,15 +72,16 @@ type archiveScan struct {
 }
 
 type boundedArchiveReader struct {
-	cancelled func() error
-	source    io.Reader
-	hasher    hash.Hash
-	limit     int64
-	count     int64
-	exceeded  bool
-	tail      [tarTerminatorBytes]byte
-	tailSize  int
-	tailNext  int
+	cancelled  func() error
+	source     io.Reader
+	hasher     hash.Hash
+	limit      int64
+	count      int64
+	exceeded   bool
+	readingTar bool
+	tail       [tarTerminatorBytes]byte
+	tailSize   int
+	tailNext   int
 }
 
 // Analyze consumes exactly one uncompressed tar stream and returns its byte
@@ -91,6 +92,7 @@ func Analyze(ctx context.Context, source io.Reader, maximumBytes int64) (Invento
 	}
 	reader := &boundedArchiveReader{
 		cancelled: ctx.Err, source: source, hasher: sha256.New(), limit: maximumBytes,
+		readingTar: true,
 	}
 	scan := newArchiveScan()
 
@@ -98,6 +100,7 @@ func Analyze(ctx context.Context, source io.Reader, maximumBytes int64) (Invento
 	if err != nil {
 		return Inventory{}, err
 	}
+	reader.readingTar = false
 	if err = consumeZeroPadding(reader); err != nil {
 		return Inventory{}, err
 	}
@@ -414,6 +417,12 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	}
 
 	if errors.Is(err, io.EOF) {
+		// archive/tar also accepts physical EOF without both terminator blocks.
+		// Only its own end-marker EOF may finish the tar scan.
+		if reader.readingTar {
+			return read, io.ErrUnexpectedEOF
+		}
+
 		return read, io.EOF
 	}
 	if err != nil {

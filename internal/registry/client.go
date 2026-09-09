@@ -1,11 +1,15 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -60,11 +64,37 @@ func newRepository(
 	}
 	authClient.Credential = auth.StaticCredential(reference.Registry, *authCredential)
 	authClient.Cache = auth.NewCache()
-	repository.Client = authClient
+	repository.Client = manifestResponseClient{Client: authClient}
 	repository.ManifestMediaTypes = acceptedManifestMediaTypes()
 	repository.MaxMetadataBytes = maximumManifestBytes
 
 	return repository, nil
+}
+
+type manifestResponseClient struct {
+	remote.Client
+}
+
+func (client manifestResponseClient) Do(request *http.Request) (*http.Response, error) {
+	response, err := client.Client.Do(request)
+	if err != nil {
+		return response, fmt.Errorf("fetch registry response: %w", err)
+	}
+	if request.Method != http.MethodGet || response.StatusCode != http.StatusOK ||
+		response.ContentLength >= 0 || !strings.Contains(request.URL.Path, "/manifests/") {
+		return response, nil
+	}
+	// ORAS requires a size before verifying the descriptor. Keep its digest and
+	// media-type validation, supplying only the bounded observed body length.
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumManifestBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || int64(len(content)) > maximumManifestBytes {
+		return nil, errors.Join(ErrProtocol, readErr, closeErr)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(content))
+	response.ContentLength = int64(len(content))
+
+	return response, nil
 }
 
 func newHTTPClient() *http.Client {

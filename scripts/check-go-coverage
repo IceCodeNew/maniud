@@ -66,7 +66,10 @@ select_coverage_packages() {
 	selected_file="$(mktemp "$temporary_dir/selected.XXXXXX")"
 	eligible_file="$(mktemp "$temporary_dir/eligible.XXXXXX")"
 	awk -F $'\t' -v module="$module_name" \
-		'$1 == "package" && $2 == module { print $3 }' "$packages_file" >"$selected_file"
+		'$1 == "package" && $2 == module { print $3 }' "$packages_file" >"$selected_file" || {
+		rm -f "$selected_file" "$eligible_file"
+		return 1
+	}
 	(
 		cd "$module_directory"
 		GOWORK=off CGO_ENABLED="$test_cgo" go list "$@"

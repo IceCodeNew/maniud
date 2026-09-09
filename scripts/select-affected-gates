@@ -36,6 +36,9 @@ while (($#)); do
 done
 [[ -n "$output" ]] || usage
 if ((index)) && { ((!full)) || [[ "$head" != HEAD ]]; }; then usage; fi
+if [[ "$output" != /* ]]; then
+	output="$PWD/$output"
+fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
 emit_full() (

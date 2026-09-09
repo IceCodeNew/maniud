@@ -61,9 +61,13 @@ func assertRepositoryConfiguration(t *testing.T, repository *remote.Repository) 
 func assertRepositoryCredential(t *testing.T, repository *remote.Repository, want Credentials) {
 	t.Helper()
 
-	authClient, valid := repository.Client.(*auth.Client)
+	manifestClient, valid := repository.Client.(manifestResponseClient)
 	if !valid {
 		t.Fatalf("repository client type = %T", repository.Client)
+	}
+	authClient, valid := manifestClient.Client.(*auth.Client)
+	if !valid {
+		t.Fatalf("authenticated client type = %T", manifestClient.Client)
 	}
 
 	got, err := authClient.Credential(context.Background(), "registry-1.docker.io")
@@ -340,6 +344,7 @@ func testRepositoryFactory(t *testing.T, httpClient *http.Client) repositoryFact
 			}),
 			Cache: auth.NewCache(),
 		}
+		repository.Client = manifestResponseClient{Client: repository.Client}
 		repository.ManifestMediaTypes = acceptedManifestMediaTypes()
 		repository.MaxMetadataBytes = maximumManifestBytes
 
