@@ -326,9 +326,11 @@ services:
 func TestLoadRejectsOversizedSource(t *testing.T) {
 	t.Parallel()
 
-	source := testSource(t, strings.Repeat("#", maxSourceBytes+1))
+	content := "name: example\nservices:\n  api:\n    image: busybox:stable\n"
+	content += strings.Repeat("#", maxSourceBytes+1-len(content))
+	source := testSource(t, content)
 
-	_, err := Load(context.Background(), source)
+	_, err := Load(t.Context(), source)
 	if !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("Load() error = %v, want ErrInvalidSource", err)
 	}
