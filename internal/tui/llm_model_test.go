@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/llm"
 )
@@ -1182,6 +1184,18 @@ func TestLLMStepProgressCountsOnlyVisibleSlides(t *testing.T) {
 		position, total := llmStepProgress(test.step, test.provider)
 		if position != test.position || total != test.total {
 			t.Fatalf("llmStepProgress(%q, %d) = %d/%d", test.provider, test.step, position, total)
+		}
+		state, _ := newLLMTestModel(t, &assistantFixture{})
+		current := newLLMConfigurationPage(mustLLMPage[reviewPage](state.page), completeLLMConfiguration())
+		current.draft.Provider = test.provider
+		current.step = test.step
+		state.page = current
+		want := "Step " + strconv.Itoa(test.position) + " of " + strconv.Itoa(test.total)
+		for _, size := range [][2]int{{56, 16}, {80, 24}} {
+			state.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			if view := state.View().Content; !strings.Contains(view, want) {
+				t.Fatalf("provider %q step %d at %v omitted %q: %q", test.provider, test.step, size, want, view)
+			}
 		}
 	}
 }
