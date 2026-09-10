@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/llm"
 	"github.com/IceCodeNew/maniud/internal/tui"
+)
+
+const (
+	assistCommandCategory = "command"
+	assistPortCategory    = "port"
 )
 
 type tuiAssistantPending struct {
@@ -298,19 +304,36 @@ func cloneForbiddenValues(source map[string][]string) map[string][]string {
 
 func forbiddenQuestionCategory(question string, forbidden map[string][]string) string {
 	for _, category := range [...]string{
-		"credential", "environment", "private path", "image reference", "command",
-		"port", "mount", "device", "runtime ID",
+		"credential", "environment", "private path", "image reference", assistCommandCategory,
+		assistPortCategory, "mount", "device", "runtime ID",
 	} {
 		values := forbidden[category]
 		for _, value := range values {
 			value = strings.TrimSpace(value)
-			if value != "" && strings.Contains(question, value) {
+			if value != "" && questionContainsForbiddenValue(question, value, category) {
 				return category
 			}
 		}
 	}
 
 	return ""
+}
+
+func questionContainsForbiddenValue(question, value, category string) bool {
+	const digits = "0123456789"
+	const word = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_" + digits
+	var continuation string
+	switch {
+	case category == assistPortCategory && strings.Trim(value, digits) == "":
+		continuation = digits
+	case category == assistCommandCategory && strings.Trim(value, word) == "":
+		continuation = word
+	default:
+		return strings.Contains(question, value)
+	}
+	return slices.Contains(strings.FieldsFunc(question, func(character rune) bool {
+		return !strings.ContainsRune(continuation, character)
+	}), value)
 }
 
 func publicLLMConfigError(err error) error {

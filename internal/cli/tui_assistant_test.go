@@ -25,13 +25,15 @@ import (
 )
 
 const (
-	testLLMChangedModel = "changed-model"
-	testLLMCredential   = "credential"
-	testLLMIdentity     = "identity"
-	testLLMKey          = "key"
-	testLLMModelValue   = "model"
-	testLLMSecretValue  = "secret"
-	testLLMValue        = "value"
+	testLLMChangedModel    = "changed-model"
+	testLLMCommandCategory = "command"
+	testLLMPortCategory    = "port"
+	testLLMCredential      = "credential"
+	testLLMIdentity        = "identity"
+	testLLMKey             = "key"
+	testLLMModelValue      = "model"
+	testLLMSecretValue     = "secret"
+	testLLMValue           = "value"
 )
 
 var errTUIAssistantFixture = errors.New("TUI assistant fixture failure")
@@ -419,6 +421,66 @@ func TestPublicLLMConfigurationErrorsRemainPrivacySafe(t *testing.T) {
 		if got := publicLLMConfigError(input).Error(); got != expected {
 			t.Fatalf("publicLLMConfigError(%v) = %q", input, got)
 		}
+	}
+}
+
+//nolint:cyclop,paralleltest // Both privacy outcomes exercise the real adapter with a global test TLS transport.
+func TestTUIAssistantPrivacySeparatesTokensBeforeProviderDispatch(t *testing.T) {
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	var requests atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		_, _ = io.Copy(io.Discard, request.Body)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, assistantCompletionBody("assistant-test-model"))
+	}))
+	t.Cleanup(server.Close)
+	http.DefaultTransport = server.Client().Transport
+	content := bytes.Replace(deploymentComposeFixture(), []byte("    network_mode: bridge\n"),
+		[]byte("    network_mode: bridge\n    command: [sh]\n    ports: ['8080:80']\n"), 1)
+	workspace, request, repository := newTUIDeploymentWorkspaceFixture(t, content)
+	operations := &assistantOperationsFixture{snapshot: func(
+		context.Context, application.Request,
+	) (application.OperationSnapshot, error) {
+		return validAssistantSnapshot(), nil
+	}}
+	environment := map[string]string{
+		homeEnvironment: t.TempDir(), llmProviderEnvironment: string(llm.ProviderOpenAICompatible),
+		llmModelEnvironment: "assistant-test-model", llmTimeoutEnvironment: "5",
+		openAIEndpointEnvironment: server.URL, openAIKeyEnvironment: "assistant-test-key",
+	}
+	for _, test := range []struct{ question, category string }{
+		{"set memory to 808000000 bytes", ""},
+		{"should memory grow conservatively", ""},
+		{"use port 80", testLLMPortCategory},
+		{"端口80", testLLMPortCategory}, //nolint:gosmopolitan // Verify numeric disclosure without ASCII separators.
+		{"execute sh", testLLMCommandCategory},
+		{"执行sh", testLLMCommandCategory}, //nolint:gosmopolitan // Verify command disclosure without ASCII separators.
+		{"prefixassistant-test-keysuffix", "credential"},
+	} {
+		t.Run(test.question, func(t *testing.T) {
+			assistant := defaultTUIAssistant(environment, repository, workspace, operations)
+			defer assistant.Close()
+			configuration, err := assistant.Configuration(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := requests.Load()
+			result, err := assistant.Recommend(t.Context(), request, configuration.Identity, test.question)
+			if test.category == "" {
+				if err != nil || len(result.Choices) != 1 || requests.Load() != before+1 {
+					t.Fatalf("innocent question did not reach provider: %+v, %v, requests=%d", result, err, requests.Load()-before)
+				}
+
+				return
+			}
+			action, valid := errors.AsType[*llm.ActionError](err)
+			if !valid || action.Code != llm.ErrorForbiddenValue || action.Category != test.category ||
+				action.RequestOutcome != llm.RequestNotStarted || requests.Load() != before {
+				t.Fatalf("protected question escaped preflight: %#v, requests=%d", action, requests.Load()-before)
+			}
+		})
 	}
 }
 
