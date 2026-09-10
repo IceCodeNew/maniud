@@ -28,6 +28,17 @@ func (project Project) Runtime(serviceName string) (domain.RuntimeKind, error) {
 	return runtimeKind, nil
 }
 
+// ServiceSpec returns the normalized portable fields declared for one active
+// service before image defaults are applied.
+func (project Project) ServiceSpec(serviceName string) (domain.WorkloadSpec, error) {
+	selected, err := project.service(serviceName)
+	if err != nil {
+		return domain.WorkloadSpec{}, err
+	}
+
+	return workloadSpecFromService(selected, domain.Platform{}, project.pathFrom, project.pathTo)
+}
+
 // Workload projects one active service into runtime-neutral desired state.
 func (project Project) Workload(
 	serviceName string,

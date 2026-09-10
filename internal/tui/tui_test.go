@@ -207,6 +207,56 @@ func newWorkspaceFixture() *workspaceFixture {
 	}
 }
 
+type deploymentWorkspaceFixture struct{}
+
+func (*deploymentWorkspaceFixture) Fields(
+	context.Context,
+	application.Request,
+) ([]DeploymentFieldState, error) {
+	return nil, nil
+}
+
+func (*deploymentWorkspaceFixture) Preview(
+	context.Context,
+	application.Request,
+	string,
+	string,
+	bool,
+) (DeploymentEditPreview, error) {
+	return DeploymentEditPreview{}, nil
+}
+
+func (*deploymentWorkspaceFixture) PreviewRestore(
+	context.Context,
+	application.Request,
+	string,
+) (DeploymentEditPreview, error) {
+	return DeploymentEditPreview{}, nil
+}
+
+func (*deploymentWorkspaceFixture) Stage(context.Context) (StagedDeploymentEdit, error) {
+	return StagedDeploymentEdit{}, nil
+}
+
+func (*deploymentWorkspaceFixture) Commit(
+	context.Context,
+	string,
+	bool,
+) (DeploymentCommitResult, error) {
+	return DeploymentCommitResult{}, nil
+}
+
+func (*deploymentWorkspaceFixture) Discard(context.Context) error {
+	return nil
+}
+
+func (*deploymentWorkspaceFixture) History(
+	context.Context,
+	application.Request,
+) ([]DeploymentHistoryEntry, error) {
+	return nil, nil
+}
+
 func (fixture *operationsFixture) DryRun(
 	_ context.Context,
 	request application.Request,
@@ -318,7 +368,9 @@ func newTestModel(t *testing.T) (*model, *catalogFixture, *operationsFixture) {
 		pathResult:       OpenResult{Targets: []Target{target}},
 	}
 	operations := newOperationsFixture()
-	state := newModel(t.Context(), catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{})
+	state := newModelWithDeployments(
+		t.Context(), catalog, newWorkspaceFixture(), nil, operations, NewEventStream(), Options{},
+	)
 	state.resize(defaultWidth, defaultHeight)
 
 	return state, catalog, operations
@@ -466,22 +518,26 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 
 	catalog := &catalogFixture{}
 	workspace := newWorkspaceFixture()
+	deployments := &deploymentWorkspaceFixture{}
 	operations := newOperationsFixture()
 	events := NewEventStream()
 	tests := []struct {
-		catalog    Catalog
-		workspace  ServiceWorkspace
-		operations Operations
-		events     *EventStream
+		catalog     Catalog
+		workspace   ServiceWorkspace
+		deployments DeploymentWorkspace
+		operations  Operations
+		events      *EventStream
 	}{
-		{catalog: nil, workspace: workspace, operations: operations, events: events},
-		{catalog: catalog, workspace: nil, operations: operations, events: events},
-		{catalog: catalog, workspace: workspace, operations: nil, events: events},
-		{catalog: catalog, workspace: workspace, operations: operations, events: nil},
+		{catalog: nil, workspace: workspace, deployments: deployments, operations: operations, events: events},
+		{catalog: catalog, workspace: nil, deployments: deployments, operations: operations, events: events},
+		{catalog: catalog, workspace: workspace, deployments: nil, operations: operations, events: events},
+		{catalog: catalog, workspace: workspace, deployments: deployments, operations: nil, events: events},
+		{catalog: catalog, workspace: workspace, deployments: deployments, operations: operations, events: nil},
 	}
 	for _, test := range tests {
 		if _, err := Run(
-			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.operations, test.events, Options{},
+			t.Context(), nil, io.Discard, test.catalog, test.workspace, test.deployments,
+			test.operations, test.events, Options{},
 		); !errors.Is(err, errInvalidInput) {
 			t.Fatalf("Run(invalid) error = %v", err)
 		}
@@ -489,7 +545,9 @@ func TestRunValidatesDependenciesAndContext(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := Run(cancelled, nil, io.Discard, catalog, workspace, operations, events, Options{}); !errors.Is(
+	if _, err := Run(
+		cancelled, nil, io.Discard, catalog, workspace, deployments, operations, events, Options{},
+	); !errors.Is(
 		err,
 		context.Canceled,
 	) {
@@ -518,6 +576,7 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 		io.Discard,
 		catalog,
 		workspace,
+		&deploymentWorkspaceFixture{},
 		newOperationsFixture(),
 		NewEventStream(),
 		Options{},
@@ -532,7 +591,7 @@ func TestRunStartsHomeAndContainsReaderFailure(t *testing.T) {
 	catalog = &catalogFixture{snapshot: CatalogSnapshot{State: CatalogMissing}, ready: ready}
 	if _, err := Run(
 		t.Context(), failingReader{ready: ready}, io.Discard, catalog, newWorkspaceFixture(),
-		newOperationsFixture(), NewEventStream(), Options{},
+		&deploymentWorkspaceFixture{}, newOperationsFixture(), NewEventStream(), Options{},
 	); !errors.Is(err, errTestTUI) {
 		t.Fatalf("Run(reader failure) error = %v", err)
 	}
@@ -563,7 +622,8 @@ func TestRunReturnsContainedOperationFailure(t *testing.T) {
 	}}
 	output := &renderSignalWriter{needle: []byte(registeredAPIID), ready: homeReady}
 	if _, err := Run(
-		t.Context(), reader, output, catalog, newWorkspaceFixture(), operations, NewEventStream(), Options{},
+		t.Context(), reader, output, catalog, newWorkspaceFixture(), &deploymentWorkspaceFixture{},
+		operations, NewEventStream(), Options{},
 	); !errors.Is(err, errInvalidInput) {
 		t.Fatalf("Run(operation failure) error = %v", err)
 	}
@@ -595,7 +655,8 @@ func TestRunReturnsFrozenExportAfterTerminalSession(t *testing.T) {
 		ready:   []chan struct{}{homeReady, reviewReady},
 	}
 	result, err := Run(
-		t.Context(), reader, output, catalog, workspace, newOperationsFixture(), NewEventStream(), Options{},
+		t.Context(), reader, output, catalog, workspace, &deploymentWorkspaceFixture{},
+		newOperationsFixture(), NewEventStream(), Options{},
 	)
 	if err != nil || !strings.Contains(result.Export, "Maniud session details") ||
 		!strings.Contains(result.Export, "registry.example/team/api@sha256:") {

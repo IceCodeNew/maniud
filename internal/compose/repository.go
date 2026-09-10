@@ -150,6 +150,42 @@ type RepositoryPath struct {
 	Directory bool
 }
 
+// WithEntryContent returns an owned source bundle whose entry file contains
+// the replacement bytes and whose repository digest identifies the new bundle.
+func (source Source) WithEntryContent(content []byte) (Source, error) {
+	if len(content) == 0 || len(content) > maxSourceBytes {
+		return Source{}, ErrInvalidSource
+	}
+	result := source
+	result.Content = slices.Clone(content)
+	result.Environment = maps.Clone(source.Environment)
+	result.Profiles = slices.Clone(source.Profiles)
+	if source.Repository == nil {
+		return result, nil
+	}
+	if !validRepositorySnapshot(source) {
+		return Source{}, ErrInvalidSource
+	}
+
+	snapshot := *source.Repository
+	snapshot.Files = make(map[string]RepositoryFile, len(source.Repository.Files))
+	for name, file := range source.Repository.Files {
+		file.Content = slices.Clone(file.Content)
+		snapshot.Files[name] = file
+	}
+	entry := snapshot.Files[snapshot.Entry]
+	entry.Content = slices.Clone(content)
+	snapshot.Files[snapshot.Entry] = entry
+	snapshot.RuntimePaths = slices.Clone(source.Repository.RuntimePaths)
+	snapshot.Digest = repositoryDigest(snapshot.Entry, snapshot.Files, snapshot.RuntimePaths, result.Environment)
+	result.Repository = &snapshot
+	if !validRepositorySnapshot(result) {
+		return Source{}, ErrInvalidSource
+	}
+
+	return result, nil
+}
+
 // CaptureRepositorySource builds a closed source bundle from one proven-clean
 // repository. The caller owns the Git cleanliness and committed-file proof;
 // this function discovers and bounds every local file Compose may read.

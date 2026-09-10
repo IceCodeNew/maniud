@@ -15,6 +15,7 @@ const (
 	testInitEntrypoint  = "/init"
 	testServeCommand    = "serve"
 	testOtherValue      = "other"
+	testServicesKey     = "services"
 )
 
 func TestLoadUsesExplicitEnvironment(t *testing.T) {

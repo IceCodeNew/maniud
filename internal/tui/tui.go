@@ -141,6 +141,45 @@ type ServiceCommitResult struct {
 	PreparationRequired   bool
 }
 
+// DeploymentFieldState is one editable deployment field and its current value.
+// An unavailable field cannot be edited for the selected service.
+type DeploymentFieldState struct {
+	ID          string
+	Value       string
+	Present     bool
+	AllowsUnset bool
+	Available   bool
+}
+
+// DeploymentEditPreview is one validated in-memory Compose candidate.
+type DeploymentEditPreview struct {
+	ComposePath string
+	FieldIDs    []string
+	Restore     string
+}
+
+// StagedDeploymentEdit is the exact modified-file Git index projection.
+type StagedDeploymentEdit struct {
+	Diff          string
+	ComposePath   string
+	CommitMessage string
+}
+
+// DeploymentCommitResult is one proven deployment edit commit outcome.
+type DeploymentCommitResult struct {
+	Request               application.Request
+	NeedsUnsignedApproval bool
+	Committed             bool
+	ValidationUnavailable bool
+}
+
+// DeploymentHistoryEntry is one first-parent commit that changed the selected Compose file.
+type DeploymentHistoryEntry struct {
+	Revision         string
+	Subject          string
+	SignaturePresent bool
+}
+
 // Target is one validated service that can enter the operation façade.
 type Target struct {
 	Project string
@@ -170,6 +209,27 @@ type ServiceWorkspace interface {
 	Stage(ctx context.Context) (StagedService, error)
 	Commit(ctx context.Context, message string, unsigned bool) (ServiceCommitResult, error)
 	Suspend(ctx context.Context) error
+}
+
+// DeploymentWorkspace owns manual Compose edits and their Git history transaction.
+type DeploymentWorkspace interface {
+	Fields(ctx context.Context, request application.Request) ([]DeploymentFieldState, error)
+	Preview(
+		ctx context.Context,
+		request application.Request,
+		fieldID string,
+		value string,
+		unset bool,
+	) (DeploymentEditPreview, error)
+	PreviewRestore(
+		ctx context.Context,
+		request application.Request,
+		revision string,
+	) (DeploymentEditPreview, error)
+	Stage(ctx context.Context) (StagedDeploymentEdit, error)
+	Commit(ctx context.Context, message string, unsigned bool) (DeploymentCommitResult, error)
+	Discard(ctx context.Context) error
+	History(ctx context.Context, request application.Request) ([]DeploymentHistoryEntry, error)
 }
 
 // Operations is the mutation façade consumed by the TUI.
@@ -258,18 +318,19 @@ func Run(
 	output io.Writer,
 	catalog Catalog,
 	workspace ServiceWorkspace,
+	deployments DeploymentWorkspace,
 	operations Operations,
 	events *EventStream,
 	options Options,
 ) (Result, error) {
-	if catalog == nil || workspace == nil || operations == nil || events == nil {
+	if catalog == nil || workspace == nil || deployments == nil || operations == nil || events == nil {
 		return Result{}, errInvalidInput
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	state := newModel(runCtx, catalog, workspace, operations, events, options)
+	state := newModelWithDeployments(runCtx, catalog, workspace, deployments, operations, events, options)
 	_, err := tea.NewProgram(
 		state,
 		tea.WithInput(input),
@@ -278,17 +339,21 @@ func Run(
 	).Run()
 	cancel()
 	suspendCtx, cancelSuspend := context.WithTimeout(context.WithoutCancel(ctx), workspaceSuspendTimeout)
-	defer cancelSuspend()
 	suspendErr := workspace.Suspend(suspendCtx)
+	cancelSuspend()
+	discardCtx, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), workspaceSuspendTimeout)
+	discardErr := deployments.Discard(discardCtx)
+	cancelDiscard()
+	cleanupErr := errors.Join(suspendErr, discardErr)
 	if err != nil {
-		return state.result, errors.Join(fmt.Errorf("run TUI: %w", err), suspendErr)
+		return state.result, errors.Join(fmt.Errorf("run TUI: %w", err), cleanupErr)
 	}
 	if state.err != nil {
-		return state.result, errors.Join(fmt.Errorf("run TUI operation: %w", state.err), suspendErr)
+		return state.result, errors.Join(fmt.Errorf("run TUI operation: %w", state.err), cleanupErr)
 	}
 	if err = ctx.Err(); err != nil {
-		return state.result, errors.Join(fmt.Errorf("run TUI context: %w", err), suspendErr)
+		return state.result, errors.Join(fmt.Errorf("run TUI context: %w", err), cleanupErr)
 	}
 
-	return state.result, errors.Join(suspendErr)
+	return state.result, errors.Join(cleanupErr)
 }
