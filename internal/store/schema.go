@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 type rowQueryer interface {
@@ -10,7 +11,7 @@ type rowQueryer interface {
 }
 
 const (
-	currentSchemaVersion = 1
+	currentSchemaVersion = 2
 	currentObjectCount   = 8
 	schemaTableName      = "schema_version"
 	schemaTableSQL       = "CREATE TABLE schema_version (" +
@@ -118,7 +119,7 @@ const (
 		"FOREIGN KEY (transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id)) WITHOUT ROWID"
 	initialSchemaSQL = schemaTableSQL + "; " +
-		"INSERT INTO schema_version (singleton, version) VALUES (1, 1); " +
+		"INSERT INTO schema_version (singleton, version) VALUES (1, 2); " +
 		writerLeaseTableSQL + "; " + journalTransactionTableSQL + "; " +
 		journalUnresolvedIndexSQL + "; " + journalRepositoryInventoryIndexSQL + "; " +
 		journalActionTableSQL + "; " + appliedServiceTableSQL + "; " + backupIndexTableSQL
@@ -134,7 +135,12 @@ func ensureInitialSchema(ctx context.Context, database *sql.DB) error {
 		return initializeSchema(ctx, database)
 	}
 
-	return validateSchema(ctx, database)
+	err = validateSchema(ctx, database)
+	if !errors.Is(err, ErrInvalidState) {
+		return err
+	}
+
+	return migrateVersion1(ctx, database)
 }
 
 func schemaObjectSummary(ctx context.Context, database *sql.DB) (int, error) {
@@ -223,6 +229,10 @@ func readSchemaFacts(
 	ctx context.Context,
 	database rowQueryer,
 ) (schemaFacts, error) {
+	return readSchemaFactsAtVersion(ctx, database, currentSchemaVersion)
+}
+
+func readSchemaFactsAtVersion(ctx context.Context, database rowQueryer, version int) (schemaFacts, error) {
 	var facts schemaFacts
 
 	err := database.QueryRowContext(
@@ -243,7 +253,7 @@ func readSchemaFacts(
 			"(SELECT count(*) FROM schema_version), "+
 			"(SELECT count(*) FROM schema_version "+
 			" WHERE singleton != 1 OR version != ? OR typeof(version) != 'integer')",
-		currentSchemaVersion,
+		version,
 	).Scan(
 		&facts.objectCount,
 		&facts.schemaDefinition,

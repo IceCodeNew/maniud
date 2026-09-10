@@ -13,17 +13,18 @@ import (
 	modernsqlite "modernc.org/sqlite"
 )
 
-// Reader owns one non-creating, current-schema snapshot of maniud's durable
+// Reader owns one non-creating, validated snapshot of maniud's durable
 // transaction state. Close releases the SQLite snapshot and startup lock.
 type Reader struct {
 	database    *sql.DB
 	transaction *sql.Tx
+	query       journalQueryer
 	anchor      *stateAnchor
 	sidecars    bool
 	closed      bool
 }
 
-// OpenReader opens current durable state without creating files, recovering a
+// OpenReader opens supported durable state without creating files, recovering a
 // backup, or changing application state. A missing state database is
 // represented by an empty Reader.
 func OpenReader(ctx context.Context, path string) (*Reader, error) {
@@ -44,6 +45,7 @@ func OpenReader(ctx context.Context, path string) (*Reader, error) {
 		return &Reader{
 			database:    nil,
 			transaction: nil,
+			query:       nil,
 			anchor:      nil,
 			sidecars:    false,
 			closed:      false,
@@ -176,6 +178,7 @@ func finishOpenReader(ctx context.Context, anchor *stateAnchor) (*Reader, error)
 	reader := &Reader{
 		database:    database,
 		transaction: transaction,
+		query:       transaction,
 		anchor:      anchor,
 		sidecars:    sidecars,
 		closed:      false,
@@ -208,6 +211,9 @@ func validateReaderSnapshot(ctx context.Context, reader *Reader) error {
 	}
 
 	err = validateSchema(ctx, reader.transaction)
+	if errors.Is(err, ErrInvalidState) {
+		reader.query, err = readVersion1Query(ctx, reader.transaction)
+	}
 	if err != nil {
 		return err
 	}
@@ -285,7 +291,7 @@ func (reader *Reader) UnresolvedTransaction(
 		return Transaction{}, false, ErrInvalidState
 	}
 
-	record, found, err := unresolvedTransaction(ctx, reader.transaction, projectName, serviceName)
+	record, found, err := unresolvedTransaction(ctx, reader.query, projectName, serviceName)
 	if err != nil {
 		return Transaction{}, false, err
 	}
@@ -315,7 +321,7 @@ func (reader *Reader) UnresolvedRepositoryTransactions(
 		return nil, ErrInvalidState
 	}
 
-	records, err := unresolvedRepositoryTransactions(ctx, reader.transaction, scope)
+	records, err := unresolvedRepositoryTransactions(ctx, reader.query, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +357,7 @@ func (reader *Reader) AppliedService(
 		return AppliedService{}, false, ErrInvalidState
 	}
 
-	record, found, err := appliedService(ctx, reader.transaction, serviceID)
+	record, found, err := appliedService(ctx, reader.query, serviceID)
 	if err != nil {
 		return AppliedService{}, false, err
 	}
@@ -381,7 +387,7 @@ func (reader *Reader) BackupIndex(
 		return BackupIndex{}, false, ErrInvalidState
 	}
 
-	record, found, err := backupIndex(ctx, reader.transaction, identifier)
+	record, found, err := backupIndex(ctx, reader.query, identifier)
 	if err != nil {
 		return BackupIndex{}, false, err
 	}
@@ -400,7 +406,7 @@ func (reader *Reader) Actions(ctx context.Context, identifier TransactionID) ([]
 		return nil, ErrInvalidState
 	}
 
-	records, err := actions(ctx, reader.transaction, identifier)
+	records, err := actions(ctx, reader.query, identifier)
 	if err != nil {
 		return nil, err
 	}
