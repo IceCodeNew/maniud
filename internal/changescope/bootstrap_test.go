@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+const testAffectedHeader = "mode\taffected\n"
+
 func TestBootstrapGuardWidensUnsafeChanges(t *testing.T) {
 	repository := bootstrapRepository(t)
 	base := commit(t, repository, "base")
@@ -81,20 +83,7 @@ func TestBootstrapGuardAllowsClassifiedChangeAndRejectsShallowHistory(t *testing
 }
 
 func TestBootstrapBroadensAlreadySelectedReplacementDependents(t *testing.T) {
-	repository := bootstrapRepository(t)
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		if !strings.HasSuffix(file, "_test.go") {
-			copyFile(t, file, filepath.Join(repository, "internal/changescope", file))
-		}
-	}
-	copyFile(t, "cmd/changescope/main.go", filepath.Join(repository, "internal/changescope/cmd/changescope/main.go"))
-	copyFile(t, "../../go.sum", filepath.Join(repository, "go.sum"))
-	modVersion := strings.TrimSpace(run(t, ".", "go", "list", "-m", "-f", "{{.Version}}", "golang.org/x/mod"))
-	appendFile(t, repository, "go.mod", "\nrequire golang.org/x/mod "+modVersion+"\n")
+	repository := bootstrapRealSelectorRepository(t)
 	appendFile(t, repository, "go.mod", `
 require (
  example.test/lib v0.0.0
@@ -128,7 +117,7 @@ replace example.test/lib => ../lib
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"mode\taffected\n",
+		testAffectedHeader,
 		"package\t.\tgithub.com/IceCodeNew/maniud/other\n",
 		"package\tbridge\texample.test/bridge/other\n",
 		"package\tlib\texample.test/lib\n",
@@ -216,7 +205,7 @@ func TestLocalFullManifestUsesIndexSnapshot(t *testing.T) {
 func TestCommandE2EManifestFailsClosed(t *testing.T) {
 	manifest := filepath.Join(t.TempDir(), "manifest.tsv")
 	for _, contents := range []string{
-		"mode\taffected\n",
+		testAffectedHeader,
 		"command-e2e\tunknown\n",
 		"command-e2e\tfalse\ncommand-e2e\ttrue\n",
 	} {
@@ -306,6 +295,26 @@ func TestRunGoModulesExpandsOnlyAffectedPackagePatterns(t *testing.T) {
 			}
 		})
 	}
+}
+
+func bootstrapRealSelectorRepository(t *testing.T) string {
+	t.Helper()
+	repository := bootstrapRepository(t)
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if !strings.HasSuffix(file, "_test.go") {
+			copyFile(t, file, filepath.Join(repository, "internal/changescope", file))
+		}
+	}
+	copyFile(t, "cmd/changescope/main.go", filepath.Join(repository, "internal/changescope/cmd/changescope/main.go"))
+	copyFile(t, "../../go.sum", filepath.Join(repository, "go.sum"))
+	modVersion := strings.TrimSpace(run(t, ".", "go", "list", "-m", "-f", "{{.Version}}", "golang.org/x/mod"))
+	appendFile(t, repository, "go.mod", "\nrequire golang.org/x/mod "+modVersion+"\n")
+
+	return repository
 }
 
 func bootstrapRepository(t *testing.T) string {

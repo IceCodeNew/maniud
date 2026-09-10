@@ -77,7 +77,18 @@ select_coverage_packages() {
 		rm -f "$selected_file" "$eligible_file"
 		return 1
 	}
-	awk 'NR == FNR { selected[$0] = 1; next } selected[$0]' \
+	# A root command-only change has no intersection with the established
+	# coverage scope. Run that scope rather than silently skipping coverage.
+	awk -v module="$module_name" '
+    FILENAME == ARGV[1] { selected[$0] = 1; has_selected = 1; next }
+    { eligible[++count] = $0; if ($0 in selected) matched++ }
+    END {
+      for (i = 1; i <= count; i++) {
+        if ((eligible[i] in selected) || (module == "." && has_selected && !matched))
+          print eligible[i]
+      }
+    }
+  ' \
 		"$selected_file" "$eligible_file" || {
 		rm -f "$selected_file" "$eligible_file"
 		return 1
