@@ -13,6 +13,51 @@ import (
 	"github.com/IceCodeNew/maniud/internal/application"
 )
 
+//nolint:cyclop // Each mode exercises real Preview, Stage, and index/worktree content checks.
+func TestDeploymentStagePreservesIndexPermissions(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{"private", 0o600}, {"readable", 0o644}, {"shared-group", 0o660},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			workspace, request, repository := newTUIDeploymentWorkspaceFixture(t, deploymentComposeFixture())
+			if _, err := runGit(t.Context(), repository, "config", "core.sharedRepository", "group"); err != nil {
+				t.Fatal(err)
+			}
+			indexPath, err := absoluteGitPath(t.Context(), repository, "index")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Chmod(indexPath, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err = workspace.Preview(t.Context(), request, application.DeploymentCPUs.ID(), testDeploymentCPUValue, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = workspace.Stage(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(indexPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != test.mode {
+				t.Errorf("published index mode = %o, want %o", info.Mode().Perm(), test.mode)
+			}
+			blob, err := runGit(t.Context(), repository, "show", ":"+deploymentComposeEntry)
+			if err != nil || !strings.Contains(string(blob), "cpus: 2.5") {
+				t.Fatalf("staged blob = %q, %v", blob, err)
+			}
+			assertTUIDeploymentContent(t, repository, deploymentComposeEntry, blob)
+		})
+	}
+}
+
 func TestDeploymentGitConfigurationFreezesBuiltInTransforms(t *testing.T) {
 	t.Parallel()
 

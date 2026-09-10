@@ -54,6 +54,63 @@ func TestDeploymentIndexPublicationRequiresLockIdentity(t *testing.T) {
 	assertDeploymentIndexUnlocked(t, draft.repository)
 }
 
+//nolint:cyclop,gocognit // Each case fails a distinct post-rewrite permission proof and verifies compensation.
+func TestDeploymentIndexPermissionFailureRestoresWorktree(t *testing.T) {
+	t.Parallel()
+	for _, failure := range []string{"index-stat", "index-type", "lock-type", "chmod"} {
+		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
+			draft := newDeploymentDraftFixture(t)
+			directoryInfo, err := os.Stat(draft.repository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operations := defaultDeploymentGitFileOperations()
+			published := false
+			lstat := operations.lstat
+			operations.lstat = func(path string) (os.FileInfo, error) {
+				if published && filepath.Base(path) == "index" {
+					if failure == "index-stat" {
+						return nil, errDeploymentCoverage
+					}
+					if failure == "index-type" {
+						return directoryInfo, nil
+					}
+				}
+				if failure == "lock-type" && filepath.Base(path) == "index.lock" {
+					return directoryInfo, nil
+				}
+
+				return lstat(path)
+			}
+			chmod := operations.chmod
+			operations.chmod = func(path string, mode os.FileMode) error {
+				if failure == "chmod" {
+					return errDeploymentCoverage
+				}
+
+				return chmod(path, mode)
+			}
+			err = stageConfirmedDeploymentWith(t.Context(), draft,
+				func(repository, entry string, before, after []byte) (bool, error) {
+					changed, replaceErr := replaceDeploymentEntry(repository, entry, before, after)
+					published = changed
+
+					return changed, replaceErr
+				}, operations)
+			if !published || !errors.Is(err, errDeploymentPublishFailed) {
+				t.Fatalf("post-rewrite permission failure = %v, published=%t", err, published)
+			}
+			assertTUIDeploymentContent(t, draft.repository, draft.entry, draft.source.Content)
+			state, err := cleanGitTree(t.Context(), draft.repository)
+			if err != nil || state != draft.base {
+				t.Fatalf("permission failure changed index or HEAD: %+v, %v", state, err)
+			}
+			assertDeploymentIndexUnlocked(t, draft.repository)
+		})
+	}
+}
+
 func TestDeploymentIndexRenameErrorPreservesConcurrentWriter(t *testing.T) {
 	t.Parallel()
 	draft := newDeploymentDraftFixture(t)

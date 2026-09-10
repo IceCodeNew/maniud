@@ -59,6 +59,7 @@ type deploymentGitFileOperations struct {
 	close     func(*os.File) error
 	remove    func(string) error
 	rename    func(string, string) error
+	chmod     func(string, os.FileMode) error
 	sameFile  func(os.FileInfo, os.FileInfo) bool
 }
 
@@ -80,6 +81,7 @@ func defaultDeploymentGitFileOperations() deploymentGitFileOperations {
 		close:    (*os.File).Close,
 		remove:   os.Remove,
 		rename:   os.Rename,
+		chmod:    os.Chmod,
 		sameFile: os.SameFile,
 	}
 }
@@ -584,8 +586,17 @@ func publishDeploymentIndex(
 	if digestErr != nil || currentDigest != originalDigest || headErr != nil || head != draft.base.head {
 		return errors.Join(errDeploymentEditInvalid, digestErr, headErr)
 	}
+	indexInfo, err := operations.lstat(indexPath)
+	if err != nil || !indexInfo.Mode().IsRegular() {
+		return errors.Join(errDeploymentEditInvalid, err)
+	}
 	lockInfo, err := operations.lstat(lockPath)
-	if err != nil {
+	if err != nil || !lockInfo.Mode().IsRegular() {
+		return errors.Join(errDeploymentEditInvalid, err)
+	}
+	// Git rewrites the isolated index during add. Preserve the live index's
+	// permissions only after that rewrite and before publishing the lock.
+	if err = operations.chmod(lockPath, indexInfo.Mode().Perm()); err != nil {
 		return err
 	}
 	renameErr := operations.rename(lockPath, indexPath)
