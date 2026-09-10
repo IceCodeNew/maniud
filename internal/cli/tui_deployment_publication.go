@@ -48,7 +48,7 @@ func defaultDeploymentEntryOperations() deploymentEntryOperations {
 		openRoot: os.OpenRoot,
 		lstat:    (*os.Root).Lstat,
 		readFile: func(file *os.File) ([]byte, error) {
-			return io.ReadAll(file)
+			return io.ReadAll(io.LimitReader(file, maximumComposeSourceBytes+1))
 		},
 		openFile: func(root *os.Root, name string, mode os.FileMode) (*os.File, error) {
 			return root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
@@ -171,6 +171,7 @@ func readDeploymentEntry(
 	current, err := operations.readFile(file)
 	after, lstatErr := operations.lstat(root, name)
 	if statErr != nil || visibleErr != nil || err != nil || lstatErr != nil ||
+		len(current) > maximumComposeSourceBytes ||
 		!info.Mode().IsRegular() || !visible.Mode().IsRegular() || !after.Mode().IsRegular() ||
 		!os.SameFile(info, visible) || !os.SameFile(info, after) {
 		_ = file.Close()

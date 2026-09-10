@@ -331,6 +331,7 @@ func questionContainsForbiddenValue(question, value, category string) bool {
 	default:
 		return strings.Contains(question, value)
 	}
+
 	return slices.Contains(strings.FieldsFunc(question, func(character rune) bool {
 		return !strings.ContainsRune(continuation, character)
 	}), value)
