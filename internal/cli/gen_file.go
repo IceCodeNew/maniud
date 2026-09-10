@@ -23,6 +23,7 @@ type generatedComposeOperations struct {
 	closeFile     func(*os.File) error
 	syncDirectory func(*os.File) error
 	lstat         func(*os.Root, string) (os.FileInfo, error)
+	link          func(*os.Root, string, string) error
 	remove        func(*os.Root, string) error
 	closeRoot     func(*os.Root) error
 }
@@ -43,6 +44,7 @@ func generatedComposeDefaultOperations() generatedComposeOperations {
 		closeFile:     (*os.File).Close,
 		syncDirectory: (*os.File).Sync,
 		lstat:         (*os.Root).Lstat,
+		link:          (*os.Root).Link,
 		remove:        (*os.Root).Remove,
 		closeRoot:     (*os.Root).Close,
 	}

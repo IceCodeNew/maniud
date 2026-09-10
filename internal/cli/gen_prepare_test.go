@@ -207,7 +207,7 @@ func TestRenderBindPreparationRejectsUnsafeSources(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
-		"relative", "/srv/../data", string(filepath.Separator), "/srv/$data", "/srv/data\x00invalid",
+		testRelativePath, "/srv/../data", string(filepath.Separator), "/srv/$data", "/srv/data\x00invalid",
 	} {
 		_, err := renderBindPreparation(domain.WorkloadSpec{Mounts: []domain.Mount{{
 			Kind: domain.MountBind, Source: source, Target: bindPreparationTestTarget,

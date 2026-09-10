@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/registry/credential"
 	"github.com/IceCodeNew/maniud/internal/store"
 )
@@ -231,10 +232,14 @@ func bindPreparedTransaction(
 
 func transactionIntent(preparation Preparation) store.TransactionIntent {
 	intent := store.TransactionIntent{
-		Runtime:         preparation.Execution.Kind,
-		SourceDigest:    preparation.Workload.SourceDigest,
-		EffectiveDigest: preparation.Workload.EffectiveDigest,
-		ExecutionDigest: preparation.Execution.Digest,
+		Runtime:                  preparation.Execution.Kind,
+		SourceDigest:             preparation.Workload.SourceDigest,
+		EffectiveDigest:          preparation.Workload.EffectiveDigest,
+		ExecutionDigest:          preparation.Execution.Digest,
+		RepositoryVersion:        preparation.repository.Version,
+		RepositoryScopeDigest:    preparation.repository.Scope,
+		RepositoryLocationDigest: preparation.repository.Location,
+		HasRepository:            preparation.repository != (compose.RepositoryProvenance{}),
 	}
 
 	switch preparation.Plan.Kind {
@@ -260,7 +265,12 @@ func recoveryMutationPlan(kind PlanKind) bool {
 
 func boundRecoveryTransaction(preparation Preparation) bool {
 	return recoveryMutationPlan(preparation.Plan.Kind) &&
-		transactionMatches(preparation.Transaction, preparation.Workload, preparation.Execution)
+		transactionMatches(
+			preparation.Transaction,
+			preparation.Workload,
+			preparation.Execution,
+			preparation.repository,
+		)
 }
 
 // The initial preparation selects only the service-scoped lock. The final

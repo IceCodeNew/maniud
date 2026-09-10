@@ -748,7 +748,7 @@ func TestExecuteGenUsesDefaultOutputAndContainsFailures(t *testing.T) {
 	t.Parallel()
 
 	platform := defaultGeneratedPlatform()
-	valid := genInvocation{runtimeArgs: []string{testDockerRuntime, "create", testRegistrySource}}
+	valid := genInvocation{runtimeArgs: []string{testDockerRuntime, createOperation, testRegistrySource}}
 
 	for _, test := range genFailureCases(t, platform, valid) {
 		t.Run(test.name, func(t *testing.T) {
@@ -1402,8 +1402,8 @@ func TestRunGenAndFailureClassification(t *testing.T) {
 			want: `{"code":"generation_failed","message":"Compose generation failed",` +
 				`"retryable":true}` + "\n",
 		},
-		{name: "cancelled", execute: func(genInvocation) error { return registry.ErrCancelled }, want: cancelledJSON},
-		{name: "missing", execute: nil, want: internalErrorJSON},
+		{name: testCancelledName, execute: func(genInvocation) error { return registry.ErrCancelled }, want: cancelledJSON},
+		{name: testMissingName, execute: nil, want: internalErrorJSON},
 	}
 
 	for _, test := range tests {

@@ -10,6 +10,22 @@ if [[ "$current_goos" != darwin || "$current_goarch" != arm64 ]]; then
 	exit 1
 fi
 
+gate_manifest="${MANIUD_GATE_MANIFEST:-}"
+gate_mode="full"
+if [[ -n "$gate_manifest" ]]; then
+	gate_manifest="$(realpath "$gate_manifest")"
+	if ! gate_mode="$(awk -F $'\t' '
+    $1 == "mode" { count++; value = $2 }
+    END {
+      if (count != 1 || (value != "full" && value != "affected")) exit 1
+      print value
+    }
+  ' "$gate_manifest")"; then
+		printf '%s\n' 'invalid gate manifest: expected one mode row' >&2
+		exit 1
+	fi
+fi
+
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 darwin_manifests="$temporary_dir/darwin-arm64-packages.tsv"
@@ -32,9 +48,9 @@ while IFS= read -r module_name; do
 		GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 			go list -f "$manifest_template" "${coverage_patterns[@]}"
 	) | awk -v module="$module_name" '{ print module "\t" $0 }' >>"$linux_manifests"
-done < <("$repository_root/scripts/list-go-modules")
+done < <(if [[ -n "$gate_manifest" ]]; then awk -F $'\t' '$1 == "module" { print $2 }' "$gate_manifest"; else "$repository_root/scripts/list-go-modules"; fi)
 
-python3 - "$linux_manifests" "$darwin_manifests" >"$selected_packages" <<'PY'
+python3 - "$linux_manifests" "$darwin_manifests" "$gate_manifest" >"$selected_packages" <<'PY'
 import csv
 from pathlib import Path
 import sys
@@ -60,18 +76,32 @@ linux_packages = {
     (row[0], row[1]): row[3:]
     for row in read_manifests(sys.argv[1])
 }
+affected_packages = None
+if sys.argv[3]:
+    affected_packages = {
+        (row[1], row[2])
+        for row in read_manifests(sys.argv[3])
+        if len(row) == 3 and row[0] == "package"
+    }
 for row in read_manifests(sys.argv[2]):
     selected_files = row[3:]
-    if reads_platform(row[2], selected_files) or linux_packages.get((row[0], row[1])) != selected_files:
-        print(row[0], row[1], sep="\t")
+    package = (row[0], row[1])
+    if affected_packages is not None and package not in affected_packages:
+        continue
+    if reads_platform(row[2], selected_files) or linux_packages.get(package) != selected_files:
+        print("package", *package, sep="\t")
 PY
 
 if [[ ! -s "$selected_packages" ]]; then
+	if [[ "$gate_mode" == affected ]]; then
+		printf '%s\n' 'no affected darwin/arm64 platform-dependent packages'
+		exit 0
+	fi
 	printf '%s\n' 'no darwin/arm64 platform-dependent packages found' >&2
 	exit 1
 fi
 
 printf '%s\n' 'darwin/arm64 platform-dependent packages:'
-cut -f2 "$selected_packages" | sed 's/^/  /'
+cut -f3 "$selected_packages" | sed 's/^/  /'
 MANIUD_CI_RACE=1 "$repository_root/scripts/check-go-coverage" \
 	--packages-from "$selected_packages" "$@"

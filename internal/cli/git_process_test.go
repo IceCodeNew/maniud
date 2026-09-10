@@ -44,6 +44,37 @@ printf 'safe\n'
 	}
 }
 
+//nolint:paralleltest // This test owns PATH and the user Git environment allowlist.
+func TestRunGitWithUserConfigPreservesSigningEnvironment(t *testing.T) {
+	gitPath := installFakeGit(t)
+	home := t.TempDir()
+	for name, value := range map[string]string{
+		"HOME": home, "XDG_CONFIG_HOME": home + "/config", "XDG_RUNTIME_DIR": home + "/runtime",
+		"GNUPGHOME": home + "/gnupg", "GPG_TTY": "/dev/ttys001", "SSH_AUTH_SOCK": home + "/agent.sock",
+		"GIT_DIR": "hostile", "GIT_CONFIG_GLOBAL": "hostile",
+	} {
+		t.Setenv(name, value)
+	}
+	writeFakeGit(t, gitPath, `
+test "$HOME" = '`+home+`'
+test "$XDG_CONFIG_HOME" = '`+home+`/config'
+test "$XDG_RUNTIME_DIR" = '`+home+`/runtime'
+test "$GNUPGHOME" = '`+home+`/gnupg'
+test "$GPG_TTY" = /dev/ttys001
+test "$SSH_AUTH_SOCK" = '`+home+`/agent.sock'
+test "${GIT_DIR+set}" != set
+test "${GIT_CONFIG_GLOBAL+set}" != set
+test "${GIT_CONFIG_NOSYSTEM+set}" != set
+test "$GIT_TERMINAL_PROMPT" = 0
+printf 'signed\n'
+`)
+
+	output, err := runGitWithUserConfig(t.Context(), t.TempDir(), "commit", "-S")
+	if err != nil || string(output) != "signed\n" {
+		t.Fatalf("runGitWithUserConfig() = %q, %v", output, err)
+	}
+}
+
 //nolint:paralleltest // This test owns PATH while exercising process failures.
 func TestRunGitRejectsTimeoutAndOversizedOutput(t *testing.T) {
 	gitPath := installFakeGit(t)
@@ -94,6 +125,12 @@ func TestValidateGitProcessConfigurationRejectsExecutableConfig(t *testing.T) {
 		"include.path",
 		"includeIf.onbranch:main.path",
 		"filter.maniud.process",
+		"gpg.program",
+		"gpg.format",
+		"gpg.openpgp.program",
+		"gpg.ssh.program",
+		"gpg.ssh.defaultKeyCommand",
+		"gpg.x509.program",
 		"url.ext::command.insteadOf",
 		"url.ext::command.pushInsteadOf",
 	} {

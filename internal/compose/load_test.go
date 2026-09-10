@@ -42,6 +42,38 @@ services:
 	}
 }
 
+func TestLoadPreservesEscapedInterpolation(t *testing.T) {
+	t.Parallel()
+	source := testSource(t, `
+name: example
+services:
+  api:
+    image: example.com/team/api:1
+    container_name: example-api
+    network_mode: bridge
+    platform: linux/amd64
+    environment:
+      BRACED: "${TOKEN}"
+      ESCAPED: "$$TOKEN"
+      ESCAPED_BRACED: "$${TOKEN}"
+      ODD: "$$$TOKEN"
+      SINGLE: "$TOKEN"
+`)
+	source.Environment["TOKEN"] = "interpolated-value"
+	project, err := Load(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload, err := project.Workload(apiService, resolvedImageForService(t, project, apiService))
+	want := []string{
+		"BRACED=interpolated-value", "ESCAPED=$TOKEN", "ESCAPED_BRACED=${TOKEN}",
+		"ODD=$interpolated-value", "SINGLE=interpolated-value",
+	}
+	if err != nil || !slices.Equal(workload.Environment, want) {
+		t.Fatalf("Workload environment = %q, %v; want %q", workload.Environment, err, want)
+	}
+}
+
 func TestLoadAppliesProfiles(t *testing.T) {
 	t.Parallel()
 

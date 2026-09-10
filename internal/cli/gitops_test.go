@@ -255,7 +255,7 @@ func TestExecuteGitOpsInitRejectsDirtyOrMismatchedCheckout(t *testing.T) {
 	}, nil); !errors.Is(err, errStateHomeUnavailable) {
 		t.Fatalf("executeGitOpsInit(missing state home) = %v", err)
 	}
-	missingParent := filepath.Join(t.TempDir(), "missing", "desired-state")
+	missingParent := filepath.Join(t.TempDir(), testMissingName, "desired-state")
 	if err = executeGitOpsInit(t.Context(), gitOpsInitInvocation{
 		repository: missingParent,
 		branch:     gitOpsTestBranch,
@@ -430,7 +430,7 @@ func TestGitOpsRepositoryRejectsInvalidCheckoutBoundaries(t *testing.T) {
 		t.Fatalf("inspectGitOpsCheckout(relative) = %v", err)
 	}
 	if _, err := resolveGitOpsRepository(
-		t.Context(), filepath.Join(t.TempDir(), "missing"),
+		t.Context(), filepath.Join(t.TempDir(), testMissingName),
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("resolveGitOpsRepository(missing) = %v", err)
 	}
@@ -498,6 +498,18 @@ func TestGitOpsRepositoryRejectsInvalidGitState(t *testing.T) {
 	}
 	if _, err := gitRemoteURL(t.Context(), root, gitOpsRemoteName); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("gitRemoteURL(missing) = %v", err)
+	}
+	if _, err := gitOpsRepositoryScope(t.Context(), gitOpsRegistration{
+		Remote: gitOpsRemoteName, Branch: gitOpsTestBranch,
+	}, root); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("gitOpsRepositoryScope(missing remote) = %v", err)
+	}
+
+	root = initGitOpsTestRepository(t)
+	if _, err := gitOpsRepositoryScope(t.Context(), gitOpsRegistration{
+		Remote: gitOpsRemoteName,
+	}, root); !errors.Is(err, errGitOpsRepositoryInvalid) {
+		t.Fatalf("gitOpsRepositoryScope(invalid branch) = %v", err)
 	}
 
 	if err := requireFastForward(

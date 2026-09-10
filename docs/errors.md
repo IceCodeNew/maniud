@@ -8,7 +8,7 @@ The default result omits private paths, endpoint details, credentials, and upstr
 `gen` may print a plain-language recovery hint on standard error before the JSON object.
 
 ```json
-{"code":"generation_failed","message":"generation failed","retryable":false}
+{"code":"apply_failed","message":"apply failed","retryable":false}
 ```
 
 | Code | Meaning | What to do |
@@ -17,10 +17,19 @@ The default result omits private paths, endpoint details, credentials, and upstr
 | `operation_cancelled` | A signal or calling context cancelled the operation. | Run the same command again so maniud can recover an unfinished operation. |
 | `generation_failed` | `gen` could not validate the image, service, or output. | Follow the standard-error hint, pull the requested image when it is missing, and rerun `gen`. |
 | `apply_failed` | `apply`, `daemon`, or `doctor` could not prove a safe result. | Retry only when `retryable` is true; otherwise preserve the current state and inspect `--debug` output. |
+| `runtime_not_built` | The selected runtime was not compiled into this binary. | Install or build a maniud binary that includes the selected runtime. |
+| `tui_unavailable` | `maniud tui` has no interactive terminal input, terminal output, or usable `TERM`. | Run it in an interactive terminal, or validate with `maniud apply --dry-run <compose>` and add `--json` when structured output is required. |
+| `export_failed` | The terminal was restored, but standard output did not accept the complete TUI session export. | Fix or redirect standard output, rerun `maniud tui`, and request the export again. Maniud does not retry the write. |
 | `internal_error` | The binary could not provide the selected command service. | Verify the installed release and report its version with the JSON result. |
 
 `retryable: true` means the same input may succeed after the runtime, registry, rate limit, or state store becomes available again.
 When `retryable` is false, correct the input or resolve the conflicting evidence before repeating the command.
+
+## Compose source diagnostics in the TUI
+
+When a committed Compose source fails validation, `maniud tui` shows its repository-relative path and a stable reason. It also shows the line and column when the YAML parser provides a safe location. The detail page gives one repair action and supports scrolling when the path does not fit on screen.
+
+The TUI does not show source values, raw YAML, parser messages, vendor errors, or absolute paths. `Position: Unavailable` means Compose validation found the problem after YAML parsing, so maniud cannot identify one trustworthy source location.
 
 ## Notification failures
 

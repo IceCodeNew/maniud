@@ -60,6 +60,27 @@ func TestInspectReturnsApplicationRuntimeEvidence(t *testing.T) {
 	}
 }
 
+func TestInspectDistinguishesDaemonIdentities(t *testing.T) {
+	t.Parallel()
+
+	var digests [2]domain.Digest
+	for index, identifier := range []string{testDaemonID, testDaemonID + "-other"} {
+		document := daemonDocument(identifier, "overlay2", testOS, testArchitecture, testProduct, false)
+		client := connectedTestClient(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.Header().Set(contentTypeHeader, jsonContentType)
+			_, _ = io.WriteString(response, document)
+		}))
+		evidence, err := client.Inspect(t.Context())
+		if err != nil || evidence.Digest == (domain.Digest{}) {
+			t.Fatalf("Inspect(%q) = %#v, %v", identifier, evidence, err)
+		}
+		digests[index] = evidence.Digest
+	}
+	if digests[0] == digests[1] {
+		t.Fatal("different daemon IDs produced the same runtime identity")
+	}
+}
+
 func TestInspectRejectsUnsupportedDaemonPlatform(t *testing.T) {
 	t.Parallel()
 

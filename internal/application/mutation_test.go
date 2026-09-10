@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/IceCodeNew/maniud/internal/compose"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/store"
 )
@@ -18,6 +19,71 @@ type mutationPlanTest struct {
 	observe         func(domain.DesiredWorkload) WorkloadObservation
 	want            PlanKind
 	wantTransaction bool
+}
+
+//nolint:cyclop,funlen // One end-to-end assertion covers persistence and both provenance drift boundaries.
+func TestBindMutationPersistsRepositoryProvenance(t *testing.T) {
+	t.Parallel()
+
+	operation := newTestOperation(t)
+	scope, err := compose.NewRepositoryScope(
+		filepath.Clean(t.TempDir()),
+		"https://example.com/team/desired.git",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("NewRepositoryScope() error = %v", err)
+	}
+	provenance, err := scope.Bind(
+		"services/api.yaml",
+		domain.Hash(operation.request.Source.Content),
+	)
+	if err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	operation.request.Repository = provenance
+	state := openMutationTestStore(t)
+
+	mutation, err := operation.service.bindMutation(t.Context(), operation.request, state)
+	if err != nil {
+		t.Fatalf("bindMutation() error = %v", err)
+	}
+	transaction := mutation.preparation.Transaction
+	if mutation.preparation.repository != provenance || !transaction.HasRepository ||
+		transaction.RepositoryVersion != provenance.Version ||
+		transaction.RepositoryScopeDigest != provenance.Scope ||
+		transaction.RepositoryLocationDigest != provenance.Location {
+		t.Fatalf("bound transaction = %#v", transaction)
+	}
+
+	if err = mutation.close(); err != nil {
+		t.Fatalf("mutation.close() error = %v", err)
+	}
+
+	drifted, err := scope.Bind(
+		"services/other.yaml",
+		domain.Hash(operation.request.Source.Content),
+	)
+	if err != nil {
+		t.Fatalf("Bind(drifted) error = %v", err)
+	}
+	driftedRequest := operation.request
+	driftedRequest.Repository = drifted
+	_, err = newService(operation.service.images, operation.runtime, state, nil).Prepare(
+		t.Context(),
+		driftedRequest,
+	)
+	if !errors.Is(err, ErrConflictingState) {
+		t.Fatalf("Prepare(drifted provenance) error = %v", err)
+	}
+
+	invalidRequest := operation.request
+	invalidRequest.Repository.Source = domain.Hash([]byte("other source"))
+	_, err = operation.service.Prepare(t.Context(), invalidRequest)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Prepare(invalid provenance) error = %v", err)
+	}
+	closeMutationTestStore(t, state)
 }
 
 func TestBindMutationStartsOnlyRequiredTransactions(t *testing.T) {
@@ -648,7 +714,12 @@ func assertBoundTransaction(
 
 	if wantTransaction && (transaction != preparation.Transaction ||
 		transaction.ID == (store.TransactionID{}) || transaction.State != store.TransactionActive ||
-		!transactionMatches(transaction, preparation.Workload, preparation.Execution)) {
+		!transactionMatches(
+			transaction,
+			preparation.Workload,
+			preparation.Execution,
+			preparation.repository,
+		)) {
 		t.Fatalf("bound transaction = %#v, preparation %#v", transaction, preparation.Transaction)
 	}
 }

@@ -374,6 +374,23 @@ func TestAnalyzeTaggedAndIndexed(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTaggedArchiveAllowsColonInPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, fixtureOptions{architecture: testArchitectureAMD64})
+	path := filepath.Join(filepath.Dir(fixture.path), "image:with-colon.tar")
+	if err := os.Rename(fixture.path, path); err != nil {
+		t.Fatal(err)
+	}
+	source, err := imagearchive.ParseSource("docker-archive:" + path + ":" + testArchiveTag)
+	if err != nil || source.Path() != path || source.Selector() != testArchiveTag {
+		t.Fatalf("ParseSource = %#v, %v", source, err)
+	}
+	if _, err := imagearchive.Analyze(t.Context(), source); err != nil {
+		t.Fatalf("Analyze = %v", err)
+	}
+}
+
 func TestImportCommandSupportsClassicAndContainerdImageStores(t *testing.T) {
 	t.Parallel()
 

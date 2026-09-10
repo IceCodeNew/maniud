@@ -16,7 +16,8 @@ func TestCanonicalBackupParentBoundaries(t *testing.T) {
 		t.Fatalf("canonicalBackupParent(missing) = %q", got)
 	}
 
-	logical, err := os.MkdirTemp("/tmp", "maniud-canonical-") //nolint:usetesting // The /tmp alias is the boundary under test.
+	//nolint:usetesting // The /tmp alias is the boundary under test.
+	logical, err := os.MkdirTemp("/tmp", "maniud-canonical-")
 	if err != nil {
 		t.Fatal(err)
 	}

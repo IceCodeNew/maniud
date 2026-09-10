@@ -3,7 +3,6 @@ package backup
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -72,15 +71,13 @@ type archiveScan struct {
 }
 
 type boundedArchiveReader struct {
-	cancelled func() error
-	source    io.Reader
-	hasher    hash.Hash
-	limit     int64
-	count     int64
-	exceeded  bool
-	tail      [tarTerminatorBytes]byte
-	tailSize  int
-	tailNext  int
+	cancelled  func() error
+	source     io.Reader
+	hasher     hash.Hash
+	limit      int64
+	count      int64
+	exceeded   bool
+	readingTar bool
 }
 
 // Analyze consumes exactly one uncompressed tar stream and returns its byte
@@ -91,6 +88,7 @@ func Analyze(ctx context.Context, source io.Reader, maximumBytes int64) (Invento
 	}
 	reader := &boundedArchiveReader{
 		cancelled: ctx.Err, source: source, hasher: sha256.New(), limit: maximumBytes,
+		readingTar: true,
 	}
 	scan := newArchiveScan()
 
@@ -98,10 +96,11 @@ func Analyze(ctx context.Context, source io.Reader, maximumBytes int64) (Invento
 	if err != nil {
 		return Inventory{}, err
 	}
+	reader.readingTar = false
 	if err = consumeZeroPadding(reader); err != nil {
 		return Inventory{}, err
 	}
-	if !reader.completeTar() {
+	if reader.count%tarBlockBytes != 0 {
 		return Inventory{}, ErrInvalidArchive
 	}
 
@@ -404,7 +403,6 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	read, err := reader.source.Read(request)
 	if read > 0 {
 		_, _ = reader.hasher.Write(request[:read])
-		reader.recordTail(request[:read])
 		if int64(read) > remaining {
 			reader.exceeded = true
 
@@ -414,6 +412,12 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	}
 
 	if errors.Is(err, io.EOF) {
+		// archive/tar also accepts physical EOF without both terminator blocks.
+		// Only its own end-marker EOF may finish the tar scan.
+		if reader.readingTar {
+			return read, io.ErrUnexpectedEOF
+		}
+
 		return read, io.EOF
 	}
 	if err != nil {
@@ -421,21 +425,6 @@ func (reader *boundedArchiveReader) Read(destination []byte) (int, error) {
 	}
 
 	return read, nil
-}
-
-func (reader *boundedArchiveReader) recordTail(value []byte) {
-	for _, current := range value {
-		reader.tail[reader.tailNext] = current
-		reader.tailNext = (reader.tailNext + 1) % len(reader.tail)
-		if reader.tailSize < len(reader.tail) {
-			reader.tailSize++
-		}
-	}
-}
-
-func (reader *boundedArchiveReader) completeTar() bool {
-	return !reader.exceeded && reader.count >= tarTerminatorBytes && reader.count%tarBlockBytes == 0 &&
-		reader.tailSize == len(reader.tail) && bytes.Equal(reader.tail[:], make([]byte, len(reader.tail)))
 }
 
 func classifyArchiveRead(err error) error {

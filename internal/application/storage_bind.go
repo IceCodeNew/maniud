@@ -1,6 +1,7 @@
 package application
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,10 @@ func prepareUpgradeReplacementBinds(execution *upgradeExecution) error {
 		if err != nil {
 			return err
 		}
+		legacy := filepath.Join(root, replacementBindDirectory, transaction, filepath.Base(desired.Target))
+		if _, err = os.Lstat(legacy); !os.IsNotExist(err) {
+			return ErrConflictingState
+		}
 		if err = ensureEmptyReplacementBind(path); err != nil {
 			return err
 		}
@@ -46,14 +51,12 @@ func prepareUpgradeReplacementBinds(execution *upgradeExecution) error {
 }
 
 func replacementBindPath(root, transaction string, desired domain.Mount) (string, error) {
-	if root == "" || transaction == "" || desired.Target == "" {
+	if root == "" || transaction == "" || !filepath.IsAbs(desired.Target) ||
+		filepath.Clean(desired.Target) != desired.Target || desired.Target == string(filepath.Separator) {
 		return "", ErrInvalidRequest
 	}
 
-	name := filepath.Base(filepath.Clean(desired.Target))
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		return "", ErrInvalidRequest
-	}
+	name := fmt.Sprintf("%x", sha256.Sum256([]byte(desired.Target)))
 
 	return filepath.Join(root, replacementBindDirectory, transaction, name), nil
 }

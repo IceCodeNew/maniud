@@ -15,12 +15,18 @@ const (
 	ErrorGenerationFailed ErrorCode = "generation_failed"
 	// ErrorRuntimeNotBuilt identifies a selected runtime omitted from the binary.
 	ErrorRuntimeNotBuilt ErrorCode = "runtime_not_built"
+	// ErrorTUIUnavailable identifies a missing interactive terminal capability.
+	ErrorTUIUnavailable ErrorCode = "tui_unavailable"
+	// ErrorTUIExportFailed identifies a session export that stdout could not accept.
+	ErrorTUIExportFailed ErrorCode = "export_failed"
 	// ErrorInternal identifies a build or programming failure.
 	ErrorInternal ErrorCode = "internal_error"
 
 	cancelledExitStatus     = 130
 	applyFailedMessage      = "apply validation failed"
 	generationFailedMessage = "Compose generation failed"
+	tuiFallbackMessage      = "use 'maniud apply --dry-run <compose>' or " +
+		"'maniud apply --dry-run --json <compose>'"
 )
 
 // FailureError is an expected, privacy-safe error at the application boundary.
@@ -78,6 +84,40 @@ func RuntimeNotBuilt() *FailureError {
 	return &FailureError{
 		code:       ErrorRuntimeNotBuilt,
 		message:    "selected container runtime is not included in this build",
+		retryable:  false,
+		exitStatus: 1,
+	}
+}
+
+// TUIInputUnavailable reports that stdin cannot support an interactive session.
+func TUIInputUnavailable() *FailureError {
+	return tuiUnavailable("interactive TUI requires terminal input")
+}
+
+// TUIOutputUnavailable reports that stdout cannot support an interactive session.
+func TUIOutputUnavailable() *FailureError {
+	return tuiUnavailable("interactive TUI requires terminal output")
+}
+
+// TUITermUnavailable reports that TERM explicitly disables terminal interaction.
+func TUITermUnavailable() *FailureError {
+	return tuiUnavailable("interactive TUI requires an interactive TERM")
+}
+
+// TUIExportFailed reports that a terminal-restored session export could not be written.
+func TUIExportFailed() *FailureError {
+	return &FailureError{
+		code:       ErrorTUIExportFailed,
+		message:    "TUI session export could not be written; rerun 'maniud tui' to export again",
+		retryable:  true,
+		exitStatus: 1,
+	}
+}
+
+func tuiUnavailable(requirement string) *FailureError {
+	return &FailureError{
+		code:       ErrorTUIUnavailable,
+		message:    requirement + "; " + tuiFallbackMessage,
 		retryable:  false,
 		exitStatus: 1,
 	}

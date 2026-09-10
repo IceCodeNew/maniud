@@ -5,6 +5,7 @@ package imagearchive
 import "syscall"
 
 func statDevice(value *syscall.Stat_t) uint64 {
+	//nolint:gosec // Darwin stat.Dev is int32; device identity is stored as uint64.
 	return uint64(value.Dev)
 }
 

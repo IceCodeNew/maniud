@@ -62,13 +62,13 @@ func connectedPeer(connection net.Conn) (peerIdentity, error) {
 func connectedPeerToken(descriptor uintptr) (peerToken, error) {
 	var token peerToken
 	length := uint32(unsafe.Sizeof(token))
-	_, _, callErr := unix.Syscall6( //nolint:gosec // Darwin exposes LOCAL_PEERTOKEN only through getsockopt.
-		unix.SYS_GETSOCKOPT,
+	_, _, callErr := unix.Syscall6(
+		unix.SYS_GETSOCKOPT, //nolint:staticcheck // x/sys has no typed LOCAL_PEERTOKEN wrapper.
 		descriptor,
 		uintptr(unix.SOL_LOCAL),
 		uintptr(unix.LOCAL_PEERTOKEN),
-		uintptr(unsafe.Pointer(&token[0])),
-		uintptr(unsafe.Pointer(&length)),
+		uintptr(unsafe.Pointer(&token[0])), //nolint:gosec // getsockopt writes the fixed-size peer token.
+		uintptr(unsafe.Pointer(&length)),   //nolint:gosec // getsockopt updates the token buffer length.
 		0,
 	)
 	if callErr != 0 || uintptr(length) != unsafe.Sizeof(token) {

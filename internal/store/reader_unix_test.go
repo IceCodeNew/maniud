@@ -578,6 +578,7 @@ func TestReaderInternalGuardsClassifyFailures(t *testing.T) {
 	}
 
 	var nilReader *Reader
+	scope := domain.Hash([]byte("repository scope"))
 
 	_, _, err = nilReader.UnresolvedTransaction(context.Background(), "project", "api")
 	if !errors.Is(err, ErrInvalidState) {
@@ -597,6 +598,28 @@ func TestReaderInternalGuardsClassifyFailures(t *testing.T) {
 	_, err = nilReader.Actions(context.Background(), TransactionID{})
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("nil Actions() error = %v", err)
+	}
+	_, err = nilReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("nil UnresolvedRepositoryTransactions() error = %v", err)
+	}
+
+	emptyReader := &Reader{}
+	_, err = emptyReader.UnresolvedRepositoryTransactions(cancelled, scope)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("empty UnresolvedRepositoryTransactions(cancelled) error = %v", err)
+	}
+	result, err := emptyReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	if err != nil || result != nil {
+		t.Fatalf("empty UnresolvedRepositoryTransactions() = %#v, %v", result, err)
+	}
+	_, err = invalidReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("invalid UnresolvedRepositoryTransactions() error = %v", err)
+	}
+	_, err = invalidReader.transactionResult(nil)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("transactionResult(invalid) error = %v", err)
 	}
 }
 
@@ -644,6 +667,19 @@ func TestReaderInternalFaultBoundaries(t *testing.T) {
 	}
 
 	requireNoError(t, settingsReader.Close())
+
+	queryReader := requireOpenReader(t, path)
+	requireNoError(t, queryReader.transaction.Rollback())
+	_, err = queryReader.UnresolvedRepositoryTransactions(
+		context.Background(),
+		domain.Hash([]byte("repository scope")),
+	)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("UnresolvedRepositoryTransactions(closed transaction) error = %v", err)
+	}
+	if closeErr := queryReader.Close(); !errors.Is(closeErr, ErrUnavailable) {
+		t.Fatalf("Close(closed transaction) error = %v", closeErr)
+	}
 
 	var empty Transaction
 

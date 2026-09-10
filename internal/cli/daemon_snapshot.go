@@ -3,11 +3,16 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/compose"
+	"github.com/IceCodeNew/maniud/internal/domain"
 )
+
+var errGitOpsRecoverySourceBlocked = errors.New(string(application.EventReasonRecoverySourceBlocked))
 
 type gitOpsServiceSnapshot struct {
 	arguments    applyInvocation
@@ -15,57 +20,202 @@ type gitOpsServiceSnapshot struct {
 	plan         application.Plan
 }
 
-func reconcileGitOpsSnapshot(
+type gitOpsSourceSnapshot struct {
+	path     string
+	source   compose.Source
+	services []string
+	location domain.Digest
+	blocked  bool
+}
+
+func reconcileGitOpsSnapshotResult(
 	ctx context.Context,
 	root string,
 	selectedCommit string,
 	output io.Writer,
 	dependencies applyDependencies,
-) error {
-	services, err := captureGitOpsSnapshot(ctx, root, selectedCommit, dependencies)
+) (gitOpsCycleCounts, error) {
+	snapshot, err := prepareGitOpsSnapshot(ctx, root, selectedCommit, dependencies)
 	if err != nil {
-		return err
+		return gitOpsCycleCounts{}, err
 	}
 
-	for _, service := range services {
+	counts := gitOpsCycleCounts{
+		skipped: len(snapshot.skipped), skippedSources: snapshot.skipped,
+		sourceBlockersObserved: true,
+	}
+	for index, service := range snapshot.services {
 		if err = executeGitOpsMutation(ctx, service, output); err != nil {
-			return err
+			counts.failed = 1
+			counts.deferred = len(snapshot.services) - index - 1
+
+			return counts, err
 		}
+		if service.plan.Kind == application.PlanUnchanged {
+			counts.unchanged++
+		} else {
+			counts.applied++
+		}
+	}
+
+	return counts, nil
+}
+
+//nolint:cyclop // Recovery keeps inventory, source capture, and final checkout proof in one ordered transaction.
+func recoverGitOpsSnapshotResult(
+	ctx context.Context,
+	root string,
+	selectedCommit string,
+	output io.Writer,
+	dependencies applyDependencies,
+) (gitOpsCycleCounts, error) {
+	if dependencies.operations == nil || !dependencies.repository.Valid() ||
+		dependencies.repositoryRoot != root {
+		return gitOpsCycleCounts{}, errGitOpsRepositoryInvalid
+	}
+	if err := verifyGitOpsCheckout(ctx, root, selectedCommit); err != nil {
+		return gitOpsCycleCounts{}, errGitOpsRepositoryInvalid
+	}
+	inventory, err := dependencies.operations.RepositoryInventory(ctx, dependencies.repository)
+	if err != nil {
+		return gitOpsCycleCounts{}, fmt.Errorf("read repository recovery inventory: %w", err)
+	}
+	if len(inventory) == 0 {
+		return gitOpsCycleCounts{recoveryBlockerObserved: true}, nil
+	}
+	sources, err := captureGitOpsSources(ctx, root, selectedCommit, dependencies)
+	if err != nil {
+		return gitOpsCycleCounts{}, err
+	}
+	recoveries, err := prepareRepositoryRecoveries(ctx, sources, inventory, dependencies)
+	if err != nil {
+		if errors.Is(err, errGitOpsRecoverySourceBlocked) {
+			return gitOpsCycleCounts{recoveryBlockerObserved: true}, err
+		}
+
+		return gitOpsCycleCounts{}, err
+	}
+	if err = verifyGitOpsCheckout(ctx, root, selectedCommit); err != nil {
+		return gitOpsCycleCounts{}, errGitOpsRepositoryInvalid
+	}
+
+	counts, err := recoverGitOpsServicesResult(ctx, recoveries, output)
+	counts.recoveryBlockerObserved = true
+
+	return counts, err
+}
+
+func verifyGitOpsCheckout(ctx context.Context, root string, selectedCommit string) error {
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
+	if err != nil || state.head != selectedCommit {
+		return errGitOpsRepositoryInvalid
 	}
 
 	return nil
 }
 
-func recoverGitOpsSnapshot(
+func prepareRepositoryRecoveries(
 	ctx context.Context,
-	root string,
-	selectedCommit string,
-	output io.Writer,
+	sources []gitOpsSourceSnapshot,
+	inventory []application.RepositoryTransaction,
 	dependencies applyDependencies,
-) error {
-	services, err := captureGitOpsSnapshot(ctx, root, selectedCommit, dependencies)
-	if err != nil {
-		return err
+) ([]gitOpsServiceSnapshot, error) {
+	required := make(map[domain.Digest][]application.RepositoryTransaction)
+	for _, transaction := range inventory {
+		required[transaction.Location] = append(required[transaction.Location], transaction)
+	}
+	seen := make(map[domain.Digest]struct{}, len(sources))
+	recoveries := make([]gitOpsServiceSnapshot, 0, len(inventory))
+	for _, source := range sources {
+		transactions := required[source.location]
+		seen[source.location] = struct{}{}
+		if len(transactions) == 0 {
+			continue
+		}
+		sourceRecoveries, err := prepareRepositorySourceRecoveries(
+			ctx, source, transactions, dependencies,
+		)
+		if err != nil {
+			return nil, err
+		}
+		recoveries = append(recoveries, sourceRecoveries...)
+	}
+	for location := range required {
+		if _, found := seen[location]; !found {
+			return nil, errGitOpsRecoverySourceBlocked
+		}
 	}
 
-	return recoverGitOpsServices(ctx, services, output)
+	return recoveries, nil
 }
 
-func recoverGitOpsServices(
+func prepareRepositorySourceRecoveries(
+	ctx context.Context,
+	source gitOpsSourceSnapshot,
+	transactions []application.RepositoryTransaction,
+	dependencies applyDependencies,
+) ([]gitOpsServiceSnapshot, error) {
+	if source.blocked || !sourceMatchesRepositoryInventory(source, transactions) {
+		return nil, errGitOpsRecoverySourceBlocked
+	}
+	services, err := prepareGitOpsSource(ctx, source, dependencies)
+	if err != nil {
+		if gitOpsSourceBlocker(err) {
+			return nil, errGitOpsRecoverySourceBlocked
+		}
+
+		return nil, err
+	}
+	recoveries := make([]gitOpsServiceSnapshot, 0, len(transactions))
+	for _, service := range services {
+		if gitOpsRecoveryPlan(service.plan.Kind) {
+			recoveries = append(recoveries, service)
+		}
+	}
+	if len(recoveries) != len(transactions) {
+		return nil, errGitOpsRecoverySourceBlocked
+	}
+
+	return recoveries, nil
+}
+
+func sourceMatchesRepositoryInventory(
+	source gitOpsSourceSnapshot,
+	transactions []application.RepositoryTransaction,
+) bool {
+	if source.source.Repository == nil {
+		return false
+	}
+	for _, transaction := range transactions {
+		if transaction.Location != source.location ||
+			transaction.Source != source.source.Repository.Digest {
+			return false
+		}
+	}
+
+	return true
+}
+
+func recoverGitOpsServicesResult(
 	ctx context.Context,
 	services []gitOpsServiceSnapshot,
 	output io.Writer,
-) error {
-	for _, service := range services {
+) (gitOpsCycleCounts, error) {
+	counts := gitOpsCycleCounts{}
+	for index, service := range services {
 		if !gitOpsRecoveryPlan(service.plan.Kind) {
 			continue
 		}
 		if err := executeGitOpsMutation(ctx, service, output); err != nil {
-			return err
+			counts.failed = 1
+			counts.deferred = len(services) - index - 1
+
+			return counts, err
 		}
+		counts.applied++
 	}
 
-	return nil
+	return counts, nil
 }
 
 func executeGitOpsMutation(
@@ -99,13 +249,61 @@ func gitOpsRecoveryPlan(kind application.PlanKind) bool {
 		kind == application.PlanRestore
 }
 
-func captureGitOpsSnapshot(
+func prepareGitOpsSnapshot(
 	ctx context.Context,
 	root string,
 	selectedCommit string,
 	dependencies applyDependencies,
-) ([]gitOpsServiceSnapshot, error) {
-	state, err := cleanGitTree(ctx, root)
+) (gitOpsPreparedSnapshot, error) {
+	sources, err := captureGitOpsSources(ctx, root, selectedCommit, dependencies)
+	if err != nil {
+		return gitOpsPreparedSnapshot{}, err
+	}
+
+	services := make([]gitOpsServiceSnapshot, 0, len(sources))
+	skipped := make([]gitOpsSkippedSource, 0, len(sources))
+	for _, source := range sources {
+		if source.blocked {
+			skipped = append(skipped, skippedGitOpsSource(root, source.path))
+
+			continue
+		}
+		prepared, prepareErr := prepareGitOpsSource(ctx, source, dependencies)
+		if gitOpsSourceBlocker(prepareErr) {
+			skipped = append(skipped, skippedGitOpsSource(root, source.path))
+
+			continue
+		}
+		if prepareErr != nil {
+			return gitOpsPreparedSnapshot{}, prepareErr
+		}
+		services = append(services, prepared...)
+	}
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
+	if err != nil || state.head != selectedCommit {
+		return gitOpsPreparedSnapshot{}, errGitOpsRepositoryInvalid
+	}
+
+	return gitOpsPreparedSnapshot{services: services, skipped: skipped}, nil
+}
+
+func captureGitOpsSources(
+	ctx context.Context,
+	root string,
+	selectedCommit string,
+	dependencies applyDependencies,
+) ([]gitOpsSourceSnapshot, error) {
+	return captureGitOpsSourcesWithLocation(ctx, root, selectedCommit, dependencies, gitOpsSourceLocation)
+}
+
+func captureGitOpsSourcesWithLocation(
+	ctx context.Context,
+	root string,
+	selectedCommit string,
+	dependencies applyDependencies,
+	locationFor func(string, string, compose.RepositoryScope) (domain.Digest, error),
+) ([]gitOpsSourceSnapshot, error) {
+	state, err := gitTreeAllowingTUIDrafts(ctx, root)
 	if err != nil || state.head != selectedCommit {
 		return nil, errGitOpsRepositoryInvalid
 	}
@@ -115,26 +313,97 @@ func captureGitOpsSnapshot(
 		return nil, err
 	}
 
-	services := make([]gitOpsServiceSnapshot, 0, len(paths))
+	sources := make([]gitOpsSourceSnapshot, 0, len(paths))
 	for _, path := range paths {
-		source, loadErr := dependencies.loadSource(ctx, path)
-		if loadErr != nil {
-			return nil, loadErr
+		location, locationErr := locationFor(root, path, dependencies.repository)
+		if locationErr != nil {
+			return nil, locationErr
 		}
-		arguments := applyInvocation{compose: path, json: true}
-		pinned := dependenciesWithApplySource(dependencies, path, source)
-		plan, prepareErr := prepareApplyPlan(ctx, arguments, pinned)
-		if prepareErr != nil {
-			return nil, prepareErr
+		source, captureErr := captureGitOpsSource(ctx, path, location, dependencies)
+		if captureErr != nil {
+			return nil, captureErr
+		}
+		sources = append(sources, source)
+	}
+
+	state, err = gitTreeAllowingTUIDrafts(ctx, root)
+	if err != nil || state.head != selectedCommit {
+		return nil, errGitOpsRepositoryInvalid
+	}
+
+	return sources, nil
+}
+
+func captureGitOpsSource(
+	ctx context.Context,
+	path string,
+	location domain.Digest,
+	dependencies applyDependencies,
+) (gitOpsSourceSnapshot, error) {
+	source, err := dependencies.loadSource(ctx, path)
+	if err != nil {
+		if gitOpsSourceBlocker(err) {
+			return gitOpsSourceSnapshot{path: path, location: location, blocked: true}, nil
+		}
+
+		return gitOpsSourceSnapshot{}, fmt.Errorf("load gitops source: %w", err)
+	}
+	project, err := compose.Load(ctx, source)
+	if err != nil {
+		if gitOpsSourceBlocker(err) {
+			return gitOpsSourceSnapshot{path: path, location: location, blocked: true}, nil
+		}
+
+		return gitOpsSourceSnapshot{}, fmt.Errorf("validate gitops source: %w", err)
+	}
+	names := project.ServiceNames()
+
+	return gitOpsSourceSnapshot{
+		path: path, source: source, services: names, location: location,
+		blocked: len(names) == 0,
+	}, nil
+}
+
+func gitOpsSourceBlocker(err error) bool {
+	return errors.Is(err, compose.ErrInvalidSource) || errors.Is(err, compose.ErrExternalSource)
+}
+
+func gitOpsSourceLocation(
+	root string,
+	path string,
+	scope compose.RepositoryScope,
+) (domain.Digest, error) {
+	if !scope.Valid() {
+		return domain.Digest{}, nil
+	}
+	entry, err := filepath.Rel(root, path)
+	if err != nil {
+		return domain.Digest{}, errGitOpsRepositoryInvalid
+	}
+	location, err := scope.Location(filepath.ToSlash(entry))
+	if err != nil {
+		return domain.Digest{}, errGitOpsRepositoryInvalid
+	}
+
+	return location, nil
+}
+
+func prepareGitOpsSource(
+	ctx context.Context,
+	source gitOpsSourceSnapshot,
+	dependencies applyDependencies,
+) ([]gitOpsServiceSnapshot, error) {
+	services := make([]gitOpsServiceSnapshot, 0, len(source.services))
+	pinned := dependenciesWithApplySource(dependencies, source.path, source.source)
+	for _, name := range source.services {
+		arguments := applyInvocation{compose: source.path, service: name, json: true}
+		plan, err := prepareApplyPlan(ctx, arguments, pinned)
+		if err != nil {
+			return nil, err
 		}
 		services = append(services, gitOpsServiceSnapshot{
 			arguments: arguments, dependencies: pinned, plan: plan,
 		})
-	}
-
-	state, err = cleanGitTree(ctx, root)
-	if err != nil || state.head != selectedCommit {
-		return nil, errGitOpsRepositoryInvalid
 	}
 
 	return services, nil
