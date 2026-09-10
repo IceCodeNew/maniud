@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
+	"github.com/IceCodeNew/maniud/internal/store"
 )
 
 const (
@@ -60,6 +61,14 @@ func validWorkloadHealth(health WorkloadHealth) bool {
 
 func activeHealthcheck(workload domain.DesiredWorkload) bool {
 	return workload.Healthcheck != nil && !workload.Healthcheck.Disabled
+}
+
+func appliedHealthcheck(applied store.AppliedService, observed WorkloadHealth) bool {
+	if applied.HealthcheckUnknown {
+		return observed.Status != WorkloadHealthAbsent
+	}
+
+	return applied.Healthcheck
 }
 
 func healthPollInterval(workload domain.DesiredWorkload, startedAt, capturedAt time.Time) time.Duration {

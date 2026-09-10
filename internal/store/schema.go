@@ -11,7 +11,7 @@ type rowQueryer interface {
 }
 
 const (
-	currentSchemaVersion = 2
+	currentSchemaVersion = 3
 	currentObjectCount   = 8
 	schemaTableName      = "schema_version"
 	schemaTableSQL       = "CREATE TABLE schema_version (" +
@@ -104,7 +104,7 @@ const (
 		"image_config_digest BLOB NOT NULL CHECK " +
 		"(typeof(image_config_digest) = 'blob' AND length(image_config_digest) = 32 " +
 		"AND image_config_digest != zeroblob(32)), " +
-		"healthcheck INTEGER NOT NULL CHECK (typeof(healthcheck) = 'integer' AND healthcheck IN (0, 1)), " +
+		"healthcheck INTEGER CHECK (healthcheck IS NULL OR (typeof(healthcheck) = 'integer' AND healthcheck IN (0, 1))), " +
 		"FOREIGN KEY (service_id) REFERENCES writer_leases(service_id), " +
 		"FOREIGN KEY (transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id)) WITHOUT ROWID"
@@ -120,7 +120,7 @@ const (
 		"FOREIGN KEY (transaction_id, service_id) " +
 		"REFERENCES journal_transactions(transaction_id, service_id)) WITHOUT ROWID"
 	initialSchemaSQL = schemaTableSQL + "; " +
-		"INSERT INTO schema_version (singleton, version) VALUES (1, 2); " +
+		"INSERT INTO schema_version (singleton, version) VALUES (1, 3); " +
 		writerLeaseTableSQL + "; " + journalTransactionTableSQL + "; " +
 		journalUnresolvedIndexSQL + "; " + journalRepositoryInventoryIndexSQL + "; " +
 		journalActionTableSQL + "; " + appliedServiceTableSQL + "; " + backupIndexTableSQL
@@ -338,7 +338,7 @@ SELECT
       platform_manifest_digest = zeroblob(32) OR
     typeof(image_config_digest) != 'blob' OR length(image_config_digest) != 32 OR
       image_config_digest = zeroblob(32) OR
-    typeof(healthcheck) != 'integer' OR healthcheck NOT IN (0, 1)) +
+    (healthcheck IS NOT NULL AND (typeof(healthcheck) != 'integer' OR healthcheck NOT IN (0, 1)))) +
   (SELECT count(*) FROM workload_backups WHERE
     typeof(transaction_id) != 'blob' OR length(transaction_id) != 16 OR
     typeof(service_id) != 'blob' OR length(service_id) != 32 OR

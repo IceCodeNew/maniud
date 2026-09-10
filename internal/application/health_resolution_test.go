@@ -927,6 +927,44 @@ func newStoppedRestoreRetryMutation(
 	return state, mutation, runtime
 }
 
+func TestHistoricalRestoreUsesObservedPredecessorHealth(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		status      WorkloadHealthStatus
+		want        error
+		convergence HealthConvergence
+	}{
+		{WorkloadHealthAbsent, nil, HealthConvergenceHealthy},
+		{WorkloadHealthHealthy, nil, HealthConvergenceHealthy},
+		{WorkloadHealthStarting, ErrHealthPending, HealthConvergencePending},
+		{WorkloadHealthUnhealthy, ErrHealthDegraded, HealthConvergenceDegraded},
+		{WorkloadHealthUnknown, ErrHealthDegraded, HealthConvergenceDegraded},
+	} {
+		t.Run(string(test.status), func(t *testing.T) {
+			t.Parallel()
+			state, mutation, runtime := newStoppedRestoreRetryMutation(t)
+			defer closeBootstrapMutation(t, state, mutation)
+			mutation.preparation.Applied.Healthcheck = false
+			mutation.preparation.Applied.HealthcheckUnknown = true
+			runtime.predecessorHealth = WorkloadHealth{Status: test.status}
+			mutation.preparation.Plan.Observation.Health = runtime.predecessorHealth
+			mutation.preparation.Plan.Observation.Lifecycle = WorkloadLifecycleRunning
+			if got := planHealthConvergence(mutation.preparation); got != test.convergence {
+				t.Fatalf("historical restore projection = %s, want %s", got, test.convergence)
+			}
+			mutation.preparation.Plan.Observation.Lifecycle = WorkloadLifecycleExited
+			err := retryRestoreStart(t.Context(), mutation, runtime)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("historical restore = %v, want %v", err, test.want)
+			}
+			if (mutation.preparation.Transaction.State == store.TransactionFailed) != (test.want == nil) ||
+				runtime.predecessor.Lifecycle != WorkloadLifecycleRunning {
+				t.Fatalf("restore settled incorrectly: %s, %v", mutation.preparation.Transaction.State, runtime.predecessor.Lifecycle)
+			}
+		})
+	}
+}
+
 func TestCancelPendingAdoptionOnlyFailsLocalTransaction(t *testing.T) {
 	t.Parallel()
 

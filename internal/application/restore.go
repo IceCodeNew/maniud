@@ -597,7 +597,7 @@ func completeRestore(
 		return ErrConflictingState
 	}
 	if err = requireWorkloadConvergence(
-		mutation.preparation.Applied.Healthcheck,
+		appliedHealthcheck(mutation.preparation.Applied, probe.Health),
 		probe.Workload.Lifecycle,
 		probe.Health,
 	); err != nil {

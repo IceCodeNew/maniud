@@ -295,7 +295,7 @@ func appliedService(
 	return record, err == nil, err
 }
 
-//nolint:funlen // The scanner keeps one SQL row and its complete integrity validation together.
+//nolint:cyclop,funlen // The scanner keeps one SQL row and its complete integrity validation together.
 func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, error) {
 	var (
 		record        AppliedService
@@ -310,7 +310,7 @@ func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, er
 		reference     []byte
 		manifest      []byte
 		imageConfig   []byte
-		healthcheck   int
+		healthcheck   sql.NullInt64
 	)
 
 	err := row.Scan(
@@ -343,10 +343,11 @@ func scanAppliedService(ctx context.Context, row rowScanner) (AppliedService, er
 
 	record.Kind = TransactionKind(kind)
 	record.Runtime = parsedRuntime
-	if healthcheck != 0 && healthcheck != 1 {
+	if healthcheck.Valid && healthcheck.Int64 != 0 && healthcheck.Int64 != 1 {
 		return AppliedService{}, ErrInvalidState
 	}
-	record.Healthcheck = healthcheck == 1
+	record.Healthcheck = healthcheck.Valid && healthcheck.Int64 == 1
+	record.HealthcheckUnknown = !healthcheck.Valid
 	if !validTransactionKind(record.Kind) || !copyAppliedServiceIdentity(
 		&record,
 		identifier,

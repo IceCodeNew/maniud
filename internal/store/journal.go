@@ -110,6 +110,8 @@ type AppliedService struct {
 	PlatformManifestDigest domain.Digest
 	ImageConfigDigest      domain.Digest
 	Healthcheck            bool
+	// HealthcheckUnknown identifies records written before health metadata was persisted.
+	HealthcheckUnknown bool
 }
 
 // BackupIndexIntent binds a complete manifest to the successful upgrade that

@@ -399,7 +399,7 @@ func planHealthConvergence(preparation Preparation) HealthConvergence {
 
 	active := activeHealthcheck(preparation.Workload)
 	if preparation.Plan.Kind == PlanRestore {
-		active = preparation.HasApplied && preparation.Applied.Healthcheck
+		active = preparation.HasApplied && appliedHealthcheck(preparation.Applied, preparation.Plan.Observation.Health)
 	}
 	err := requireWorkloadConvergence(
 		active,
