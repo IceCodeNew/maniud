@@ -131,6 +131,7 @@ func addReleasedV1History(t *testing.T, path string) (AppliedService, BackupInde
 	applied.ReferenceDigest = domain.Digest{83}
 	applied.PlatformManifestDigest = domain.Digest{89}
 	applied.ImageConfigDigest = domain.Digest{97}
+	applied.HealthcheckUnknown = true
 	backup := BackupIndex{
 		TransactionID: applied.TransactionID, Runtime: domain.RuntimeDocker,
 		ManifestPath:   applied.TransactionID.String() + "/manifest.json",

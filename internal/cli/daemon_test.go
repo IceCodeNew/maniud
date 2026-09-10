@@ -30,6 +30,19 @@ type restartedRecoveryOperations struct {
 	durable *application.ApplyFacade
 }
 
+func pollRegisteredRepository(
+	ctx context.Context,
+	interval time.Duration,
+	output io.Writer,
+	reconcile func() error,
+) error {
+	return pollRegisteredRepositoryUntilStop(ctx, interval, output, reconcile, nil, nil)
+}
+
+func waitDaemonInterval(ctx context.Context, interval time.Duration) error {
+	return waitDaemonIntervalOrStop(ctx, interval, nil)
+}
+
 func (operations *restartedRecoveryOperations) RepositoryInventory(
 	ctx context.Context,
 	scope compose.RepositoryScope,
@@ -309,10 +322,26 @@ func TestDaemonReconcilesRegisteredRepositoryImmediatelyAndThenPolls(t *testing.
 	}, environment); err != nil {
 		t.Fatalf("executeGitOpsInit() error = %v", err)
 	}
+	statePath, err := defaultStatePath(environment)
+	if err != nil {
+		t.Fatalf("defaultStatePath() error = %v", err)
+	}
+	registrationPath := gitOpsRegistrationPath(statePath)
+	registration, err := readGitOpsRegistration(registrationPath)
+	if err != nil {
+		t.Fatalf("readGitOpsRegistration() error = %v", err)
+	}
+	registration.RemoteURL = ""
+	if err = os.Remove(registrationPath); err != nil {
+		t.Fatalf("Remove(registration) error = %v", err)
+	}
+	if err = writeGitOpsRegistration(registrationPath, registration); err != nil {
+		t.Fatalf("write unbound registration error = %v", err)
+	}
 
 	timed, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	err := executeDaemon(
+	err = executeDaemon(
 		timed, daemonInvocation{operation: commandDaemonStart, interval: time.Hour}, io.Discard, environment, io.Discard,
 		func() (string, error) { return root, nil },
 		nil,
@@ -320,6 +349,10 @@ func TestDaemonReconcilesRegisteredRepositoryImmediatelyAndThenPolls(t *testing.
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("executeDaemon(poll wait) error = %v", err)
+	}
+	registration, err = readGitOpsRegistration(registrationPath)
+	if err != nil || registration.RemoteURL != root {
+		t.Fatalf("bound registration = %#v, %v", registration, err)
 	}
 
 	rapid, stopRapid := context.WithTimeout(t.Context(), 500*time.Millisecond)
@@ -534,15 +567,12 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotFetchBeforeRecoverySettles(t *t
 
 				return repositoryRecoverySource(t, root, requested), nil
 			}
-			registration := gitOpsRegistration{
-				Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
-				Remote: gitOpsRemoteName, BaselineCommit: state.head,
-			}
+			registration := testGitOpsRegistration(t, root, state.head)
 			fetched := false
 			output := new(bytes.Buffer)
 			err = reconcileRegisteredGitOpsCheckout(
 				t.Context(), output, registration, dependencies,
-				func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
+				func(context.Context, gitOpsRegistration) (gitOpsCheckoutSelection, error) {
 					fetched = true
 
 					return gitOpsCheckoutSelection{}, nil
@@ -643,14 +673,11 @@ func TestReconcileRegisteredGitOpsCheckoutRecoversDurableStateBeforeFetch(t *tes
 	dependencies.loadSource = func(_ context.Context, requested string) (compose.Source, error) {
 		return repositoryRecoverySource(t, root, requested), nil
 	}
-	registration := gitOpsRegistration{
-		Version: gitOpsRegistrationVersion, Repository: root, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: checkout.head,
-	}
+	registration := testGitOpsRegistration(t, root, checkout.head)
 	output := new(bytes.Buffer)
 	err = reconcileRegisteredGitOpsCheckout(
 		t.Context(), output, registration, dependencies,
-		func(context.Context, string, string, string) (gitOpsCheckoutSelection, error) {
+		func(context.Context, gitOpsRegistration) (gitOpsCheckoutSelection, error) {
 			events = append(events, "fetch")
 
 			return gitOpsCheckoutSelection{
@@ -681,10 +708,7 @@ func TestReconcileRegisteredGitOpsCheckoutDoesNotMutateLocalAheadCommit(t *testi
 	events := make([]string, 0, 4)
 	operations := &applyOperationsFixture{events: &events}
 	dependencies := operationApplyDependencies(t, &events, operations)
-	registration := gitOpsRegistration{
-		Version: gitOpsRegistrationVersion, Repository: checkout, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: registered,
-	}
+	registration := testGitOpsRegistration(t, checkout, registered)
 
 	output := new(bytes.Buffer)
 	err := reconcileRegisteredGitOpsCheckout(
@@ -705,10 +729,8 @@ func TestReconcileRegisteredGitOpsCheckoutContainsRepositoryIdentityFailures(t *
 	t.Parallel()
 
 	checkout, _, registered := initFastForwardGitOpsTestRepositories(t)
-	registration := gitOpsRegistration{
-		Version: gitOpsRegistrationVersion, Repository: checkout, Branch: gitOpsTestBranch,
-		Remote: testMissingName, BaselineCommit: registered,
-	}
+	registration := testGitOpsRegistration(t, checkout, registered)
+	registration.Remote = testMissingName
 	if err := reconcileRegisteredGitOpsCheckout(
 		t.Context(), io.Discard, registration, applyDependencies{}, fastForwardGitOpsCheckout,
 		compose.NewRepositoryScope,
@@ -723,6 +745,23 @@ func TestReconcileRegisteredGitOpsCheckoutContainsRepositoryIdentityFailures(t *
 		},
 	); !errors.Is(err, errGitOpsRepositoryInvalid) {
 		t.Fatalf("reconcileRegisteredGitOpsCheckout(scope failure) error = %v", err)
+	}
+
+	events := make([]string, 0, 2)
+	operations := &applyOperationsFixture{events: &events}
+	output := new(bytes.Buffer)
+	if err := reconcileRegisteredGitOpsCheckout(
+		t.Context(), output, registration, operationApplyDependencies(t, &events, operations),
+		func(context.Context, gitOpsRegistration) (gitOpsCheckoutSelection, error) {
+			return gitOpsCheckoutSelection{}, errClosedOutput
+		},
+		compose.NewRepositoryScope,
+	); !errors.Is(err, errClosedOutput) {
+		t.Fatalf("reconcileRegisteredGitOpsCheckout(fetch failure) error = %v", err)
+	}
+	summary := decodeGitOpsCycleSummary(t, output)
+	if summary.Status != gitOpsCycleFailed || summary.Failed != 1 {
+		t.Fatalf("fetch-failure cycle summary = %#v", summary)
 	}
 }
 

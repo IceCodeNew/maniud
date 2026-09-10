@@ -361,6 +361,13 @@ func TestMountProbeFallbackWarningPolicy(t *testing.T) {
 			warn:        true,
 		},
 		{
+			name: "health degraded storage action",
+			preparation: recoveryWarningPreparation(
+				PlanHealthDegraded, store.TransactionUpgrade, storageRestoreActionKind,
+			),
+			warn: true,
+		},
+		{
 			name: "bootstrap recovery", preparation: recoveryWarningPreparation(
 				PlanResume, store.TransactionBootstrap, storageRestoreActionKind,
 			),

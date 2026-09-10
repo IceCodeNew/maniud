@@ -243,7 +243,10 @@ func TestObserveWorkloadMapsDockerProbe(t *testing.T) {
 			}
 
 			valid := got.State == test.wantState && got.ConfigurationMatches == test.wantConfig &&
-				got.Ownership.Status == test.wantOwner && got.Running == (test.wantState == application.WorkloadObservationPresent)
+				got.Ownership.Status == test.wantOwner &&
+				got.StartedAt.IsZero() == (test.wantState == application.WorkloadObservationMissing) &&
+				(got.Lifecycle == application.WorkloadLifecycleRunning) ==
+					(test.wantState == application.WorkloadObservationPresent)
 			if !valid {
 				t.Fatalf("ObserveWorkload() = %#v", got)
 			}
@@ -254,7 +257,9 @@ func TestObserveWorkloadMapsDockerProbe(t *testing.T) {
 func applicationObservationTests(t *testing.T) []applicationObservationTest {
 	t.Helper()
 
-	observed := validContainerDocument(t, managedContainerLabels(), runningContainerState())
+	state := runningContainerState()
+	state.StartedAt = testContainerStartedAt
+	observed := validContainerDocument(t, managedContainerLabels(), state)
 
 	return []applicationObservationTest{
 		{

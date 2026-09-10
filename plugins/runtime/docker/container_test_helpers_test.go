@@ -41,6 +41,7 @@ const (
 	testContainerListPath    = "/v1.55/containers/json"
 	testOtherValue           = "other"
 	testProcessCommand       = "serve"
+	testContainerStartedAt   = "2026-09-02T10:00:00.123456789Z"
 	testOversizedCase        = "oversized"
 	dockerProtocolTCP        = "tcp"
 	dockerProtocolUDP        = "udp"
@@ -65,6 +66,7 @@ type containerStateFixture struct {
 	Paused     bool   `json:"Paused"`
 	Restarting bool   `json:"Restarting"`
 	Dead       bool   `json:"Dead"`
+	StartedAt  string `json:"StartedAt,omitempty"`
 }
 
 //nolint:tagliatelle // Docker Engine uses exported Go field names in this response.
@@ -373,7 +375,7 @@ func assertManagedContainerProbe(t *testing.T, probe ContainerProbe) {
 			PlatformManifest: manifest,
 			WorkloadSpec:     observedTestContainerWorkloadSpec(),
 			State:            ContainerRunning,
-			Running:          true,
+			Health:           application.WorkloadHealth{Status: application.WorkloadHealthAbsent},
 			Ownership: domain.WorkloadOwnership{
 				Status:           domain.OwnershipManaged,
 				Service:          testContainerService,

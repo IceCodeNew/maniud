@@ -599,7 +599,7 @@ func TestReaderInternalGuardsClassifyFailures(t *testing.T) {
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("nil Actions() error = %v", err)
 	}
-	_, err = nilReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	_, err = nilReader.UnresolvedRepositoryTransactions(t.Context(), scope)
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("nil UnresolvedRepositoryTransactions() error = %v", err)
 	}
@@ -609,11 +609,11 @@ func TestReaderInternalGuardsClassifyFailures(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("empty UnresolvedRepositoryTransactions(cancelled) error = %v", err)
 	}
-	result, err := emptyReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	result, err := emptyReader.UnresolvedRepositoryTransactions(t.Context(), scope)
 	if err != nil || result != nil {
 		t.Fatalf("empty UnresolvedRepositoryTransactions() = %#v, %v", result, err)
 	}
-	_, err = invalidReader.UnresolvedRepositoryTransactions(context.Background(), scope)
+	_, err = invalidReader.UnresolvedRepositoryTransactions(t.Context(), scope)
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("invalid UnresolvedRepositoryTransactions() error = %v", err)
 	}
@@ -671,7 +671,7 @@ func TestReaderInternalFaultBoundaries(t *testing.T) {
 	queryReader := requireOpenReader(t, path)
 	requireNoError(t, queryReader.transaction.Rollback())
 	_, err = queryReader.UnresolvedRepositoryTransactions(
-		context.Background(),
+		t.Context(),
 		domain.Hash([]byte("repository scope")),
 	)
 	if !errors.Is(err, ErrInvalidState) {

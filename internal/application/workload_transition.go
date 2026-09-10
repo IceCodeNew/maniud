@@ -77,6 +77,7 @@ type incompleteWorkloadTransitionRuntime interface {
 type WorkloadTransitionProbe struct {
 	State    WorkloadEffectProbeState
 	Workload ExistingWorkload
+	Health   WorkloadHealth
 }
 
 type workloadTransitionEffect struct {
@@ -253,6 +254,10 @@ func validExistingWorkload(workload ExistingWorkload) bool {
 		workload.ConfigurationDigest != (domain.Digest{}) &&
 		(workload.Lifecycle == WorkloadLifecycleCreated || workload.Lifecycle == WorkloadLifecycleRunning ||
 			workload.Lifecycle == WorkloadLifecycleExited) && validTransitionOwnership(workload.Ownership)
+}
+
+func validWorkloadLifecycle(lifecycle WorkloadLifecycle) bool {
+	return lifecycle >= WorkloadLifecycleCreated && lifecycle <= WorkloadLifecycleDead
 }
 
 func validTransitionOwnership(ownership domain.WorkloadOwnership) bool {

@@ -152,11 +152,7 @@ func repositoryInventory(
 ) ([]RepositoryTransaction, error) {
 	inventory := make([]RepositoryTransaction, 0, len(records))
 	for _, record := range records {
-		if record.ID == (store.TransactionID{}) || record.SourceDigest == (domain.Digest{}) ||
-			record.RepositoryLocationDigest == (domain.Digest{}) || !record.HasRepository ||
-			record.RepositoryVersion != scope.Version ||
-			record.RepositoryScopeDigest != scope.Digest ||
-			(record.State != store.TransactionActive && record.State != store.TransactionDegraded) {
+		if !validRepositoryTransaction(record, scope) {
 			return nil, ErrConflictingState
 		}
 		inventory = append(inventory, RepositoryTransaction{
@@ -166,6 +162,16 @@ func repositoryInventory(
 	}
 
 	return inventory, nil
+}
+
+func validRepositoryTransaction(record store.Transaction, scope compose.RepositoryScope) bool {
+	validState := record.State == store.TransactionActive ||
+		record.State == store.TransactionDegraded ||
+		record.State == store.TransactionHealthDegraded
+
+	return record.ID != (store.TransactionID{}) && record.SourceDigest != (domain.Digest{}) &&
+		record.RepositoryLocationDigest != (domain.Digest{}) && record.HasRepository &&
+		record.RepositoryVersion == scope.Version && record.RepositoryScopeDigest == scope.Digest && validState
 }
 
 // Apply executes one mutation and closes runtime and journal resources before

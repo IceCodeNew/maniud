@@ -159,7 +159,8 @@ type applyCommandLine struct {
 type tuiCommandLine struct{}
 
 func (*tuiCommandLine) Help() string {
-	return "Open an interactive workspace for registered services or a committed Compose file.\n\n" +
+	return "Open an interactive workspace for repository setup, service onboarding, deployment parameter edits, " +
+		"LLM recommendations, dry-run review, and apply.\n\n" +
 		"The command requires terminal input and output. For non-interactive validation, use " +
 		"'maniud apply --dry-run <compose>' or 'maniud apply --dry-run --json <compose>'."
 }
@@ -170,8 +171,8 @@ func (*applyCommandLine) Help() string {
 		"made. A failed dry run exits with a non-zero status and prints a failure object.\n\n" +
 		"With --json, the result contains status, project, service, runtime, platform, image, source_digest, " +
 		"desired_digest, and warnings. Status is bootstrap, adopt, unchanged, upgrade, resume, probe-unknown-effect, " +
-		"or restore; these mean create, adopt, retain, replace, continue, verify an uncertain effect, or recover the " +
-		"previous workload."
+		"restore, or health-degraded; these mean create, adopt, retain, replace, continue, verify an uncertain effect, " +
+		"recover the previous workload, or wait for an explicit health decision."
 }
 
 type gitOpsCommandLine struct {

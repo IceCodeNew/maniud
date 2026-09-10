@@ -30,7 +30,15 @@ const (
 	testOpenDirFailure   = "directory"
 	testDirectoryClose   = "directory close"
 	testRootClose        = "root close"
+	tuiExpectedArtifact  = "expected"
+	tuiForeignArtifact   = "foreign"
 )
+
+func gitCommitHasSignature(ctx context.Context, repository, head string) bool {
+	present, err := gitCommitSignaturePresent(ctx, repository, head)
+
+	return err == nil && present
+}
 
 func TestTUIGenInvocationAcceptsOneNonExecutingServiceSource(t *testing.T) {
 	t.Parallel()
@@ -107,7 +115,7 @@ func TestTUIWorkspaceCreatesProvenUnsignedCommit(t *testing.T) {
 		t.Fatalf("Stage() error = %v", err)
 	}
 	result, err := workspace.Commit(t.Context(), "Add api service", true)
-	if err != nil || !result.Committed || result.NeedsUnsignedApproval || result.ValidationUnavailable ||
+	if err != nil || result.Outcome != tui.CommitSucceeded ||
 		result.Request.Service != applyServiceValue || result.Request.Source.Repository == nil ||
 		!result.Request.Repository.ValidFor(result.Request.Source.Repository.Digest) {
 		t.Fatalf("Commit(unsigned) = %#v, %v", result, err)
@@ -123,7 +131,7 @@ func TestTUIWorkspaceCreatesProvenUnsignedCommit(t *testing.T) {
 		t.Fatalf("unsigned commit metadata = %q, %v", metadata, err)
 	}
 	wantInstructions := []string{
-		"git -C " + shellArgument(draft.repository) + " push origin '" + gitOpsTestBranch + "'",
+		"git -C " + shellArgument(draft.repository) + " push " + gitOpsRemoteName + " '" + gitOpsTestBranch + "'",
 		tuiCommand,
 	}
 	if instructions := workspace.Instructions(); !slices.Equal(instructions, wantInstructions) {
@@ -131,7 +139,6 @@ func TestTUIWorkspaceCreatesProvenUnsignedCommit(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // Each assertion proves one step of the real signed-commit path.
 func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 	home := t.TempDir()
 	key := filepath.Join(home, "signing-key")
@@ -150,7 +157,7 @@ func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 		t.Fatalf("WriteFile(.gitconfig) error = %v", err)
 	}
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv(xdgConfigHomeEnvironment, filepath.Join(home, "config"))
 	t.Setenv("SSH_AUTH_SOCK", "")
 
 	draft := newTUIWorkspaceDraft(t)
@@ -159,7 +166,7 @@ func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 		t.Fatalf("Stage() error = %v", err)
 	}
 	result, err := workspace.Commit(t.Context(), "Add api service", false)
-	if err != nil || !result.Committed || result.NeedsUnsignedApproval || result.ValidationUnavailable ||
+	if err != nil || result.Outcome != tui.CommitSucceeded ||
 		result.Request.Source.Repository == nil {
 		t.Fatalf("Commit(signed) = %#v, %v", result, err)
 	}
@@ -173,7 +180,7 @@ func TestTUIWorkspaceCreatesProvenSignedCommit(t *testing.T) {
 func TestTUIWorkspaceOffersUnsignedFallbackOnlyForUnchangedStage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv(xdgConfigHomeEnvironment, filepath.Join(home, "config"))
 	t.Setenv("GNUPGHOME", filepath.Join(home, "gnupg"))
 	t.Setenv("GPG_TTY", "")
 	t.Setenv("SSH_AUTH_SOCK", "")
@@ -184,7 +191,7 @@ func TestTUIWorkspaceOffersUnsignedFallbackOnlyForUnchangedStage(t *testing.T) {
 		t.Fatalf("Stage() error = %v", err)
 	}
 	result, err := workspace.Commit(t.Context(), "Add api service", false)
-	if err != nil || !result.NeedsUnsignedApproval || result.Committed ||
+	if err != nil || result.Outcome != tui.CommitNeedsUnsignedApproval ||
 		!verifyTUIStagedState(t.Context(), *workspace.staged) {
 		t.Fatalf("Commit(signed failure) = %#v, %v", result, err)
 	}
@@ -199,7 +206,7 @@ func TestTUIWorkspaceOffersUnsignedFallbackOnlyForUnchangedStage(t *testing.T) {
 	if result, err = workspace.Commit(t.Context(), "Add api service", false); !errors.Is(
 		err,
 		compose.ErrInvalidSource,
-	) || result.NeedsUnsignedApproval {
+	) || result.Outcome != 0 {
 		t.Fatalf("Commit(drift) = %#v, %v", result, err)
 	}
 }
@@ -218,15 +225,15 @@ func TestTUIWorkspaceRejectsRepositorySignerOverride(t *testing.T) {
 		t.Fatalf("git config error = %v", err)
 	}
 	result, err := workspace.Commit(t.Context(), "Add api service", false)
-	if !errors.Is(err, compose.ErrInvalidSource) || result.Committed || result.NeedsUnsignedApproval ||
+	if !errors.Is(err, compose.ErrInvalidSource) || result.Outcome != 0 ||
 		workspace.staged == nil {
 		t.Fatalf("Commit(repository signer) = %#v, %v", result, err)
 	}
-	if err = commitTUIStaged(t.Context(), *workspace.staged, "Add api service", false); !errors.Is(
+	if err = commitTUIStagedProof(t.Context(), workspace.staged.proof(), "Add api service", false); !errors.Is(
 		err,
 		compose.ErrInvalidSource,
 	) {
-		t.Fatalf("commitTUIStaged(repository signer) error = %v", err)
+		t.Fatalf("commitTUIStagedProof(repository signer) error = %v", err)
 	}
 }
 
@@ -243,14 +250,14 @@ func TestTUIWorkspaceProvesCommitAfterCallerCancellation(t *testing.T) {
 		ctx,
 		"Add api service",
 		true,
-		func(ctx context.Context, staged tuiStagedService, message string, unsigned bool) error {
-			commitErr := commitTUIStaged(ctx, staged, message, unsigned)
+		func(ctx context.Context, staged tuiStagedProof, message string, unsigned bool) error {
+			commitErr := commitTUIStagedProof(ctx, staged, message, unsigned)
 			cancel()
 
 			return commitErr
 		},
 	)
-	if err != nil || ctx.Err() == nil || !result.Committed || result.ValidationUnavailable ||
+	if err != nil || ctx.Err() == nil || result.Outcome != tui.CommitSucceeded ||
 		result.Request.Source.Repository == nil {
 		t.Fatalf("Commit(cancelled after commit) = %#v, %v, context %v", result, err, ctx.Err())
 	}
@@ -397,6 +404,43 @@ func TestTUIWorkspaceRecoversInterruptedDraftPublication(t *testing.T) {
 	}
 	if !generatedTUIDraftFilesMatch(generated) {
 		t.Fatal("recovered swap file does not match generated content")
+	}
+}
+
+func TestTUIWorkspaceRecoversIgnoredInterruptedDraftPublication(t *testing.T) {
+	t.Parallel()
+
+	workspace, repository := newRegisteredTUIWorkspace(t)
+	if err := os.WriteFile(filepath.Join(repository, ".git", "info", "exclude"), []byte("*.swp\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(exclude) error = %v", err)
+	}
+	image := "registry.example/team/api@sha256:" + tuiTestDigest
+	generated := generatedCompose{
+		content: []byte("services:\n  api:\n    image: " + image + "\n"),
+		path:    tuiTestServicePath, absolutePath: filepath.Join(repository, tuiTestServicePath),
+		runtime: domain.RuntimeDocker, image: image, service: applyServiceValue,
+	}
+	workspace.render = func(context.Context, genInvocation, genDependencies) (generatedCompose, error) {
+		return generated, nil
+	}
+	if _, err := workspace.Preview(t.Context(), "docker://"+image); err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if err := os.Link(tuiDraftPath(generated.absolutePath), generated.absolutePath); err != nil {
+		t.Fatalf("Link(partial publication) error = %v", err)
+	}
+
+	restarted := defaultTUIServiceWorkspace(workspace.environment, workspace.runtimes)
+	restarted.render = workspace.render
+	draft, err := restarted.Preview(t.Context(), "docker://"+image)
+	if err != nil || !draft.Recovered {
+		t.Fatalf("Preview(restarted) = %#v, %v", draft, err)
+	}
+	if _, err = os.Lstat(generated.absolutePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial final file still exists: %v", err)
+	}
+	if _, err = restarted.Stage(t.Context()); err != nil {
+		t.Fatalf("Stage(recovered ignored draft) error = %v", err)
 	}
 }
 
@@ -717,6 +761,24 @@ func TestTUIWorkspaceContainsGitTransactionFailures(t *testing.T) {
 	}
 }
 
+func TestGitCommitSignatureIgnoresCommitMessage(t *testing.T) {
+	t.Parallel()
+
+	draft := newTUIWorkspaceDraft(t)
+	if _, err := runGit(
+		t.Context(), draft.repository,
+		"-c", "user.name=Maniud Tests", "-c", "user.email=maniud@example.invalid",
+		"-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--no-gpg-sign",
+		"-m", "unsigned\n\ngpgsig forged",
+	); err != nil {
+		t.Fatalf("create forged-message commit: %v", err)
+	}
+	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
+	if err != nil || gitCommitHasSignature(t.Context(), draft.repository, head) {
+		t.Fatalf("forged-message signature = true, resolve error = %v", err)
+	}
+}
+
 //nolint:cyclop // Assertions cover draft publication, restoration, and resulting instructions.
 func TestTUIWorkspaceMovesDraftArtifactsAndBuildsInstructions(t *testing.T) {
 	t.Parallel()
@@ -937,6 +999,9 @@ func TestTUIWorkspaceContainsStableStageFailures(t *testing.T) {
 		if err := os.Chmod(services, 0o700); err != nil { //nolint:gosec // Restore private owner access.
 			t.Fatalf("restore services mode error = %v", err)
 		}
+		if stageErr == nil {
+			t.Skip("filesystem allowed draft publication without directory write permission")
+		}
 		if stageErr == nil || workspace.draft == nil || !workspace.draft.recovered {
 			t.Fatalf("Stage(publication failure) error = %v, workspace = %#v", stageErr, workspace)
 		}
@@ -956,7 +1021,7 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 			t.Fatalf("Stage() error = %v", err)
 		}
 		result, err := workspace.Commit(t.Context(), "Add api service", true)
-		if err != nil || !result.Committed || !result.ValidationUnavailable {
+		if err != nil || result.Outcome != tui.CommitValidationUnavailable {
 			t.Fatalf("Commit(missing runtime base) = %#v, %v", result, err)
 		}
 	})
@@ -971,9 +1036,9 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 		}
 		result, err := workspace.commitWith(
 			t.Context(), "Add api service", true,
-			func(context.Context, tuiStagedService, string, bool) error { return io.ErrClosedPipe },
+			func(context.Context, tuiStagedProof, string, bool) error { return io.ErrClosedPipe },
 		)
-		if !errors.Is(err, io.ErrClosedPipe) || result.NeedsUnsignedApproval || result.Committed {
+		if !errors.Is(err, io.ErrClosedPipe) || result.Outcome != 0 {
 			t.Fatalf("Commit(command failure) = %#v, %v", result, err)
 		}
 	})
@@ -988,7 +1053,7 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 		}
 		if _, err := workspace.commitWith(
 			t.Context(), "Add api service", true,
-			func(context.Context, tuiStagedService, string, bool) error { return nil },
+			func(context.Context, tuiStagedProof, string, bool) error { return nil },
 		); !errors.Is(
 			err,
 			compose.ErrInvalidSource,
@@ -1008,13 +1073,13 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		result, err := workspace.commitWith(
 			ctx, "Add api service", true,
-			func(context.Context, tuiStagedService, string, bool) error {
+			func(context.Context, tuiStagedProof, string, bool) error {
 				cancel()
 
 				return nil
 			},
 		)
-		if !errors.Is(err, context.Canceled) || result.Committed || result.NeedsUnsignedApproval {
+		if !errors.Is(err, context.Canceled) || result.Outcome != 0 {
 			t.Fatalf("Commit(cancelled command) = %#v, %v", result, err)
 		}
 	})
@@ -1035,7 +1100,7 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 			_ = os.Chmod(services, 0o700) //nolint:gosec // Cleanup restores private owner access.
 		})
 		if err := workspace.Suspend(t.Context()); err == nil {
-			t.Fatal("Suspend(read-only generated file) succeeded")
+			t.Skip("filesystem allowed draft restoration without directory write permission")
 		}
 	})
 
@@ -1061,7 +1126,7 @@ func TestTUIWorkspaceContainsCommitAndSuspendBoundaryFailures(t *testing.T) {
 			t.Fatalf("Stage() error = %v", err)
 		}
 		result, err := workspace.Commit(t.Context(), tuiTestCommitMessage, true)
-		if err != nil || !result.Committed || !result.PreparationRequired || result.ValidationUnavailable {
+		if err != nil || result.Outcome != tui.CommitPreparationRequired {
 			t.Fatalf("Commit(preparation) = %#v, %v", result, err)
 		}
 	})
@@ -1220,8 +1285,8 @@ func committedTUIStagedFixture(t *testing.T, draft tuiServiceDraft) (tuiStagedSe
 		t.Fatalf("stageTUIService() error = %v", err)
 	}
 	staged := tuiStagedService{draft: draft, paths: paths, expectedTree: expectedTree}
-	if err = commitTUIStaged(t.Context(), staged, "Add api service", true); err != nil {
-		t.Fatalf("commitTUIStaged() error = %v", err)
+	if err = commitTUIStagedProof(t.Context(), staged.proof(), "Add api service", true); err != nil {
+		t.Fatalf("commitTUIStagedProof() error = %v", err)
 	}
 	head, err := resolveGitObject(t.Context(), draft.repository, "HEAD^{commit}")
 	if err != nil {
@@ -1237,7 +1302,7 @@ func TestTUIWorkspaceContainsDraftPublicationFailures(t *testing.T) {
 
 	root := t.TempDir()
 	other := t.TempDir()
-	if err := moveTUIArtifact(filepath.Join(root, "draft"), filepath.Join(other, "final")); !errors.Is(
+	if err := moveTUIArtifact(filepath.Join(root, "draft"), filepath.Join(other, "final"), []byte("draft")); !errors.Is(
 		err,
 		compose.ErrInvalidSource,
 	) {
@@ -1246,6 +1311,7 @@ func TestTUIWorkspaceContainsDraftPublicationFailures(t *testing.T) {
 	if err := moveTUIArtifact(
 		filepath.Join(root, testMissingName, "draft"),
 		filepath.Join(root, testMissingName, "final"),
+		[]byte("draft"),
 	); !errors.Is(err, compose.ErrInvalidSource) {
 		t.Fatalf("moveTUIArtifact(missing parent) error = %v", err)
 	}
@@ -1344,6 +1410,31 @@ func TestTUIDraftValidationBoundaries(t *testing.T) {
 	}
 	if validTUIDraftStatusEntry(root, "?? services/.api.yaml.swp") {
 		t.Fatal("symlink draft status entry was accepted")
+	}
+	opened, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatalf("OpenRoot() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	if _, _, matches := matchingTUIArtifact(
+		opened, "missing", []byte("draft"), generatedComposeDefaultOperations(),
+	); matches {
+		t.Fatal("missing artifact matched")
+	}
+	artifactPath := filepath.Join(root, "draft")
+	if err = os.WriteFile(artifactPath, []byte("draft"), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	if err = moveTUIArtifact(artifactPath, filepath.Join(root, "final"), []byte("different")); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifact(content mismatch) error = %v", err)
+	}
+	if err = removeMatchingTUIArtifact(generatedArtifact{
+		path: artifactPath, content: []byte("different"),
+	}); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("removeMatchingTUIArtifact(content mismatch) error = %v", err)
 	}
 
 	repository := initGitOpsTestRepository(t)
@@ -1501,10 +1592,182 @@ func TestTUIDraftMoveContainsFilesystemFailures(t *testing.T) {
 			}
 			operations := generatedComposeDefaultOperations()
 			test.configure(&operations)
-			if err := moveTUIArtifactWithOperations(from, to, operations); err == nil {
+			if err := moveTUIArtifactWithOperations(from, to, []byte("draft"), operations); err == nil {
 				t.Fatal("moveTUIArtifactWithOperations() succeeded")
 			}
 		})
+	}
+}
+
+func TestTUIDraftMoveRejectsSourceReplacementWithoutRemovingIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	from := filepath.Join(root, "draft")
+	to := filepath.Join(root, "final")
+	if err := os.WriteFile(from, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseLink := operations.link
+	operations.link = func(directory *os.Root, fromName, toName string) error {
+		if err := os.Remove(from); err != nil {
+			return fmt.Errorf("replace draft source: %w", err)
+		}
+		if err := os.WriteFile(from, []byte(tuiForeignArtifact), 0o600); err != nil {
+			return fmt.Errorf("write foreign draft source: %w", err)
+		}
+
+		return baseLink(directory, fromName, toName)
+	}
+	if err := moveTUIArtifactWithOperations(from, to, []byte(tuiExpectedArtifact), operations); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifactWithOperations(replacement) error = %v", err)
+	}
+	assertTUIArtifacts(t, map[string]string{from: tuiForeignArtifact, to: tuiForeignArtifact})
+	if !tuiArtifactsShareIdentity(from, to) {
+		t.Fatal("preserved replacement links do not share identity")
+	}
+}
+
+func TestTUIDraftMoveRejectsTargetReplacementWithoutRemovingIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	from := filepath.Join(root, "draft")
+	to := filepath.Join(root, "final")
+	if err := os.WriteFile(from, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseLink := operations.link
+	operations.link = func(directory *os.Root, fromName, toName string) error {
+		if err := baseLink(directory, fromName, toName); err != nil {
+			return err
+		}
+		if err := os.Remove(to); err != nil {
+			return fmt.Errorf("replace linked target: %w", err)
+		}
+
+		return os.WriteFile(to, []byte(tuiForeignArtifact), 0o600)
+	}
+	if err := moveTUIArtifactWithOperations(from, to, []byte(tuiExpectedArtifact), operations); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifactWithOperations(target replacement) error = %v", err)
+	}
+	assertTUIArtifacts(t, map[string]string{from: tuiExpectedArtifact, to: tuiForeignArtifact})
+}
+
+func TestTUIDraftMovePreservesReplacementAfterLink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	from := filepath.Join(root, "draft")
+	to := filepath.Join(root, "final")
+	if err := os.WriteFile(from, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseSync := operations.syncDirectory
+	operations.syncDirectory = func(directory *os.File) error {
+		if err := os.Remove(from); err != nil {
+			return fmt.Errorf("replace linked draft: %w", err)
+		}
+		if err := os.WriteFile(from, []byte(tuiForeignArtifact), 0o600); err != nil {
+			return fmt.Errorf("write linked draft replacement: %w", err)
+		}
+		operations.syncDirectory = baseSync
+
+		return baseSync(directory)
+	}
+	if err := moveTUIArtifactWithOperations(from, to, []byte(tuiExpectedArtifact), operations); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifactWithOperations(post-link replacement) error = %v", err)
+	}
+	assertTUIArtifacts(t, map[string]string{from: tuiForeignArtifact, to: tuiExpectedArtifact})
+}
+
+func TestTUIDraftMovePreservesSourceReplacementBeforeRemoval(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	from := filepath.Join(root, "draft")
+	to := filepath.Join(root, "final")
+	if err := os.WriteFile(from, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseLstat := operations.lstat
+	sourceChecks := 0
+	fromName := filepath.Base(from)
+	operations.lstat = func(directory *os.Root, name string) (os.FileInfo, error) {
+		if name == fromName {
+			sourceChecks++
+		}
+		if name != fromName || sourceChecks != 4 {
+			return baseLstat(directory, name)
+		}
+		if err := os.Remove(from); err != nil {
+			return nil, fmt.Errorf("replace source before removal: %w", err)
+		}
+		if err := os.WriteFile(from, []byte(tuiForeignArtifact), 0o600); err != nil {
+			return nil, fmt.Errorf("write source replacement before removal: %w", err)
+		}
+
+		return baseLstat(directory, name)
+	}
+	if err := moveTUIArtifactWithOperations(from, to, []byte(tuiExpectedArtifact), operations); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifactWithOperations(pre-remove replacement) error = %v", err)
+	}
+	assertTUIArtifacts(t, map[string]string{from: tuiForeignArtifact, to: tuiExpectedArtifact})
+}
+
+func TestTUIDraftMovePreservesTargetReplacementAfterSourceRemoval(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	from := filepath.Join(root, "draft")
+	to := filepath.Join(root, "final")
+	if err := os.WriteFile(from, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseSync := operations.syncDirectory
+	syncCalls := 0
+	operations.syncDirectory = func(directory *os.File) error {
+		syncCalls++
+		if syncCalls == 2 {
+			if err := os.Remove(to); err != nil {
+				return fmt.Errorf("replace final artifact: %w", err)
+			}
+			if err := os.WriteFile(to, []byte(tuiForeignArtifact), 0o600); err != nil {
+				return fmt.Errorf("write foreign final artifact: %w", err)
+			}
+		}
+
+		return baseSync(directory)
+	}
+	if err := moveTUIArtifactWithOperations(from, to, []byte(tuiExpectedArtifact), operations); !errors.Is(
+		err,
+		compose.ErrInvalidSource,
+	) {
+		t.Fatalf("moveTUIArtifactWithOperations(target replacement) error = %v", err)
+	}
+	if _, err := os.Lstat(from); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed source error = %v", err)
+	}
+	content, err := os.ReadFile(to) //nolint:gosec // The path is this test's private temporary file.
+	if err != nil || string(content) != tuiForeignArtifact {
+		t.Fatalf("replacement target = %q, %v", content, err)
 	}
 }
 
@@ -1520,6 +1783,9 @@ func TestTUIDraftRemovalContainsFilesystemFailures(t *testing.T) {
 		}},
 		{testOpenDirFailure, func(operations *generatedComposeOperations) {
 			operations.openDirectory = func(*os.Root) (*os.File, error) { return nil, errGeneratedComposeTest }
+		}},
+		{"source lstat", func(operations *generatedComposeOperations) {
+			operations.lstat = func(*os.Root, string) (os.FileInfo, error) { return nil, errGeneratedComposeTest }
 		}},
 		{"remove", func(operations *generatedComposeOperations) {
 			operations.remove = func(*os.Root, string) error { return errGeneratedComposeTest }
@@ -1557,6 +1823,51 @@ func TestTUIDraftRemovalContainsFilesystemFailures(t *testing.T) {
 	}
 }
 
+func TestTUIDraftRemovalRejectsReplacementWithoutRemovingIt(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "draft")
+	if err := os.WriteFile(path, []byte(tuiExpectedArtifact), 0o600); err != nil {
+		t.Fatalf("WriteFile(draft) error = %v", err)
+	}
+	operations := generatedComposeDefaultOperations()
+	baseLstat := operations.lstat
+	calls := 0
+	operations.lstat = func(root *os.Root, name string) (os.FileInfo, error) {
+		calls++
+		if calls == 2 {
+			if err := os.Remove(path); err != nil {
+				return nil, fmt.Errorf("replace removable draft: %w", err)
+			}
+			if err := os.WriteFile(path, []byte(tuiForeignArtifact), 0o600); err != nil {
+				return nil, fmt.Errorf("write foreign removable draft: %w", err)
+			}
+		}
+
+		return baseLstat(root, name)
+	}
+	if err := removeMatchingTUIArtifactWithOperations(generatedArtifact{
+		path: path, content: []byte(tuiExpectedArtifact),
+	}, operations); !errors.Is(err, compose.ErrInvalidSource) {
+		t.Fatalf("removeMatchingTUIArtifactWithOperations(replacement) error = %v", err)
+	}
+	content, err := os.ReadFile(path) //nolint:gosec // The path is this test's private temporary file.
+	if err != nil || string(content) != tuiForeignArtifact {
+		t.Fatalf("replacement source = %q, %v", content, err)
+	}
+}
+
+func assertTUIArtifacts(t *testing.T, expected map[string]string) {
+	t.Helper()
+
+	for path, want := range expected {
+		content, err := os.ReadFile(path) //nolint:gosec // Callers pass private temporary paths.
+		if err != nil || string(content) != want {
+			t.Fatalf("preserved artifact %q = %q, %v", filepath.Base(path), content, err)
+		}
+	}
+}
+
 func newRegisteredTUIWorkspace(t *testing.T) (*tuiServiceWorkspace, string) {
 	t.Helper()
 
@@ -1576,7 +1887,7 @@ func newRegisteredTUIWorkspace(t *testing.T) (*tuiServiceWorkspace, string) {
 	}
 	if err := writeGitOpsRegistration(gitOpsRegistrationPath(statePath), gitOpsRegistration{
 		Version: gitOpsRegistrationVersion, Repository: repository, Branch: gitOpsTestBranch,
-		Remote: gitOpsRemoteName, BaselineCommit: head,
+		Remote: gitOpsRemoteName, RemoteURL: repository, BaselineCommit: head,
 	}); err != nil {
 		t.Fatalf("writeGitOpsRegistration() error = %v", err)
 	}

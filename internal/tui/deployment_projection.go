@@ -32,28 +32,83 @@ func canonicalDeploymentFields(fields []DeploymentFieldState) ([]DeploymentField
 
 //nolint:cyclop // The external preview projection is validated as one fail-closed contract.
 func canonicalDeploymentPreview(preview DeploymentEditPreview) (DeploymentEditPreview, error) {
+	if preview.NoChanges {
+		if preview.ComposePath != "" || len(preview.Changes) != 0 || preview.Restore != "" || preview.Diff != "" {
+			return DeploymentEditPreview{}, errInvalidInput
+		}
+
+		return preview, nil
+	}
 	path, valid := canonicalSourceDiagnosticFile(preview.ComposePath)
-	if !valid || len(preview.FieldIDs) == 0 && preview.Restore == "" ||
-		len(preview.FieldIDs) != 0 && preview.Restore != "" {
+	if !valid || len(preview.Changes) > len(application.DeploymentFields()) ||
+		len(preview.Changes) == 0 && preview.Restore == "" {
 		return DeploymentEditPreview{}, errInvalidInput
 	}
 	preview.ComposePath = path
-	seen := make(map[string]struct{}, len(preview.FieldIDs))
-	for _, fieldID := range preview.FieldIDs {
-		field, err := application.ParseDeploymentField(fieldID)
-		if err != nil || field.ID() != fieldID {
+	fields := application.DeploymentFields()
+	changes := make([]DeploymentFieldChange, len(preview.Changes))
+	previousIndex := -1
+	for index, change := range preview.Changes {
+		field, err := application.ParseDeploymentField(change.FieldID)
+		fieldIndex := slices.Index(fields, field)
+		if err != nil || field.ID() != change.FieldID || fieldIndex <= previousIndex {
 			return DeploymentEditPreview{}, errInvalidInput
 		}
-		if _, duplicate := seen[fieldID]; duplicate {
+		change.CurrentValue, err = canonicalDeploymentChangeValue(
+			change.FieldID, change.CurrentValue, change.CurrentPresent,
+		)
+		if err != nil {
 			return DeploymentEditPreview{}, errInvalidInput
 		}
-		seen[fieldID] = struct{}{}
+		change.ProposedValue, err = canonicalDeploymentChangeValue(
+			change.FieldID, change.ProposedValue, change.ProposedPresent,
+		)
+		if err != nil || change.CurrentPresent == change.ProposedPresent &&
+			change.CurrentValue == change.ProposedValue {
+			return DeploymentEditPreview{}, errInvalidInput
+		}
+		changes[index] = change
+		previousIndex = fieldIndex
 	}
 	if preview.Restore != "" && !validRevision(preview.Restore) {
 		return DeploymentEditPreview{}, errInvalidInput
 	}
+	diff, err := canonicalStagedDiff(preview.Diff)
+	if err != nil {
+		return DeploymentEditPreview{}, err
+	}
+	preview.Changes = changes
+	preview.Diff = diff
 
 	return preview, nil
+}
+
+func canonicalStagedDiff(value string) (string, error) {
+	diff, err := terminaltext.Canonicalize(value, terminaltext.Limits{
+		Bytes:     maximumStagedDiffBytes,
+		Runes:     maximumStagedDiffBytes,
+		Lines:     maximumStagedDiffLines,
+		LineCells: maximumDisplayCells,
+	})
+	if err != nil || diff == "" {
+		return "", errors.Join(errInvalidInput, err)
+	}
+
+	return diff, nil
+}
+
+func canonicalDeploymentChangeValue(fieldID, value string, present bool) (string, error) {
+	canonical, err := canonicalDisplay(value)
+	if err != nil || !present && canonical != "" || present && canonical == "" {
+		return "", errors.Join(errInvalidInput, err)
+	}
+	if present {
+		if _, err = application.ParseDeploymentPatch(fieldID, canonical, false); err != nil {
+			return "", errInvalidInput
+		}
+	}
+
+	return canonical, nil
 }
 
 func canonicalStagedDeployment(staged StagedDeploymentEdit) (StagedDeploymentEdit, error) {

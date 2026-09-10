@@ -1,3 +1,4 @@
+//nolint:goconst // Evidence values stay explicit at their assertion sites.
 package application
 
 import (
@@ -109,7 +110,8 @@ func TestEvidenceAcceptsEveryStablePlanAndJournalState(t *testing.T) {
 	t.Parallel()
 
 	for _, kind := range []PlanKind{
-		PlanBootstrap, PlanAdopt, PlanUnchanged, PlanUpgrade, PlanResume, PlanProbeUnknownEffect, PlanRestore,
+		PlanBootstrap, PlanAdopt, PlanUnchanged, PlanUpgrade, PlanResume, PlanProbeUnknownEffect,
+		PlanRestore, PlanHealthDegraded,
 	} {
 		snapshot := validEvidenceTestSnapshot()
 		snapshot.Plan.Kind = kind
@@ -121,7 +123,11 @@ func TestEvidenceAcceptsEveryStablePlanAndJournalState(t *testing.T) {
 	for _, kind := range []store.TransactionKind{
 		store.TransactionBootstrap, store.TransactionAdopt, store.TransactionUpgrade,
 	} {
-		for _, state := range []store.TransactionState{store.TransactionActive, store.TransactionDegraded} {
+		for _, state := range []store.TransactionState{
+			store.TransactionActive,
+			store.TransactionDegraded,
+			store.TransactionHealthDegraded,
+		} {
 			snapshot := validEvidenceTestSnapshot()
 			snapshot.Transaction.Kind = string(kind)
 			snapshot.Transaction.State = string(state)
@@ -192,6 +198,9 @@ func TestEvidenceRejectsInvalidSnapshotProjection(t *testing.T) {
 		}},
 		{name: "present observation identity", mutate: func(value *OperationSnapshot) {
 			value.Plan.Observation.ConfigurationDigest = domain.Digest{}
+		}},
+		{name: "present observation start location", mutate: func(value *OperationSnapshot) {
+			value.Plan.Observation.StartedAt = time.Unix(1, 0).In(time.FixedZone("offset", 3600))
 		}},
 		{name: "absent transaction content", mutate: func(value *OperationSnapshot) { value.HasTransaction = false }},
 		{name: "transaction ID", mutate: func(value *OperationSnapshot) { value.Transaction.ID = testInvalidValue }},
@@ -308,6 +317,8 @@ func validEvidenceTestSnapshot() OperationSnapshot {
 				ID: "runtime-object", State: WorkloadObservationPresent,
 				ConfigurationDigest: domain.Hash([]byte("configuration")),
 				StorageDigest:       domain.Hash([]byte("storage")),
+				Lifecycle:           WorkloadLifecycleRunning,
+				Health:              WorkloadHealth{Status: WorkloadHealthAbsent},
 				Ownership:           testOwnership(domain.OwnershipUnmanaged),
 			},
 		},

@@ -54,9 +54,15 @@ linters:
             - "!**/internal/registry/*.go"
             - "!**/internal/tui/*.go"
             - "!**/internal/terminaltext/*.go"
+            - "!**/internal/llm/*.go"
             - "!**/internal/changescope/*.go"
             - "!**/internal/cli/parse.go"
             - "!**/internal/cli/tui_workspace.go"
+            - "!**/internal/cli/tui_workspace_commit.go"
+            - "!**/internal/cli/tui_workspace_draft.go"
+            - "!**/internal/cli/tui_workspace_files.go"
+            - "!**/internal/cli/tui_deployment_exchange_*.go"
+            - "!**/internal/cli/tui_llm_config*.go"
             - "!**/internal/custombuild/*.go"
             - "!**/containerconfig/compose/*.go"
             - "!**/containerconfig/containerd/*.go"
@@ -85,6 +91,23 @@ linters:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/charmbracelet/x/ansi
+        llm-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/llm/*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/mozilla-ai/any-llm-go
+        llm-config-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/cli/tui_llm_config*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - github.com/compose-spec/compose-go/v2
+            - golang.org/x/sys
         custom-builder:
           list-mode: strict
           files:
@@ -105,10 +128,21 @@ linters:
           list-mode: strict
           files:
             - "**/internal/cli/tui_workspace.go"
+            - "**/internal/cli/tui_workspace_commit.go"
+            - "**/internal/cli/tui_workspace_draft.go"
+            - "**/internal/cli/tui_workspace_files.go"
           allow:
             - $gostd
             - github.com/IceCodeNew/maniud
             - github.com/mattn/go-shellwords
+        deployment-exchange-adapter:
+          list-mode: strict
+          files:
+            - "**/internal/cli/tui_deployment_exchange_*.go"
+          allow:
+            - $gostd
+            - github.com/IceCodeNew/maniud
+            - golang.org/x/sys
         public-imageref:
           list-mode: strict
           files:
@@ -262,11 +296,12 @@ linters:
             - github.com/IceCodeNew/maniud
             - golang.org/x/sys
     # Public adapter modules use repository-relative replacements while this
-    # monorepo develops a shared release. The pinned notify fork is the only
-    # external replacement.
+    # monorepo develops a shared release. External replacements are limited to
+    # manually reviewed exact fork pins.
     gomoddirectives:
       replace-local: true
       replace-allow-list:
+        - github.com/mozilla-ai/any-llm-go
         - github.com/nikoksr/notify
     nolintlint:
       require-explanation: true

@@ -223,7 +223,7 @@ func bindPreparedTransaction(
 		preparation.HasTransaction = true
 
 		return preparation, nil
-	case PlanResume, PlanProbeUnknownEffect, PlanRestore:
+	case PlanResume, PlanProbeUnknownEffect, PlanRestore, PlanHealthDegraded:
 		return Preparation{}, ErrConflictingState
 	default:
 		return Preparation{}, ErrConflictingState
@@ -253,14 +253,15 @@ func transactionIntent(preparation Preparation) store.TransactionIntent {
 		intent.BaseTransactionID = preparation.Applied.TransactionID
 		intent.HasBaseTransaction = preparation.HasApplied
 		intent.PredecessorWorkloadID = preparation.Applied.WorkloadID
-	case PlanUnchanged, PlanResume, PlanProbeUnknownEffect, PlanRestore:
+	case PlanUnchanged, PlanResume, PlanProbeUnknownEffect, PlanRestore, PlanHealthDegraded:
 	}
 
 	return intent
 }
 
 func recoveryMutationPlan(kind PlanKind) bool {
-	return kind == PlanResume || kind == PlanProbeUnknownEffect || kind == PlanRestore
+	return kind == PlanResume || kind == PlanProbeUnknownEffect || kind == PlanRestore ||
+		kind == PlanHealthDegraded
 }
 
 func boundRecoveryTransaction(preparation Preparation) bool {

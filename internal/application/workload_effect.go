@@ -18,6 +18,7 @@ const (
 	workloadEffectObserved     = 1
 	workloadEffectMissing      = 2
 	workloadEffectUnstarted    = 3
+	workloadEffectStopped      = 4
 	workloadEffectNilSlice     = 0
 	workloadEffectNonNilSlice  = 1
 )
@@ -69,6 +70,7 @@ type WorkloadEffectEvidence struct {
 	RuntimeMounts        []domain.RuntimeMount
 	ConfigurationMatches bool
 	Lifecycle            WorkloadLifecycle
+	Health               WorkloadHealth
 	Ownership            domain.WorkloadOwnership
 }
 
@@ -402,7 +404,9 @@ func startedWorkloadMatches(
 	return evidence.ID != "" && evidence.Name == workload.ContainerName &&
 		evidence.ConfigurationDigest != (domain.Digest{}) &&
 		workloadStorageMatches(evidence.StorageDigest, evidence.RuntimeMounts, workload) &&
-		evidence.ConfigurationMatches && evidence.Lifecycle == WorkloadLifecycleRunning &&
+		evidence.ConfigurationMatches &&
+		(evidence.Lifecycle == WorkloadLifecycleRunning ||
+			evidence.Lifecycle == WorkloadLifecycleRestarting) &&
 		evidence.Ownership == expectedOwnership
 }
 
@@ -447,6 +451,7 @@ func emptyWorkloadEffectEvidence() WorkloadEffectEvidence {
 		RuntimeMounts:        nil,
 		ConfigurationMatches: false,
 		Lifecycle:            WorkloadLifecycleUnknown,
+		Health:               WorkloadHealth{},
 		Ownership: domain.WorkloadOwnership{
 			Status:           domain.OwnershipConflicting,
 			Service:          "",
@@ -466,7 +471,8 @@ func workloadEffectEvidenceEmpty(evidence WorkloadEffectEvidence) bool {
 		evidence.ConfigurationDigest == empty.ConfigurationDigest &&
 		evidence.StorageDigest == empty.StorageDigest && evidence.RuntimeMounts == nil &&
 		evidence.ConfigurationMatches == empty.ConfigurationMatches &&
-		evidence.Lifecycle == empty.Lifecycle && evidence.Ownership == empty.Ownership
+		evidence.Lifecycle == empty.Lifecycle && evidence.Health == empty.Health &&
+		evidence.Ownership == empty.Ownership
 }
 
 func workloadStorageMatches(

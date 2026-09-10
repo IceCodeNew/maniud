@@ -152,7 +152,7 @@ func evidenceFailureTests() []operationMutation {
 					domain.DesiredWorkload,
 				) (WorkloadObservation, error) {
 					invalid := missingObservation()
-					invalid.Running = true
+					invalid.Lifecycle = WorkloadLifecycleRunning
 
 					return invalid, nil
 				}

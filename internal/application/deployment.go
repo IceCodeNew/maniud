@@ -127,71 +127,38 @@ func (field DeploymentField) AllowsUnset() bool {
 	return field.ID() != "" && field != DeploymentNoNewPrivileges
 }
 
-// DeploymentValue is the closed value family accepted by DeploymentPatch.
-// Callers construct one of the concrete application-owned value types below.
-type DeploymentValue interface {
-	deploymentValue()
-}
-
-// DeploymentCPU is a positive CPU count with Compose's float32 precision.
-type DeploymentCPU float32
-
-func (DeploymentCPU) deploymentValue() {}
-
-// DeploymentBytes is a positive byte count.
-type DeploymentBytes int64
-
-func (DeploymentBytes) deploymentValue() {}
-
-// DeploymentInteger is an integer process limit.
-type DeploymentInteger int64
-
-func (DeploymentInteger) deploymentValue() {}
-
-// DeploymentRetries is a healthcheck retry count bounded to Compose's int representation.
-type DeploymentRetries int
-
-func (DeploymentRetries) deploymentValue() {}
-
-// DeploymentRestartPolicy is one portable restart policy.
-type DeploymentRestartPolicy string
-
-func (DeploymentRestartPolicy) deploymentValue() {}
-
-// DeploymentDuration is one positive deployment duration.
-type DeploymentDuration time.Duration
-
-func (DeploymentDuration) deploymentValue() {}
-
-// DeploymentBoolean sets one ordinary boolean deployment field.
-type DeploymentBoolean bool
-
-func (DeploymentBoolean) deploymentValue() {}
-
-// DeploymentEnabled enables the one-way no-new-privileges field.
-type DeploymentEnabled struct{}
-
-func (DeploymentEnabled) deploymentValue() {}
-
-// DeploymentUnset removes one optional deployment field.
-type DeploymentUnset struct{}
-
-func (DeploymentUnset) deploymentValue() {}
-
 // DeploymentPatch is one validated field mutation. Its private representation
-// prevents callers from pairing a field with the wrong value family.
+// prevents callers from bypassing the shared external value grammar.
 type DeploymentPatch struct {
 	field DeploymentField
-	value DeploymentValue
+	value string
+	unset bool
 }
 
-// NewDeploymentPatch validates and binds one typed field mutation.
-func NewDeploymentPatch(field DeploymentField, value DeploymentValue) (DeploymentPatch, error) {
-	if !validDeploymentValue(field, value) {
+// ParseDeploymentPatch parses one external field/value pair into the same
+// patch used by manual and LLM-assisted deployment edits.
+func ParseDeploymentPatch(fieldID string, value string, unset bool) (DeploymentPatch, error) {
+	field, err := ParseDeploymentField(fieldID)
+	if err != nil {
+		return DeploymentPatch{}, ErrInvalidDeploymentPatch
+	}
+	if unset {
+		if !field.AllowsUnset() {
+			return DeploymentPatch{}, ErrInvalidDeploymentPatch
+		}
+
+		return DeploymentPatch{field: field, unset: true}, nil
+	}
+	patch := DeploymentPatch{field: field, value: value}
+	if !validDeploymentPatchStructure(patch) {
+		return DeploymentPatch{}, ErrInvalidDeploymentPatch
+	}
+	validation := containerconfig.Spec{Healthcheck: new(containerconfig.Healthcheck)}
+	if err = setDeploymentField(&validation, patch.field, patch.value); err != nil {
 		return DeploymentPatch{}, ErrInvalidDeploymentPatch
 	}
 
-	return DeploymentPatch{field: field, value: value}, nil
+	return patch, nil
 }
 
 // Field returns the field changed by the patch.
@@ -201,7 +168,7 @@ func (patch DeploymentPatch) Field() DeploymentField {
 
 // ApplyTo returns a cloned portable specification with the patch applied.
 func (patch DeploymentPatch) ApplyTo(spec containerconfig.Spec) (containerconfig.Spec, error) {
-	if !validDeploymentValue(patch.field, patch.value) {
+	if !validDeploymentPatchStructure(patch) {
 		return containerconfig.Spec{}, ErrInvalidDeploymentPatch
 	}
 	result := spec.Clone()
@@ -209,67 +176,31 @@ func (patch DeploymentPatch) ApplyTo(spec containerconfig.Spec) (containerconfig
 		return containerconfig.Spec{}, ErrInvalidDeploymentPatch
 	}
 
-	if _, unset := patch.value.(DeploymentUnset); unset {
+	if patch.unset {
 		unsetDeploymentField(&result, patch.field)
 
 		return containerconfig.Canonical(result), nil
 	}
-	setDeploymentField(&result, patch)
+	if err := setDeploymentField(&result, patch.field, patch.value); err != nil {
+		return containerconfig.Spec{}, ErrInvalidDeploymentPatch
+	}
 
 	return containerconfig.Canonical(result), nil
 }
 
-//nolint:cyclop // Every closed field validates a distinct typed value contract.
-func validDeploymentValue(field DeploymentField, value DeploymentValue) bool {
-	if value == nil {
+func validDeploymentPatchStructure(patch DeploymentPatch) bool {
+	if patch.field.ID() == "" {
 		return false
 	}
-	if _, unset := value.(DeploymentUnset); unset {
-		return field.AllowsUnset()
+	if patch.unset {
+		return patch.value == "" && patch.field.AllowsUnset()
 	}
-
-	switch field {
-	case DeploymentCPUs:
-		cpu, valid := value.(DeploymentCPU)
-
-		return valid && cpu > 0 && !math.IsInf(float64(cpu), 0) && !math.IsNaN(float64(cpu)) &&
-			float64(cpu) <= float64(math.MaxInt64)/1_000_000_000
-	case DeploymentMemory, DeploymentSharedMemory:
-		bytes, valid := value.(DeploymentBytes)
-
-		return valid && bytes > 0
-	case DeploymentPIDs:
-		integer, valid := value.(DeploymentInteger)
-
-		return valid && (integer == -1 || integer > 0)
-	case DeploymentRestart:
-		restart, valid := value.(DeploymentRestartPolicy)
-
-		return valid && validDeploymentRestart(string(restart))
-	case DeploymentStopGrace:
-		duration, valid := value.(DeploymentDuration)
-
-		return valid && duration > 0 && time.Duration(duration)%time.Second == 0
-	case DeploymentInit, DeploymentReadOnly:
-		_, valid := value.(DeploymentBoolean)
-
-		return valid
-	case DeploymentNoNewPrivileges:
-		_, valid := value.(DeploymentEnabled)
-
-		return valid
-	case DeploymentHealthRetries:
-		retries, valid := value.(DeploymentRetries)
-
-		return valid && retries > 0
-	case DeploymentHealthInterval, DeploymentHealthTimeout,
-		DeploymentHealthStartPeriod, DeploymentHealthStartInterval:
-		duration, valid := value.(DeploymentDuration)
-
-		return valid && duration > 0
-	default:
+	if patch.value == "" || strings.TrimSpace(patch.value) != patch.value ||
+		strings.ContainsAny(patch.value, "\x00\r\n") {
 		return false
 	}
+
+	return true
 }
 
 func validDeploymentRestart(value string) bool {
@@ -321,38 +252,105 @@ func unsetDeploymentField(spec *containerconfig.Spec, field DeploymentField) {
 	}
 }
 
-//nolint:cyclop,forcetypeassert // ApplyTo validates the private field/value pair before dispatch.
-func setDeploymentField(spec *containerconfig.Spec, patch DeploymentPatch) {
-	switch patch.field {
+//nolint:cyclop,funlen,gocognit,gocyclo // Every closed field owns one value grammar and Spec representation.
+func setDeploymentField(spec *containerconfig.Spec, field DeploymentField, value string) error {
+	switch field {
 	case DeploymentCPUs:
-		value := patch.value.(DeploymentCPU)
-		spec.CPUs = strconv.FormatFloat(float64(value), 'f', -1, 32)
+		number, err := strconv.ParseFloat(value, 32)
+		if err != nil || number <= 0 || math.IsInf(number, 0) || math.IsNaN(number) ||
+			number > float64(math.MaxInt64)/1_000_000_000 {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.CPUs = strconv.FormatFloat(number, 'f', -1, 32)
 	case DeploymentMemory:
-		spec.MemoryBytes = int64(patch.value.(DeploymentBytes))
+		number, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || number <= 0 {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.MemoryBytes = number
 	case DeploymentPIDs:
-		spec.PidsLimit = new(int64(patch.value.(DeploymentInteger)))
+		number, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || (number != -1 && number <= 0) {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.PidsLimit = new(number)
 	case DeploymentRestart:
-		spec.Restart = string(patch.value.(DeploymentRestartPolicy))
+		if !validDeploymentRestart(value) {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.Restart = value
 	case DeploymentSharedMemory:
-		spec.SharedMemoryBytes = int64(patch.value.(DeploymentBytes))
+		number, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || number <= 0 {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.SharedMemoryBytes = number
 	case DeploymentStopGrace:
-		seconds := int64(time.Duration(patch.value.(DeploymentDuration)) / time.Second)
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 || duration%time.Second != 0 {
+			return ErrInvalidDeploymentPatch
+		}
+		seconds := int64(duration / time.Second)
 		spec.StopTimeout = new(seconds)
 	case DeploymentInit:
-		spec.Init = new(bool(patch.value.(DeploymentBoolean)))
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.Init = new(enabled)
 	case DeploymentReadOnly:
-		spec.ReadOnly = new(bool(patch.value.(DeploymentBoolean)))
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.ReadOnly = new(enabled)
 	case DeploymentNoNewPrivileges:
+		if value != "true" {
+			return ErrInvalidDeploymentPatch
+		}
 		spec.NoNewPrivileges = true
 	case DeploymentHealthInterval:
-		spec.Healthcheck.Interval = time.Duration(patch.value.(DeploymentDuration)).String()
+		duration, err := positiveDeploymentDuration(value)
+		if err != nil {
+			return err
+		}
+		spec.Healthcheck.Interval = duration.String()
 	case DeploymentHealthTimeout:
-		spec.Healthcheck.Timeout = time.Duration(patch.value.(DeploymentDuration)).String()
+		duration, err := positiveDeploymentDuration(value)
+		if err != nil {
+			return err
+		}
+		spec.Healthcheck.Timeout = duration.String()
 	case DeploymentHealthRetries:
-		spec.Healthcheck.Retries = new(int(patch.value.(DeploymentRetries)))
+		retries, err := strconv.Atoi(value)
+		if err != nil || retries <= 0 {
+			return ErrInvalidDeploymentPatch
+		}
+		spec.Healthcheck.Retries = new(retries)
 	case DeploymentHealthStartPeriod:
-		spec.Healthcheck.StartPeriod = time.Duration(patch.value.(DeploymentDuration)).String()
+		duration, err := positiveDeploymentDuration(value)
+		if err != nil {
+			return err
+		}
+		spec.Healthcheck.StartPeriod = duration.String()
 	case DeploymentHealthStartInterval:
-		spec.Healthcheck.StartInterval = time.Duration(patch.value.(DeploymentDuration)).String()
+		duration, err := positiveDeploymentDuration(value)
+		if err != nil {
+			return err
+		}
+		spec.Healthcheck.StartInterval = duration.String()
+	default:
+		return ErrInvalidDeploymentPatch
 	}
+
+	return nil
+}
+
+func positiveDeploymentDuration(value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, ErrInvalidDeploymentPatch
+	}
+
+	return duration, nil
 }

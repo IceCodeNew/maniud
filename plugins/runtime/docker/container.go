@@ -9,12 +9,14 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/moby/moby/api/types/common"
 	containertypes "github.com/moby/moby/api/types/container"
 
+	"github.com/IceCodeNew/maniud/internal/application"
 	"github.com/IceCodeNew/maniud/internal/domain"
 	"github.com/IceCodeNew/maniud/internal/imageref"
 	"github.com/IceCodeNew/maniud/internal/jsonstrict"
@@ -30,6 +32,7 @@ const (
 	dockerManifestMediaType    = "application/vnd.docker.distribution.manifest.v2+json"
 	ociManifestMediaType       = "application/vnd.oci.image.manifest.v1+json"
 	containerNameQueryKey      = "name"
+	rawJSONNull                = "null"
 )
 
 var (
@@ -53,13 +56,14 @@ const (
 type Container struct {
 	ID               string
 	Name             string
+	StartedAt        time.Time
 	ImageReference   string
 	ImageConfig      domain.Digest
 	PlatformManifest domain.Digest
 	WorkloadSpec     domain.WorkloadSpec
 	RuntimeMounts    []domain.RuntimeMount
 	State            ContainerState
-	Running          bool
+	Health           application.WorkloadHealth
 	Ownership        domain.WorkloadOwnership
 }
 
@@ -181,6 +185,9 @@ func decodeContainerInspect(reader io.Reader, target *containertypes.InspectResp
 	if found && !sanitizeContainerHostConfig(hostConfig, document) {
 		return false
 	}
+	if !sanitizeContainerStateHealth(document) {
+		return false
+	}
 	if !validContainerInspectObjects(document) {
 		return false
 	}
@@ -232,8 +239,56 @@ func validContainerInspectObjects(document map[string]json.RawMessage) bool {
 	return validJSONArrayFields(document["Mounts"], reflect.TypeFor[containertypes.MountPoint]())
 }
 
+func sanitizeContainerStateHealth(document map[string]json.RawMessage) bool {
+	encoded, found := document["State"]
+	if !found || strings.TrimSpace(string(encoded)) == rawJSONNull {
+		return true
+	}
+
+	var state map[string]json.RawMessage
+	if json.Unmarshal(encoded, &state) != nil || state == nil {
+		return false
+	}
+	health, found := state["Health"]
+	if !found || strings.TrimSpace(string(health)) == rawJSONNull {
+		return true
+	}
+	health, valid := sanitizedContainerHealth(health)
+	if !valid {
+		return false
+	}
+	state["Health"] = health
+	encoded, _ = json.Marshal(state) //nolint:errchkjson // Values came from successfully decoded valid JSON.
+	document["State"] = encoded
+
+	return true
+}
+
+func sanitizedContainerHealth(encoded json.RawMessage) (json.RawMessage, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(encoded, &fields) != nil || fields == nil {
+		return nil, false
+	}
+	for name := range fields {
+		if name != "Status" && name != "FailingStreak" && name != "Log" {
+			return nil, false
+		}
+	}
+	if log, present := fields["Log"]; present {
+		var entries []json.RawMessage
+		if json.Unmarshal(log, &entries) != nil {
+			return nil, false
+		}
+		delete(fields, "Log")
+	}
+
+	sanitized, _ := json.Marshal(fields) //nolint:errchkjson // Values came from successfully decoded valid JSON.
+
+	return sanitized, true
+}
+
 func validJSONFields(encoded json.RawMessage, schema reflect.Type, compatibility []string) bool {
-	if encoded == nil || strings.TrimSpace(string(encoded)) == "null" {
+	if encoded == nil || strings.TrimSpace(string(encoded)) == rawJSONNull {
 		return true
 	}
 
@@ -251,7 +306,7 @@ func validJSONFields(encoded json.RawMessage, schema reflect.Type, compatibility
 }
 
 func validJSONArrayFields(encoded json.RawMessage, schema reflect.Type) bool {
-	if encoded == nil || strings.TrimSpace(string(encoded)) == "null" {
+	if encoded == nil || strings.TrimSpace(string(encoded)) == rawJSONNull {
 		return true
 	}
 
@@ -366,8 +421,10 @@ func decodeContainer(
 		payload.HostConfig,
 	)
 	runtimeMounts, runtimeMountsValid := dockerRuntimeMounts(payload.Mounts, workloadSpec)
+	health, healthValid := dockerWorkloadHealth(payload.State.Health, workloadSpec.Healthcheck)
+	startedAt, startedAtValid := dockerStartedAt(payload.State.StartedAt)
 	if imageErr != nil || !manifestValid ||
-		!stateValid || !workloadValid || !runtimeMountsValid {
+		!stateValid || !workloadValid || !runtimeMountsValid || !healthValid || !startedAtValid {
 		return emptyContainer, false
 	}
 
@@ -381,15 +438,28 @@ func decodeContainer(
 	return Container{
 		ID:               payload.ID,
 		Name:             strings.TrimPrefix(payload.Name, "/"),
+		StartedAt:        startedAt,
 		ImageReference:   payload.Config.Image,
 		ImageConfig:      imageConfig,
 		PlatformManifest: platformManifest,
 		WorkloadSpec:     workloadSpec,
 		RuntimeMounts:    runtimeMounts,
 		State:            state,
-		Running:          payload.State.Running,
+		Health:           health,
 		Ownership:        ownership,
 	}, true
+}
+
+func dockerStartedAt(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, true
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return startedAt.UTC(), true
 }
 
 func containerPlatformManifest(

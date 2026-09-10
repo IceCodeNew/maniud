@@ -47,6 +47,22 @@ func TestFailuresExposeStableOperatorContracts(t *testing.T) {
 			exitStatus: 1,
 		},
 		{
+			name:       "health pending",
+			failure:    HealthPending(),
+			code:       ErrorHealthPending,
+			message:    "workload health is pending; retry the same command to resume",
+			retryable:  true,
+			exitStatus: 1,
+		},
+		{
+			name:       "health degraded",
+			failure:    HealthDegraded(),
+			code:       ErrorHealthDegraded,
+			message:    "workload health requires a decision; run 'maniud tui' to review it",
+			retryable:  false,
+			exitStatus: 1,
+		},
+		{
 			name:       "generation failed",
 			failure:    GenerationFailed(false),
 			code:       ErrorGenerationFailed,

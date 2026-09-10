@@ -44,9 +44,10 @@ type podmanInspectData struct {
 
 //nolint:tagliatelle // Test fixture mirrors native Libpod wire fields.
 type podmanInspectState struct {
-	Status  string `json:"Status"`
-	Running bool   `json:"Running"`
-	Paused  bool   `json:"Paused"`
+	Status    string `json:"Status"`
+	Running   bool   `json:"Running"`
+	Paused    bool   `json:"Paused"`
+	StartedAt string `json:"StartedAt,omitempty"`
 }
 
 //nolint:tagliatelle // Test fixture mirrors native Libpod wire fields.

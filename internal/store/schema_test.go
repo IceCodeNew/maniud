@@ -274,7 +274,7 @@ func TestValidateSchemaRejectsIncompleteFactsAndClosedDatabase(t *testing.T) {
 	database := testDatabase(t, "file::memory:")
 	requireNoError(t, initializeSchema(context.Background(), database))
 
-	facts, err := readSchemaFacts(context.Background(), database)
+	facts, err := readSchemaFacts(t.Context(), database)
 	requireNoError(t, err)
 	facts.repositoryInventoryDefinition = ""
 	if facts.valid() {

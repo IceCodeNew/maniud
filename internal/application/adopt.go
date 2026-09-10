@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/IceCodeNew/maniud/internal/domain"
@@ -22,6 +23,17 @@ func runAdopt(ctx context.Context, mutation *boundMutation, runtime Runtime) err
 	if !validAdoptedObservation(observation, preparation) {
 		return ErrConflictingState
 	}
+	err = requireWorkloadConvergence(
+		activeHealthcheck(preparation.Workload),
+		observation.Lifecycle,
+		observation.Health,
+	)
+	if errors.Is(err, ErrHealthPending) {
+		return err
+	}
+	if err != nil {
+		return settleAdoptionHealthDegraded(ctx, mutation, err)
+	}
 
 	applied, err := mutation.lock.CommitAppliedService(
 		ctx,
@@ -33,6 +45,7 @@ func runAdopt(ctx context.Context, mutation *boundMutation, runtime Runtime) err
 			ReferenceDigest:        preparation.Workload.Image.ReferenceDigest,
 			PlatformManifestDigest: preparation.Workload.Image.PlatformManifest,
 			ImageConfigDigest:      preparation.Workload.Image.ImageConfig,
+			Healthcheck:            activeHealthcheck(preparation.Workload),
 		},
 	)
 	if err != nil {
@@ -48,6 +61,25 @@ func runAdopt(ctx context.Context, mutation *boundMutation, runtime Runtime) err
 	mutation.publishTransaction(EventTransactionSucceeded)
 
 	return nil
+}
+
+func settleAdoptionHealthDegraded(ctx context.Context, mutation *boundMutation, cause error) error {
+	if mutation.preparation.Transaction.State == store.TransactionHealthDegraded {
+		return cause
+	}
+
+	transaction, err := mutation.lock.SetTransactionState(
+		context.WithoutCancel(ctx),
+		mutation.preparation.Transaction.ID,
+		store.TransactionHealthDegraded,
+	)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("record degraded adoption health: %w", err))
+	}
+	mutation.preparation.Transaction = transaction
+	mutation.publishTransaction(EventTransactionDegraded)
+
+	return cause
 }
 
 func validAdoptMutation(mutation *boundMutation) bool {
@@ -66,12 +98,13 @@ func validAdoptMutation(mutation *boundMutation) bool {
 
 func activeAdoptTransaction(preparation Preparation) bool {
 	return preparation.HasTransaction && preparation.Transaction.Kind == store.TransactionAdopt &&
-		preparation.Transaction.State == store.TransactionActive && !preparation.HasApplied &&
+		(preparation.Transaction.State == store.TransactionActive ||
+			preparation.Transaction.State == store.TransactionHealthDegraded) && !preparation.HasApplied &&
 		len(preparation.Actions) == 0
 }
 
 func adoptPlan(kind PlanKind) bool {
-	return kind == PlanAdopt || kind == PlanResume
+	return kind == PlanAdopt || kind == PlanResume || kind == PlanHealthDegraded
 }
 
 func validAdoptedObservation(observation WorkloadObservation, preparation Preparation) bool {
@@ -81,6 +114,6 @@ func validAdoptedObservation(observation WorkloadObservation, preparation Prepar
 		observation.ConfigurationDigest == preparation.Plan.Observation.ConfigurationDigest &&
 		observation.StorageDigest == preparation.Plan.Observation.StorageDigest &&
 		workloadStorageMatches(observation.StorageDigest, observation.RuntimeMounts, preparation.Workload) &&
-		observation.ConfigurationMatches && observation.Running &&
+		observation.ConfigurationMatches && observation.Lifecycle == WorkloadLifecycleRunning &&
 		observation.Ownership == (domain.WorkloadOwnership{Status: domain.OwnershipUnmanaged})
 }

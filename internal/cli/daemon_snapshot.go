@@ -246,7 +246,8 @@ func executeGitOpsMutation(
 func gitOpsRecoveryPlan(kind application.PlanKind) bool {
 	return kind == application.PlanResume ||
 		kind == application.PlanProbeUnknownEffect ||
-		kind == application.PlanRestore
+		kind == application.PlanRestore ||
+		kind == application.PlanHealthDegraded
 }
 
 func prepareGitOpsSnapshot(

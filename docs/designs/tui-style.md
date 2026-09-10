@@ -10,8 +10,9 @@ The full layout uses these regions:
 1. A one-line header identifies maniud and shows relevant session context such
    as the project, runtime, and healthcheck state. Each fact appears once.
 2. An 18-cell left rail identifies the active flow and location. A one-cell
-   divider and one-cell gap make its total width 20 cells. The rail never shows
-   dynamic paths, image references, or other values that can change its width.
+   divider followed by a one-cell gap makes its total width 20 cells.
+   The rail never shows dynamic paths, image references, or other values that
+   can change its width.
 3. The body owns the slide title, one short description, object identity, and
    task content. Only the body scrolls.
 4. A fixed dominant-status region states the current outcome or blocker. A
@@ -84,10 +85,12 @@ The fixed status region reports one dominant state with a precise title. Its
 second line may report a separate observation problem and one recovery action.
 A completed mutation remains visible if a later reload fails.
 
-Ready status uses the shield-shaped status marker and may use an outlined card.
-Other states use their own marker and text. Validation, capability, pending,
-degraded, and blocked states keep distinct labels. The status region never
-repeats a value already shown in the comparison.
+Ready status uses the shield-shaped status marker. Full Review layouts enclose
+the dominant status and its supporting lines in an amber outline that spans the
+body width. Compact and hard-floor layouts keep the same status concise without
+the card. Other states use their own marker and text. Validation, capability,
+pending, degraded, and blocked states keep distinct labels. The status region
+never repeats a value already shown in the comparison.
 
 An empty state replaces the normal status content. It names the missing object
 and offers one next action; it does not render empty tables or placeholder

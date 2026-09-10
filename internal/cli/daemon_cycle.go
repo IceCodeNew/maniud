@@ -73,7 +73,7 @@ func (events *gitOpsSourceBlockerEvents) TryPublish(event application.Event) boo
 }
 
 func (events *gitOpsSourceBlockerEvents) observe(
-	status string,
+	runErr error,
 	counts gitOpsCycleCounts,
 ) {
 	if events == nil {
@@ -83,7 +83,7 @@ func (events *gitOpsSourceBlockerEvents) observe(
 		events.observeSources(counts.skippedSources)
 	}
 	if counts.recoveryBlockerObserved {
-		events.observeRecovery(status == errGitOpsRecoverySourceBlocked.Error())
+		events.observeRecovery(errors.Is(runErr, errGitOpsRecoverySourceBlocked))
 	}
 }
 
@@ -214,7 +214,7 @@ func finishGitOpsCycle(
 	summaryErr := writeGitOpsCycleSummary(output, commit, status, counts)
 	if summaryErr == nil {
 		if blockerEvents, valid := events.(*gitOpsSourceBlockerEvents); valid {
-			blockerEvents.observe(status, counts)
+			blockerEvents.observe(runErr, counts)
 		}
 	}
 

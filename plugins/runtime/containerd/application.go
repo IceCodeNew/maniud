@@ -116,7 +116,8 @@ func (client *Client) ObserveWorkload(
 		StorageDigest:        evidence.StorageDigest,
 		RuntimeMounts:        slices.Clone(evidence.RuntimeMounts),
 		ConfigurationMatches: evidence.ConfigurationMatches,
-		Running:              evidence.Lifecycle == application.WorkloadLifecycleRunning,
+		Lifecycle:            evidence.Lifecycle,
+		Health:               evidence.Health,
 		Ownership:            evidence.Ownership,
 	}, nil
 }
@@ -268,7 +269,9 @@ func workloadEffectEvidence(
 		ID: workload.ID, Name: workload.Name,
 		ConfigurationDigest: workload.ConfigurationDigest,
 		StorageDigest:       storage, RuntimeMounts: slices.Clone(workload.RuntimeMounts),
-		ConfigurationMatches: matches, Lifecycle: workload.Lifecycle, Ownership: workload.Ownership,
+		ConfigurationMatches: matches, Lifecycle: workload.Lifecycle,
+		Health:    application.WorkloadHealth{Status: application.WorkloadHealthAbsent},
+		Ownership: workload.Ownership,
 	}, nil
 }
 
@@ -276,7 +279,8 @@ func missingWorkloadObservation() application.WorkloadObservation {
 	return application.WorkloadObservation{
 		ID: "", State: application.WorkloadObservationMissing,
 		ConfigurationDigest: domain.Digest{}, StorageDigest: domain.Digest{}, RuntimeMounts: nil,
-		ConfigurationMatches: false, Running: false, Ownership: domain.WorkloadOwnership{},
+		ConfigurationMatches: false, Lifecycle: application.WorkloadLifecycleUnknown,
+		Health: application.WorkloadHealth{}, Ownership: domain.WorkloadOwnership{},
 	}
 }
 

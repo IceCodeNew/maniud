@@ -34,7 +34,7 @@ func TestReviewDisclosesActiveEffect(t *testing.T) {
 			t.Logf("CAPTURE %dx%d %s\n%s\nEND CAPTURE", size[0], size[1], status, content)
 			if !strings.Contains(content, status) || strings.Contains(content, statusReady) ||
 				strings.Contains(content, "No runtime change has started") ||
-				strings.Contains(content, "Continue to confirmation") {
+				strings.Contains(content, "Continue to confirmation") || strings.Contains(content, "? Help") {
 				t.Errorf("%dx%d %s has misleading review:\n%s", size[0], size[1], status, content)
 			}
 		}
@@ -52,6 +52,18 @@ func TestSettledUnchangedRefreshesInsteadOfConfirming(t *testing.T) {
 	if !strings.Contains(content, "Refresh") || strings.Contains(content, "Continue to confirmation") {
 		t.Errorf("settled no-op actions:\n%s", content)
 	}
+	state.Update(key(keyTab))
+	state.Update(key(keyEnter))
+	if _, valid := state.page.(detailsPage); !valid {
+		t.Fatal("the settled secondary action did not open Details")
+	}
+	state.Update(key(keyEscape))
+	state.Update(key("o"))
+	if _, valid := state.page.(reviewOptionsPage); !valid {
+		t.Fatal("settled review lost deployment editing and LLM access")
+	}
+	state.Update(key(keyEscape))
+	state.Update(key(keyTab))
 	operations.snapshot.Plan.Kind = application.PlanUpgrade
 	_, command := state.Update(key("enter"))
 	deliver(t, state, command)
@@ -100,7 +112,7 @@ func TestRepeatedWarningDetailsRemainBounded(t *testing.T) {
 	t.Parallel()
 
 	_, _, operations := newTestModel(t)
-	operations.snapshot.Plan.Warnings = []application.Warning{{Code: "unknown"}}
+	operations.snapshot.Plan.Warnings = []application.Warning{{Code: testDeploymentUnknownField}}
 	for range 100 {
 		operations.snapshot.Plan.Warnings = append(operations.snapshot.Plan.Warnings,
 			application.Warning{Code: application.WarningDaemonMountProbeUnavailable})
@@ -132,7 +144,8 @@ func TestCompactCommitKeepsBothActionsVisible(t *testing.T) {
 		state.options.Unicode = unicode
 		for _, focus := range []confirmationFocus{confirmationBack, confirmationApply} {
 			state.resize(56, 16)
-			state.page = commitServicePage{
+			state.page = commitPage{
+				kind:  commitKindService,
 				focus: focus, message: strings.Repeat("message", 30),
 				staged: StagedService{ComposePath: registeredAPIID, Diff: strings.Repeat("+changed line\n", 20)},
 			}
@@ -181,7 +194,7 @@ func TestCompactCommitKeyboardRequiresVisibleConfirmation(t *testing.T) {
 	state, _, _ := newTestModel(t)
 	workspace := workspaceFixtureValue(t, state)
 	workspace.staged.Diff = "+first changed line\n" + strings.Repeat("+changed line\n", 20) + "+last changed line"
-	commit := commitServicePage{staged: workspace.staged, message: workspace.staged.CommitMessage}
+	commit := commitPage{kind: commitKindService, staged: workspace.staged, message: workspace.staged.CommitMessage}
 	state.resize(56, 16)
 	state.page = commit
 	state.Update(key("d"))
@@ -219,7 +232,7 @@ func TestNarrowCommitAllowsBackAndQuit(t *testing.T) {
 	for _, input := range []string{keyEscape, keyQuit} {
 		state, _, _ := newTestModel(t)
 		state.resize(32, 8)
-		state.page = commitServicePage{}
+		state.page = commitPage{kind: commitKindService}
 		_, command := state.Update(key(input))
 		if command == nil {
 			t.Fatalf("%s was blocked below Compact", input)
