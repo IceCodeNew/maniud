@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/IceCodeNew/maniud/containerconfig v0.2.0
-	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/api v1.56.0
 )
 
 require (
