@@ -30,14 +30,14 @@ readonly CAPSLOCK_VERSION='v0.3.2'
 # 1.27 promoted literal fields or generic methods. Keep the fixed transitive
 # dependency explicit until Capslock publishes a release containing it.
 # renovate: datasource=go depName=golang.org/x/tools
-readonly CAPSLOCK_X_TOOLS_VERSION='v0.49.0'
+readonly CAPSLOCK_X_TOOLS_VERSION='v0.50.0'
 # NilAway and depaware do not publish stable releases; the Go datasource follows their latest pseudo-versions.
 # renovate: datasource=go depName=go.uber.org/nilaway
-readonly NILAWAY_VERSION='v0.0.0-20260808063849-8649a03c818a'
+readonly NILAWAY_VERSION='v0.0.0-20260918162853-acb8859b9031'
 # renovate: datasource=go depName=github.com/tailscale/depaware
 readonly DEPAWARE_VERSION='v0.0.0-20260720165112-f20f66241ec6'
 # renovate: datasource=go depName=golang.org/x/vuln
-readonly GOVULNCHECK_VERSION='v1.7.0'
+readonly GOVULNCHECK_VERSION='v1.8.0'
 # renovate: datasource=github-releases depName=rillig/gobco extractVersion=^v(?<version>.*)$
 readonly GOBCO_VERSION='1.3.4'
 # renovate: datasource=github-releases depName=JetBrains/go-modern-guidelines
@@ -55,4 +55,4 @@ readonly GITLEAKS_VERSION='v8.30.1'
 # The setup script verifies nerdctl-full against the release manager's signed
 # SHA256SUMS. A signer change requires an explicit fingerprint review.
 # renovate: datasource=github-releases depName=containerd/nerdctl extractVersion=^v(?<version>.*)$
-readonly NERDCTL_VERSION='2.3.5'
+readonly NERDCTL_VERSION='2.4.0'
