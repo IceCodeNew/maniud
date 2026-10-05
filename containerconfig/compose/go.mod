@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/IceCodeNew/maniud/containerconfig v0.2.0
-	github.com/compose-spec/compose-go/v2 v2.15.0
+	github.com/compose-spec/compose-go/v2 v2.16.1
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 )
 
