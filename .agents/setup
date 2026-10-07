@@ -355,6 +355,7 @@ install_mise_tools() {
   local binary
   local command_name
   local compiler
+  local go_tool
   local tool_backend
   local tool_version
 
@@ -362,16 +363,22 @@ install_mise_tools() {
   mise use --global \
     ast-grep bun node@lts prek shellcheck shfmt \
     "golangci-lint@$GOLANGCI_LINT_VERSION" \
+    "npm:greptile" \
+    "npm:openskills" \
+    "pipx:nmem-cli"
+
+  # Seven concurrent Go compilers exhaust a small orb's memory. Install one
+  # at a time so later tools can reuse the first build's shared Go cache.
+  for go_tool in \
     "go:github.com/google/capslock/cmd/capslock@$CAPSLOCK_VERSION" \
     "go:github.com/rillig/gobco@$GOBCO_VERSION" \
     "go:github.com/JetBrains/go-modern-guidelines@$GO_MODERN_GUIDELINES_VERSION" \
     "go:go.uber.org/nilaway/cmd/nilaway@$NILAWAY_VERSION" \
     "go:github.com/tailscale/depaware@$DEPAWARE_VERSION" \
     "go:github.com/uber-go/gopatch" \
-    "go:golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" \
-    "npm:greptile" \
-    "npm:openskills" \
-    "pipx:nmem-cli"
+    "go:golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"; do
+    mise use --global "$go_tool"
+  done
 
   while read -r command_name tool_backend; do
     binary="$(mise which "$command_name")"
