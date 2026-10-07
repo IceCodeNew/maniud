@@ -240,7 +240,7 @@ install_nerdctl_tools() (
     return 1
   fi
   printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --strict
-  sudo tar Cxzvvf /usr/local "$archive"
+  sudo tar Cxzf /usr/local "$archive"
   for required_path in \
     /usr/local/bin/buildctl \
     /usr/local/bin/buildkitd \
@@ -493,7 +493,7 @@ install_searching_with_fff() (
     return 1
   fi
   if [[ ! -d "$source_dir/.git" ]]; then
-    git clone --quiet "$source_url" "$source_dir"
+    git clone --quiet --depth 1 "$source_url" "$source_dir"
   fi
   actual_origin="$(git -C "$source_dir" remote get-url origin 2>/dev/null || true)"
   if [[ "$actual_origin" != "$source_url" ]]; then
@@ -504,8 +504,10 @@ install_searching_with_fff() (
     printf 'Refusing to update a modified searching-with-fff checkout: %s\n' "$source_dir" >&2
     return 1
   fi
-  git -C "$source_dir" fetch --quiet --depth 1 origin "$SEARCHING_WITH_FFF_REVISION"
-  git -C "$source_dir" checkout --detach --force --quiet FETCH_HEAD
+  if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$SEARCHING_WITH_FFF_REVISION" ]]; then
+    git -C "$source_dir" fetch --quiet --depth 1 origin "$SEARCHING_WITH_FFF_REVISION"
+    git -C "$source_dir" checkout --detach --force --quiet FETCH_HEAD
+  fi
   if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$SEARCHING_WITH_FFF_REVISION" ]]; then
     printf '%s\n' 'searching-with-fff did not resolve to the reviewed revision.' >&2
     return 1
@@ -597,7 +599,6 @@ run_step 'Configure mise for login shells' configure_mise_login_shell
 run_step 'Install golang' install_golang
 run_step 'Install mise-managed tools' install_mise_tools
 run_step 'Download Go module dependencies' "$repo_root/scripts/run-go-modules" go mod download
-run_step 'Prepare prek hook environments' prek prepare-hooks --no-progress
 run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
 run_step 'Configure signed Git commits' configure_git
 run_step 'Disable commit identity trailers' configure_amp_commit_privacy
