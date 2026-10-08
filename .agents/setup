@@ -363,7 +363,6 @@ install_mise_tools() {
   mise use --global \
     ast-grep bun node@lts prek shellcheck shfmt \
     "golangci-lint@$GOLANGCI_LINT_VERSION" \
-    "npm:greptile" \
     "npm:openskills" \
     "pipx:nmem-cli"
 
