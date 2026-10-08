@@ -97,7 +97,7 @@ jobs:
       # golangci-lint and Gitleaks use release binaries. mise caches the Go-built
       # tools that do not publish binaries, so unchanged CI runs do not rebuild them.
       - name: Install cached policy tools
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           tool_versions: ${{ steps.tool-versions.outputs.mise-tools }}
           cache: true
