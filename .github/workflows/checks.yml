@@ -106,7 +106,7 @@ jobs:
       - name: Scan repository history for secrets
         run: gitleaks git --redact --verbose
       - name: Run static and dependency policy hooks
-        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        uses: j178/prek-action@1382ad72dea72f9d53832f2bcb65b3e87a947204 # v3.0.1
         with:
           # Leave the single test execution until all analyzers have passed.
           extra-args: --all-files --stage manual --skip go-coverage
