@@ -428,6 +428,7 @@ update_managed_checkout() {
 
 install_ninehills_skills() (
   eval "$(mise hook-env -s bash)"
+  local actual_origin
   local source_dir="$HOME/.cache/maniud/ninehills-skills"
   local source_url='https://github.com/ninehills/skills.git'
 
@@ -437,8 +438,20 @@ install_ninehills_skills() (
   fi
   if [[ ! -d "$source_dir/.git" ]]; then
     git clone --quiet --depth 1 "$source_url" "$source_dir"
-  else
-    update_managed_checkout "$source_dir" "$source_url"
+  fi
+  actual_origin="$(git -C "$source_dir" remote get-url origin 2>/dev/null || true)"
+  if [[ "$actual_origin" != "$source_url" ]] \
+    || [[ -n "$(git -C "$source_dir" status --porcelain)" ]]; then
+    printf 'Refusing to update unmanaged or modified ninehills checkout: %s\n' "$source_dir" >&2
+    return 1
+  fi
+  if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$NINEHILLS_SKILLS_REVISION" ]]; then
+    git -C "$source_dir" fetch --quiet --depth 1 origin "$NINEHILLS_SKILLS_REVISION"
+    git -C "$source_dir" checkout --detach --force --quiet FETCH_HEAD
+  fi
+  if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$NINEHILLS_SKILLS_REVISION" ]]; then
+    printf '%s\n' 'ninehills skills did not resolve to the pinned revision.' >&2
+    return 1
   fi
   amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
 )
