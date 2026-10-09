@@ -453,10 +453,11 @@ install_ninehills_skills() (
     printf '%s\n' 'ninehills skills did not resolve to the pinned revision.' >&2
     return 1
   fi
-  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
+  openskills install --global --universal --yes "$source_dir"
 )
 
 install_searching_with_fff() (
+  eval "$(mise hook-env -s bash)"
   local actual_origin
   local architecture
   local archive_name
@@ -536,8 +537,25 @@ install_searching_with_fff() (
     printf '%s\n' 'searching-with-fff is missing its reviewed skill files.' >&2
     return 1
   fi
-  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
+  openskills install --global --universal --yes "$source_dir/searching-with-fff"
 )
+
+configure_global_skill_discovery() {
+  local amp_skills="${XDG_CONFIG_HOME:-$HOME/.config}/agents/skills"
+
+  mkdir -p "$(dirname "$amp_skills")"
+  if [[ -L "$amp_skills" ]]; then
+    if [[ "$(readlink "$amp_skills")" != "$HOME/.agent/skills" ]]; then
+      printf 'Refusing to replace an unrelated global skill link: %s\n' "$amp_skills" >&2
+      return 1
+    fi
+  elif [[ -e "$amp_skills" ]]; then
+    printf 'Refusing to replace an existing global skill directory: %s\n' "$amp_skills" >&2
+    return 1
+  else
+    ln -s "$HOME/.agent/skills" "$amp_skills"
+  fi
+}
 
 install_gstack() (
   eval "$(mise hook-env -s bash)"
@@ -628,6 +646,7 @@ run_step 'Grant the orb user access to container runtime sockets' configure_runt
 run_step 'Configure the supervised containerd daemon' configure_containerd
 run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step "Install searching-with-fff at $SEARCHING_WITH_FFF_REVISION" install_searching_with_fff
+run_step 'Expose installed skills to Amp' configure_global_skill_discovery
 run_step 'Install and load gstack' install_gstack
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
 run_step 'Configure and verify Nowledge Mem' configure_nmem

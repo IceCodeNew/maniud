@@ -30,7 +30,6 @@ go.work.sum
 
 # Amp local artifacts and orb metadata
 .amp/
-/.agents/skills/
 
 # Editor/IDE
 # .idea/
