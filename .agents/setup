@@ -492,6 +492,31 @@ configure_global_skill_discovery() {
   fi
 }
 
+configure_gstack_browser() {
+  local chrome
+  local link="$HOME/.local/bin/maniud-gstack-chrome"
+  local profile="$HOME/.bash_profile"
+
+  chrome="$(find "$HOME/.agent-browser/browsers" -type f -name chrome -executable -print -quit 2>/dev/null || true)"
+  if [[ -z "$chrome" ]]; then
+    return 0  # Let gstack install its own browser if the orb has none.
+  fi
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    printf 'Refusing to replace an unmanaged browser executable: %s\n' "$link" >&2
+    return 1
+  fi
+  ln -sfn "$chrome" "$link"
+  if ! grep -Fqx '# maniud gstack browser' "$profile"; then
+    cat >>"$profile" <<'PROFILE'
+
+# maniud gstack browser
+export GSTACK_CHROMIUM_PATH="$HOME/.local/bin/maniud-gstack-chrome"
+PROFILE
+  fi
+  export GSTACK_CHROMIUM_PATH="$link"
+  export GSTACK_SKIP_PLAYWRIGHT=1
+}
+
 install_gstack() (
   eval "$(mise hook-env -s bash)"
   local destination="$HOME/.agents/skills/gstack"
@@ -564,6 +589,7 @@ run_step 'Configure the supervised containerd daemon' configure_containerd
 run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step "Install searching-with-fff at $SEARCHING_WITH_FFF_REVISION" install_searching_with_fff
 run_step 'Expose installed skills to Amp' configure_global_skill_discovery
+run_step 'Reuse the orb browser for gstack' configure_gstack_browser
 run_step 'Install and load gstack' install_gstack
 run_step 'Wait for Go module dependencies' wait "$go_modules_pid"
 trap - EXIT
