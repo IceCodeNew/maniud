@@ -635,7 +635,9 @@ run_step 'Install mise' install_mise
 run_step 'Configure mise for login shells' configure_mise_login_shell
 run_step 'Install golang' install_golang
 run_step 'Install mise-managed tools' install_mise_tools
-run_step 'Download Go module dependencies' "$repo_root/scripts/run-go-modules" go mod download
+run_step 'Download Go module dependencies' "$repo_root/scripts/run-go-modules" go mod download &
+go_modules_pid=$!
+trap 'wait "$go_modules_pid" || true' EXIT
 run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
 run_step 'Configure signed Git commits' configure_git
 run_step 'Disable commit identity trailers' configure_amp_commit_privacy
@@ -648,6 +650,8 @@ run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step "Install searching-with-fff at $SEARCHING_WITH_FFF_REVISION" install_searching_with_fff
 run_step 'Expose installed skills to Amp' configure_global_skill_discovery
 run_step 'Install and load gstack' install_gstack
+run_step 'Wait for Go module dependencies' wait "$go_modules_pid"
+trap - EXIT
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
 run_step 'Configure and verify Nowledge Mem' configure_nmem
 run_step 'Start and verify supervised container runtimes' "$repo_root/.agents/resume"
