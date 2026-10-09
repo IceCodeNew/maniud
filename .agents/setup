@@ -427,8 +427,8 @@ update_managed_checkout() {
 }
 
 install_ninehills_skills() (
-  eval "$(mise hook-env -s bash)"
   local actual_origin
+  local skill
   local source_dir="$HOME/.cache/maniud/ninehills-skills"
   local source_url='https://github.com/ninehills/skills.git'
 
@@ -453,7 +453,10 @@ install_ninehills_skills() (
     printf '%s\n' 'ninehills skills did not resolve to the pinned revision.' >&2
     return 1
   fi
-  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
+  mkdir -p "$repo_root/.agents/skills"
+  for skill in "$source_dir"/*/SKILL.md; do
+    cp -a -- "$(dirname "$skill")" "$repo_root/.agents/skills/"
+  done
 )
 
 install_searching_with_fff() (
@@ -536,7 +539,8 @@ install_searching_with_fff() (
     printf '%s\n' 'searching-with-fff is missing its reviewed skill files.' >&2
     return 1
   fi
-  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
+  mkdir -p "$repo_root/.agents/skills"
+  cp -a -- "$source_dir/searching-with-fff" "$repo_root/.agents/skills/"
 )
 
 install_gstack() (
