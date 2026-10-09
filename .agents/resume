@@ -244,7 +244,9 @@ start_supervised_runtimes >/dev/null
 
 docker_ready=false
 nerdctl_ready=false
-readonly readiness_deadline=$((SECONDS + 6))
+# On a cold orb dockerd may create its socket before its API starts listening.
+# Amp can continue after 10 seconds; keep checking instead of reporting a false failure.
+readonly readiness_deadline=$((SECONDS + 15))
 while ((SECONDS < readiness_deadline)); do
   if [[ "$docker_ready" == false ]] && timeout 1s docker info >/dev/null 2>&1; then
     docker_ready=true
