@@ -117,7 +117,6 @@ for command_name in \
   gobco \
   go-modern-guidelines \
   golangci-lint \
-  greptile \
   mise \
   nerdctl \
   newgidmap \
