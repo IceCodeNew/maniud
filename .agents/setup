@@ -427,8 +427,8 @@ update_managed_checkout() {
 }
 
 install_ninehills_skills() (
+  eval "$(mise hook-env -s bash)"
   local actual_origin
-  local skill
   local source_dir="$HOME/.cache/maniud/ninehills-skills"
   local source_url='https://github.com/ninehills/skills.git'
 
@@ -453,13 +453,11 @@ install_ninehills_skills() (
     printf '%s\n' 'ninehills skills did not resolve to the pinned revision.' >&2
     return 1
   fi
-  mkdir -p "$repo_root/.agents/skills"
-  for skill in "$source_dir"/*/SKILL.md; do
-    cp -a -- "$(dirname "$skill")" "$repo_root/.agents/skills/"
-  done
+  openskills install --universal --yes "$source_dir"
 )
 
 install_searching_with_fff() (
+  eval "$(mise hook-env -s bash)"
   local actual_origin
   local architecture
   local archive_name
@@ -539,9 +537,25 @@ install_searching_with_fff() (
     printf '%s\n' 'searching-with-fff is missing its reviewed skill files.' >&2
     return 1
   fi
-  mkdir -p "$repo_root/.agents/skills"
-  cp -a -- "$source_dir/searching-with-fff" "$repo_root/.agents/skills/"
+  openskills install --universal --yes "$source_dir/searching-with-fff"
 )
+
+configure_project_skill_discovery() {
+  if [[ -L "$repo_root/.agents/skills" ]]; then
+    if [[ "$(readlink "$repo_root/.agents/skills")" != '../.agent/skills' ]]; then
+      printf '%s\n' 'Refusing to replace an unrelated project skill link.' >&2
+      return 1
+    fi
+  elif [[ -d "$repo_root/.agents/skills" ]]; then
+    # Older orbs have an ignored directory here; preserve it while updating its skills.
+    cp -a -- "$repo_root/.agent/skills/." "$repo_root/.agents/skills/"
+  elif [[ -e "$repo_root/.agents/skills" ]]; then
+    printf '%s\n' 'Refusing to replace an unrelated project skill path.' >&2
+    return 1
+  else
+    ln -s ../.agent/skills "$repo_root/.agents/skills"
+  fi
+}
 
 install_gstack() (
   eval "$(mise hook-env -s bash)"
@@ -632,6 +646,7 @@ run_step 'Grant the orb user access to container runtime sockets' configure_runt
 run_step 'Configure the supervised containerd daemon' configure_containerd
 run_step 'Install latest ninehills skills' install_ninehills_skills
 run_step "Install searching-with-fff at $SEARCHING_WITH_FFF_REVISION" install_searching_with_fff
+run_step 'Expose project skills to Amp' configure_project_skill_discovery
 run_step 'Install and load gstack' install_gstack
 run_step 'Verify Nowledge Mem environment' verify_nmem_environment
 run_step 'Configure and verify Nowledge Mem' configure_nmem
