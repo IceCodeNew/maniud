@@ -42,6 +42,8 @@ readonly GOVULNCHECK_VERSION='v1.8.0'
 readonly GOBCO_VERSION='1.3.4'
 # renovate: datasource=github-releases depName=JetBrains/go-modern-guidelines
 readonly GO_MODERN_GUIDELINES_VERSION='v0.1.1'
+# Pin the project skills installed during setup instead of following upstream HEAD.
+readonly NINEHILLS_SKILLS_REVISION='f3e82a7e2bfbed54fc2b4a715a1986f5f467e827'
 # searching-with-fff loads fff-mcp as a long-lived stdio server. Keep the
 # reviewed skill revision and binary checksum together when updating either.
 readonly SEARCHING_WITH_FFF_REVISION='e915d903e58d28f12291b5c6c2c8001b12fafdc3'
