@@ -440,7 +440,7 @@ install_ninehills_skills() (
   else
     update_managed_checkout "$source_dir" "$source_url"
   fi
-  amp skill add --global --overwrite "$source_dir"
+  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
 )
 
 install_searching_with_fff() (
@@ -523,7 +523,7 @@ install_searching_with_fff() (
     printf '%s\n' 'searching-with-fff is missing its reviewed skill files.' >&2
     return 1
   fi
-  amp skill add --global --overwrite "$source_dir"
+  amp skill add --target "$repo_root/.agents/skills" --overwrite "$source_dir"
 )
 
 install_gstack() (
