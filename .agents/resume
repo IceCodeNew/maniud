@@ -17,7 +17,7 @@ readonly DOCKER_GROUP='docker'
 readonly NERDCTL_BIN_DIR='/usr/local/bin'
 readonly NERDCTL_RUNTIME_PATH='/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin'
 readonly SEARCHING_WITH_FFF_SOURCE_DIR="$HOME/.cache/maniud/searching-with-fff"
-readonly SEARCHING_WITH_FFF_SKILL_DIR="$repo_root/.agent/skills/searching-with-fff"
+readonly SEARCHING_WITH_FFF_SKILL_DIR="$HOME/.agent/skills/searching-with-fff"
 
 if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
   if [[ "${MANIUD_RESUME_GROUPS_REFRESHED:-}" == '1' ]]; then
