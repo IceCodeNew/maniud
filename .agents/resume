@@ -19,6 +19,60 @@ readonly NERDCTL_RUNTIME_PATH='/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin
 readonly SEARCHING_WITH_FFF_SOURCE_DIR="$HOME/.cache/maniud/searching-with-fff"
 readonly SEARCHING_WITH_FFF_SKILL_DIR="$HOME/.agent/skills/searching-with-fff"
 
+configure_git() (
+  local signing_dir="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git"
+  local temporary_key temporary_allowed_signers public_key
+
+  if [[ -z "${GIT_SSH_KEY:-}" ]]; then
+    printf '%s\n' 'GIT_SSH_KEY must contain the base64-encoded Git signing key.' >&2
+    return 1
+  fi
+  install -m 0700 -d "$signing_dir"
+  umask 077
+  temporary_key="$(mktemp "$signing_dir/.commit-signing-key.XXXXXX")"
+  temporary_allowed_signers="$(mktemp "$signing_dir/.allowed-signers.XXXXXX")"
+  trap 'rm -f "$temporary_key" "$temporary_allowed_signers"' EXIT
+  printf '%s' "$GIT_SSH_KEY" | base64 --decode >"$temporary_key" 2>/dev/null
+  public_key="$(ssh-keygen -y -f "$temporary_key")"
+  printf '%s %s\n' "$GIT_USER_EMAIL" "$public_key" >"$temporary_allowed_signers"
+  install -m 0600 "$temporary_key" "$GIT_SIGNING_KEY"
+  install -m 0600 "$temporary_allowed_signers" "$GIT_ALLOWED_SIGNERS"
+  git config --global user.name "$GIT_USER_NAME"
+  git config --global user.email "$GIT_USER_EMAIL"
+  git config --global user.signingkey "$GIT_SIGNING_KEY"
+  git config --global commit.gpgsign true
+  git config --global gpg.format ssh
+  git config --global gpg.ssh.program ssh-keygen
+  git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS"
+)
+
+configure_amp_commit_privacy() {
+  local settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amp"
+  local settings_path="$settings_dir/settings.json"
+
+  mkdir -p "$settings_dir"
+  SETTINGS_PATH="$settings_path" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["SETTINGS_PATH"])
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings["amp.git.commit.ampThread.enabled"] = False
+settings["amp.git.commit.coauthor.enabled"] = False
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+temporary.chmod(0o600)
+temporary.replace(path)
+PY
+}
+
+if [[ "${MANIUD_RESUME_GROUPS_REFRESHED:-}" != '1' ]]; then
+  configure_git
+  export -n GIT_SSH_KEY
+  configure_amp_commit_privacy
+fi
+
 if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
   if [[ "${MANIUD_RESUME_GROUPS_REFRESHED:-}" == '1' ]]; then
     printf 'The current user is missing the %s group; rerun .agents/setup.\n' \
@@ -26,7 +80,7 @@ if ! id -nG | tr ' ' '\n' | grep -Fqx "$DOCKER_GROUP"; then
     exit 1
   fi
   exec sudo \
-    --preserve-env=NMEM_API_URL,NMEM_API_KEY \
+    --preserve-env=NMEM_API_URL,NMEM_API_KEY,GIT_CONFIG_GLOBAL \
     --user "$(id -un)" \
     --set-home \
     env MANIUD_RESUME_GROUPS_REFRESHED=1 "$repo_root/.agents/resume"
@@ -73,22 +127,14 @@ fi
 eval "$(mise hook-env -s bash)"
 
 if [[ ! -f "$GIT_SIGNING_KEY" ]] || ! ssh-keygen -y -f "$GIT_SIGNING_KEY" >/dev/null 2>&1; then
-  printf '%s\n' 'Git signing key is missing or invalid; rerun .agents/setup.' >&2
+  printf '%s\n' 'Git signing key is missing or invalid; rerun .agents/resume with GIT_SSH_KEY.' >&2
   exit 1
 fi
 if [[ ! -f "$GIT_ALLOWED_SIGNERS" ]] \
   || ! grep -Fqx "$GIT_USER_EMAIL $(ssh-keygen -y -f "$GIT_SIGNING_KEY")" "$GIT_ALLOWED_SIGNERS"; then
-  printf '%s\n' 'Git allowed signers are missing or invalid; rerun .agents/setup.' >&2
+  printf '%s\n' 'Git allowed signers are missing or invalid; rerun .agents/resume with GIT_SSH_KEY.' >&2
   exit 1
 fi
-
-git config --global user.name "$GIT_USER_NAME"
-git config --global user.email "$GIT_USER_EMAIL"
-git config --global user.signingkey "$GIT_SIGNING_KEY"
-git config --global commit.gpgsign true
-git config --global gpg.format ssh
-git config --global gpg.ssh.program ssh-keygen
-git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS"
 
 for required_path in \
   /usr/local/bin/buildctl \

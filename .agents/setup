@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export -n GIT_SSH_KEY NMEM_API_KEY
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
@@ -8,8 +9,6 @@ cd "$repo_root"
 # shellcheck source=.agents/tool-versions.sh
 source "$repo_root/.agents/tool-versions.sh"
 
-readonly GIT_USER_NAME='IceCodeNew'
-readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
 readonly CONTAINERD_CONFIG_PATH='/etc/maniud/containerd.toml'
 readonly CONTAINERD_ADDRESS='/run/maniud-containerd/containerd.sock'
 readonly DOCKER_GROUP='docker'
@@ -45,70 +44,6 @@ disable_system_runtime_services() {
       return 1
     fi
   done
-}
-
-stop_supervised_runtimes() {
-  local service
-  local running_services
-
-  running_services="$(amp orb service list)"
-  for service in docker nerdctl-containerd; do
-    if grep -Fq "amp-svc-$service.service" <<<"$running_services"; then
-      amp orb service stop "$service"
-    fi
-  done
-}
-
-configure_git() (
-  local signing_dir="${XDG_CONFIG_HOME:-$HOME/.config}/maniud/git"
-  local signing_key="$signing_dir/commit-signing-key"
-  local allowed_signers="$signing_dir/allowed-signers"
-  local temporary_key
-  local temporary_allowed_signers
-
-  install -m 0700 -d "$signing_dir"
-  if [[ -z "${GIT_SSH_KEY:-}" ]]; then
-    printf '%s\n' 'GIT_SSH_KEY must contain the base64-encoded Git signing key.' >&2
-    return 1
-  fi
-
-  umask 077
-  temporary_key="$(mktemp "$signing_dir/.commit-signing-key.XXXXXX")"
-  temporary_allowed_signers="$(mktemp "$signing_dir/.allowed-signers.XXXXXX")"
-  trap 'rm -f "$temporary_key" "$temporary_allowed_signers"' EXIT
-  printf '%s' "$GIT_SSH_KEY" | base64 --decode >"$temporary_key" 2>/dev/null
-  ssh-keygen -y -f "$temporary_key" >/dev/null 2>&1
-  printf '%s %s\n' "$GIT_USER_EMAIL" "$(ssh-keygen -y -f "$temporary_key")" >"$temporary_allowed_signers"
-  install -m 0600 "$temporary_key" "$signing_key"
-  install -m 0600 "$temporary_allowed_signers" "$allowed_signers"
-  git config --global user.name "$GIT_USER_NAME"
-  git config --global user.email "$GIT_USER_EMAIL"
-  git config --global user.signingkey "$signing_key"
-  git config --global commit.gpgsign true
-  git config --global gpg.format ssh
-  git config --global gpg.ssh.program ssh-keygen
-  git config --global gpg.ssh.allowedSignersFile "$allowed_signers"
-)
-
-configure_amp_commit_privacy() {
-  local settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amp"
-  local settings_path="$settings_dir/settings.json"
-
-  mkdir -p "$settings_dir"
-  SETTINGS_PATH="$settings_path" python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ["SETTINGS_PATH"])
-settings = json.loads(path.read_text()) if path.exists() else {}
-settings["amp.git.commit.ampThread.enabled"] = False
-settings["amp.git.commit.coauthor.enabled"] = False
-temporary = path.with_suffix(".tmp")
-temporary.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
-temporary.chmod(0o600)
-temporary.replace(path)
-PY
 }
 
 install_system_packages() {
@@ -613,23 +548,6 @@ install_gstack() (
   openskills read gstack >/dev/null
 )
 
-verify_nmem_environment() {
-  command -v nmem >/dev/null 2>&1 || {
-    printf '%s\n' 'nmem is missing; rerun .agents/setup.' >&2
-    return 1
-  }
-  if [[ -z "${NMEM_API_URL:-}" || -z "${NMEM_API_KEY:-}" ]]; then
-    printf '%s\n' 'NMEM_API_URL and NMEM_API_KEY must be set for Nowledge Mem.' >&2
-    return 1
-  fi
-}
-
-configure_nmem() {
-  eval "$(mise hook-env -s bash)"
-  nmem config client set --url "$NMEM_API_URL" --api-key "$NMEM_API_KEY" >/dev/null
-  nmem --json status >/dev/null
-}
-
 run_step 'Install required system packages and Podman' install_system_packages
 run_step 'Install mise' install_mise
 run_step 'Configure mise for login shells' configure_mise_login_shell
@@ -639,9 +557,6 @@ run_step 'Download Go module dependencies' "$repo_root/scripts/run-go-modules" g
 go_modules_pid=$!
 trap 'wait "$go_modules_pid" || true' EXIT
 run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
-run_step 'Configure signed Git commits' configure_git
-run_step 'Disable commit identity trailers' configure_amp_commit_privacy
-run_step 'Stop supervised container runtimes before updating them' stop_supervised_runtimes
 run_step 'Install Docker tools' install_docker_tools
 run_step "Install nerdctl $NERDCTL_VERSION full bundle" install_nerdctl_tools
 run_step 'Grant the orb user access to container runtime sockets' configure_runtime_access
@@ -652,8 +567,5 @@ run_step 'Expose installed skills to Amp' configure_global_skill_discovery
 run_step 'Install and load gstack' install_gstack
 run_step 'Wait for Go module dependencies' wait "$go_modules_pid"
 trap - EXIT
-run_step 'Verify Nowledge Mem environment' verify_nmem_environment
-run_step 'Configure and verify Nowledge Mem' configure_nmem
-run_step 'Start and verify supervised container runtimes' "$repo_root/.agents/resume"
 
 printf '%s\n' 'Orb setup complete.'
